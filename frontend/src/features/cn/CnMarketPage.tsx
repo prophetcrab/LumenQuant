@@ -34,7 +34,7 @@ export function CnMarketPage() {
 
   return (
     <div className="stack" style={{ gap: 16 }}>
-      <div className="grid grid-4">
+      <div className="grid grid-5">
         <Stat
           label="市场状态"
           value={session.data?.open ? "交易中" : "休市"}

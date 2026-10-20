@@ -29,14 +29,14 @@ def dispatch(request: httpx.Request) -> httpx.Response:
     url = str(request.url)
     if "qt.gtimg.cn" in url:
         return httpx.Response(200, content=quote_payload())
-    if "fqkline" in url:
+    if "kline/kline" in url or "fqkline" in url:
         return httpx.Response(
             200,
             json={
                 "code": 0,
                 "data": {
                     "sh600519": {
-                        "qfqday": [
+                        "day": [
                             ["2026-10-16", "1277.27", "1277.96", "1285.53", "1270.36", "16571"],
                             ["2026-10-20", "1321.01", "1331.88", "1335.00", "1316.14", "34136"],
                         ]

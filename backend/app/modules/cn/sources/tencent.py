@@ -3,7 +3,8 @@
 Endpoints (public, no key required):
 
 * quote     https://qt.gtimg.cn/q=sh600519                 (GBK text)
-* daily     https://web.ifzq.gtimg.cn/appstock/app/fqkline/get?param=sh600519,day,,,N,qfq
+* daily     https://web.ifzq.gtimg.cn/appstock/app/kline/kline?param=sh600519,day,,,N,
+            (unadjusted — matches the quote so change% and limit bands are correct)
 * intraday  https://ifzq.gtimg.cn/appstock/app/kline/mkline?param=sh600519,m15,,N
 
 Field order for daily bars is [date, open, close, high, low, volume]; note the
@@ -36,8 +37,12 @@ from app.modules.market.service_types import CandlePoint
 logger = logging.getLogger(__name__)
 
 QUOTE_URL = "https://qt.gtimg.cn/q={ticker}"
+# Unadjusted daily bars (`day`), NOT forward-adjusted (`qfqday`).
+# Real-time quotes from this source are unadjusted too; mixing qfq history with an
+# unadjusted quote produced impossible changes such as +192% and put every symbol
+# at its limit band.
 DAILY_URL = (
-    "https://web.ifzq.gtimg.cn/appstock/app/fqkline/get?param={ticker},day,,,{limit},qfq"
+    "https://web.ifzq.gtimg.cn/appstock/app/kline/kline?param={ticker},day,,,{limit},"
 )
 INTRADAY_URL = (
     "https://ifzq.gtimg.cn/appstock/app/kline/mkline?param={ticker},m15,,{limit}"
@@ -148,7 +153,8 @@ class TencentSource:
         except ValueError as exc:
             raise SourceUnavailable("腾讯日线返回非 JSON") from exc
         node = (payload.get("data") or {}).get(ticker) or {}
-        rows = node.get("qfqday") or node.get("day") or []
+        # Prefer the unadjusted series; fall back only if the endpoint changes.
+        rows = node.get("day") or node.get("qfqday") or []
         if not rows:
             raise SourceUnavailable(f"{code} 无日线数据")
 

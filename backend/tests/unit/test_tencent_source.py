@@ -42,7 +42,7 @@ def daily_handler(request: httpx.Request) -> httpx.Response:
         "msg": "",
         "data": {
             "sh600519": {
-                "qfqday": [
+                "day": [
                     # [date, open, close, high, low, volume] — close BEFORE high/low
                     ["2026-10-16", "1277.27", "1277.96", "1285.53", "1270.36", "16571.00"],
                     ["2026-10-20", "1321.01", "1331.88", "1335.00", "1316.14", "34136.00"],
@@ -75,7 +75,7 @@ def dispatch(request: httpx.Request) -> httpx.Response:
     url = str(request.url)
     if "qt.gtimg.cn" in url:
         return quote_handler(request)
-    if "fqkline" in url:
+    if "kline/kline" in url or "fqkline" in url:
         return daily_handler(request)
     if "mkline" in url:
         return intraday_handler(request)
@@ -202,3 +202,60 @@ def test_client_error_is_not_retried():
     with pytest.raises(SourceUnavailable):
         source.quote("600519.SH")
     assert calls["n"] == 1  # permanent errors must fail fast
+
+
+def test_daily_endpoint_uses_unadjusted_series():
+    """Daily history must be unadjusted to match real-time quotes.
+
+    Forward-adjusted (qfq) history against an unadjusted quote produced changes
+    like +192% and put every symbol at its limit band.
+    """
+    seen = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen["url"] = str(request.url)
+        return httpx.Response(
+            200,
+            json={
+                "code": 0,
+                "data": {
+                    "sh600519": {
+                        "day": [["2026-10-20", "1321.01", "1331.88", "1335.00", "1316.14", "34136"]]
+                    }
+                },
+            },
+        )
+
+    source = TencentSource(transport=httpx.MockTransport(handler))
+    batch = source.daily_bars("600519.SH", limit=1)
+    assert "fqkline" not in seen["url"], "must not request forward-adjusted data"
+    assert "kline/kline" in seen["url"]
+    assert "qfq" not in seen["url"]
+    assert batch.bars[-1].close == pytest.approx(1331.88)
+
+
+def test_quote_and_daily_share_the_same_price_scale():
+    """A symbol's latest daily close must match its quoted price.
+
+    This is the invariant that broke when qfq history met an unadjusted quote.
+    """
+    def handler(request: httpx.Request) -> httpx.Response:
+        url = str(request.url)
+        if "qt.gtimg.cn" in url:
+            return httpx.Response(200, content=quote_payload())
+        return httpx.Response(
+            200,
+            json={
+                "code": 0,
+                "data": {
+                    "sh600519": {
+                        "day": [["2026-10-20", "1321.01", "1331.88", "1335.00", "1316.14", "34136"]]
+                    }
+                },
+            },
+        )
+
+    source = TencentSource(transport=httpx.MockTransport(handler))
+    quote = source.quote("600519.SH")
+    daily = source.daily_bars("600519.SH", limit=1)
+    assert daily.bars[-1].close == pytest.approx(quote.price, rel=0.001)

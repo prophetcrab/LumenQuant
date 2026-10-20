@@ -259,6 +259,11 @@ a {
   grid-template-columns: repeat(4, minmax(0, 1fr));
 }
 
+/* Five stat cards fit a 2K row without leaving an orphan card on the next line. */
+.grid-5 {
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+}
+
 .grid-3 {
   grid-template-columns: repeat(3, minmax(0, 1fr));
 }
