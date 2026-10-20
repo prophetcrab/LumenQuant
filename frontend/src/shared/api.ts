@@ -506,7 +506,8 @@ export const api = {
   ledger: (id: string, limit = 100) =>
     request<LedgerEntry[]>(`/accounts/${id}/ledger${qs({ limit })}`),
 
-  symbols: () => request<SymbolInfo[]>("/market/symbols"),
+  symbols: (market?: "crypto" | "cn_stock") =>
+    request<SymbolInfo[]>(`/market/symbols${qs({ market })}`),
   createSymbol: (body: {
     code: string;
     name?: string;
@@ -523,7 +524,8 @@ export const api = {
     request<CandleResponse>(`/market/candles${qs({ symbol, timeframe, limit })}`),
   indicators: (symbol: string, timeframe: string, limit: number, specs: string) =>
     request<IndicatorResponse>(`/market/indicators${qs({ symbol, timeframe, limit, specs })}`),
-  snapshots: () => request<Snapshot[]>("/market/snapshots"),
+  snapshots: (market?: "crypto" | "cn_stock") =>
+    request<Snapshot[]>(`/market/snapshots${qs({ market })}`),
   snapshot: (symbol: string) => request<Snapshot>(`/market/snapshot${qs({ symbol })}`),
   clock: () =>
     request<{ simulated_now: number; speed: number; timeframe: string; tick_seconds: number }>(

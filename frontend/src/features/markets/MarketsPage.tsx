@@ -17,8 +17,8 @@ const INDICATOR_PRESETS = [
 ] as const;
 
 export function MarketsPage() {
-  const symbols = useSymbols();
-  const snapshots = useSnapshots();
+  const symbols = useSymbols("crypto");
+  const snapshots = useSnapshots("crypto");
   const clock = useMarketClock();
   const [symbol, setSymbol] = useState("BTCUSDT");
   const [timeframe, setTimeframe] = useState<Timeframe>("1h");

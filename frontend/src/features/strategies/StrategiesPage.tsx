@@ -16,7 +16,7 @@ export function StrategiesPage() {
   const [params, setParams] = useState<Record<string, string>>({});
   const [symbol, setSymbol] = useState("BTCUSDT");
   const [timeframe, setTimeframe] = useState<(typeof TIMEFRAMES)[number]>("1h");
-  const symbols = useQuery({ queryKey: ["symbols"], queryFn: api.symbols });
+  const symbols = useQuery({ queryKey: ["symbols", "all"], queryFn: () => api.symbols() });
 
   const meta = useMemo(
     () => catalog.data?.find((item) => item.key === selected) ?? null,

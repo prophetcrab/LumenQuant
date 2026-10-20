@@ -13,7 +13,7 @@ const TIMEFRAMES = ["15m", "30m", "1h", "4h", "1d"] as const;
 export function BacktestPage() {
   const queryClient = useQueryClient();
   const catalog = useQuery({ queryKey: ["strategies"], queryFn: api.strategies });
-  const symbols = useQuery({ queryKey: ["symbols"], queryFn: api.symbols });
+  const symbols = useQuery({ queryKey: ["symbols", "all"], queryFn: () => api.symbols() });
   const history = useQuery({ queryKey: ["backtests", 30], queryFn: () => api.backtests(30) });
   const [strategy, setStrategy] = useState("sma_cross");
   const [symbol, setSymbol] = useState("BTCUSDT");

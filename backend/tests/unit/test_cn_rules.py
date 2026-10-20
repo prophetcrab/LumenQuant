@@ -117,3 +117,21 @@ def test_cn_fee_asymmetry():
 def test_cn_fee_zero_notional():
     fees = CnFeeSchedule()
     assert fees.total("buy", 0) == 0.0
+
+
+def test_cn_daily_import_allowed_and_other_timeframes_rejected(database):
+    from app.modules.data.service import DataService
+    from app.modules.market.service import MarketService
+
+    with database.session() as session:
+        market = MarketService(session)
+        market.add_symbol(
+            code="600000.SH", name="浦发银行", initial_price=10.0,
+            market="cn_stock", board="main", exchange="SH",
+        )
+        service = DataService(session)
+        csv_text = "open_time,open,high,low,close,volume\n0,10,10.2,9.9,10.1,1000000\n86400000,10.1,10.3,10.0,10.2,1200000\n"
+        report = service.import_csv("600000.SH", timeframe="1d", content=csv_text)
+        assert report.imported == 2
+        with pytest.raises(Exception):
+            service.import_csv("600000.SH", timeframe="1h", content=csv_text)

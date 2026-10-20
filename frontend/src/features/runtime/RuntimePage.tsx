@@ -24,7 +24,7 @@ export function RuntimePage() {
   const [params, setParams] = useState<Record<string, string>>({});
 
   const catalog = useQuery({ queryKey: ["strategies"], queryFn: api.strategies });
-  const symbols = useQuery({ queryKey: ["symbols"], queryFn: api.symbols });
+  const symbols = useQuery({ queryKey: ["symbols", "all"], queryFn: () => api.symbols() });
   const instances = useQuery({
     queryKey: ["runtime-instances", accountId],
     queryFn: () => api.runtimeInstances(accountId),

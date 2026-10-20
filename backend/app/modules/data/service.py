@@ -17,8 +17,8 @@ from sqlalchemy.orm import Session
 from app.core.audit import record_audit
 from app.core.errors import ValidationError
 from app.modules.market.feed import timeframe_ms
-from app.modules.market.models import Candle
-from app.modules.market.service import BASE_TIMEFRAME
+from app.modules.market.models import Candle, Symbol
+from app.modules.market.service import BASE_TIMEFRAME, SUPPORTED_TIMEFRAMES
 
 
 @dataclass(frozen=True)
@@ -73,9 +73,24 @@ class DataService:
         symbol = symbol.upper().strip()
         if not symbol:
             raise ValidationError("symbol is required")
-        if timeframe != BASE_TIMEFRAME:
+        # A symbol's own base timeframe is always importable; A-shares also accept
+        # native daily bars, which is what real exchange exports provide.
+        allowed = set(SUPPORTED_TIMEFRAMES)
+        base_tf = BASE_TIMEFRAME
+        market = "crypto"
+        row_symbol = self.session.scalar(select(Symbol).where(Symbol.code == symbol))
+        if row_symbol is not None:
+            base_tf = row_symbol.base_timeframe or BASE_TIMEFRAME
+            market = row_symbol.market
+        if timeframe not in allowed:
+            raise ValidationError(f"timeframe must be one of {', '.join(SUPPORTED_TIMEFRAMES)}")
+        if market == "cn_stock" and timeframe not in {base_tf, "1d"}:
             raise ValidationError(
-                f"only base timeframe {BASE_TIMEFRAME} can be imported; "
+                f"A股只接受基础周期 {base_tf} 或原生日线 1d，其他周期读取时聚合"
+            )
+        if market != "cn_stock" and timeframe != base_tf:
+            raise ValidationError(
+                f"only the base timeframe {base_tf} can be imported; "
                 "other timeframes are aggregated on read"
             )
         if not content.strip():

@@ -250,3 +250,53 @@ def test_market_mismatch_between_account_and_symbol(cn_client):
     )
     assert response.status_code == 422
     assert "市场" in response.json()["error"]["message"]
+
+
+def test_runtime_instance_rejects_market_mismatch(cn_client):
+    crypto_account = cn_client.post(
+        "/api/accounts",
+        json={"name": "币策略账户", "kind": "paper", "market": "crypto", "initial_balance": 50_000},
+    ).json()
+    symbols = cn_client.get("/api/cn/symbols").json()
+    response = cn_client.post(
+        "/api/runtime/instances",
+        json={
+            "account_id": crypto_account["id"],
+            "strategy_key": "sma_cross",
+            "symbol": symbols[0]["code"],
+            "timeframe": "1d",
+            "params": {},
+            "position_pct": 0.2,
+            "max_order_notional": 10_000,
+            "start": True,
+        },
+    )
+    assert response.status_code == 422
+    assert "市场" in response.json()["error"]["message"]
+
+
+def test_runtime_instance_accepts_cn_symbol_on_cn_account(cn_client):
+    account = cn_client.post(
+        "/api/accounts",
+        json={"name": "A股策略账户", "kind": "paper", "market": "cn_stock", "initial_balance": 200_000},
+    ).json()
+    symbols = cn_client.get("/api/cn/symbols").json()
+    created = cn_client.post(
+        "/api/runtime/instances",
+        json={
+            "account_id": account["id"],
+            "strategy_key": "sma_cross",
+            "symbol": symbols[0]["code"],
+            "timeframe": "1d",
+            "params": {"fast": 5, "slow": 20},
+            "position_pct": 0.2,
+            "max_order_notional": 20_000,
+            "start": True,
+        },
+    )
+    assert created.status_code == 201, created.text
+    instance = created.json()
+    assert instance["symbol"] == symbols[0]["code"]
+    # One evaluation pass must not error.
+    tick = cn_client.post("/api/runtime/tick").json()
+    assert tick["evaluated"][instance["id"]] in {"hold", "executed", "no_new_bar", "insufficient_data"}

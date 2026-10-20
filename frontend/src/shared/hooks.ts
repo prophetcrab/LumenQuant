@@ -52,16 +52,20 @@ export function useFills(limit = 100) {
   });
 }
 
-export function useSnapshots() {
+export function useSnapshots(market?: "crypto" | "cn_stock") {
   return useQuery({
-    queryKey: ["snapshots"],
-    queryFn: api.snapshots,
+    queryKey: ["snapshots", market ?? "all"],
+    queryFn: () => api.snapshots(market),
     refetchInterval: 5_000,
   });
 }
 
-export function useSymbols() {
-  return useQuery({ queryKey: ["symbols"], queryFn: api.symbols, refetchInterval: 60_000 });
+export function useSymbols(market?: "crypto" | "cn_stock") {
+  return useQuery({
+    queryKey: ["symbols", market ?? "all"],
+    queryFn: () => api.symbols(market),
+    refetchInterval: 60_000,
+  });
 }
 
 export function useMarketClock() {

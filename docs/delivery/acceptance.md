@@ -38,6 +38,32 @@
 | 32 | 可扩展性 | 六类扩展点表 | `delivery/architecture.md` |
 | 33 | 自动化交易 | 策略实例后台调度、自动下单/平仓、日志 | `R09`、`RuntimePage`、e2e 第 6 步 |
 
+## A 股与同花顺（第二轮目标）
+
+| # | 需求 | 实现 | 证据 |
+|---|---|---|---|
+| A1 | A股市场模式 | `market` 字段贯穿账户/标的/交易/回测 | `test_cn_api.py`、`cn-market.md` |
+| A2 | T+1 交收 | `available_quantity`、每日开盘结算 | `test_cn_trading.py::test_t_plus_one_blocks_same_day_sell` |
+| A3 | 涨跌停 | 主板±10/创业板科创板±20/北交所±30/ST±5 | `test_cn_rules.py::test_price_band_by_board` |
+| A4 | 涨停不买/跌停不卖 | 下单前置校验 + 撮合跳过 | `test_limit_up_blocks_buy`、`test_limit_down_blocks_sell` |
+| A5 | 100 股手数 | 买入整数倍、零股仅全清 | `test_quantity_lot_rules` |
+| A6 | A股费用 | 佣金（最低5元）+卖出印花税+过户费 | `test_cn_fee_asymmetry`，实盘实测 5.01 vs 5.39 |
+| A7 | 交易时段 | 09:30-11:30/13:00-15:00，节假日历 | `test_cn_session_gate.py` |
+| A8 | 停牌 | 拒单 + 撮合跳过 | `test_suspended_symbol_rejected` |
+| A9 | 原生日线 | 8 标的 × 600 交易日日线+15分钟线 | `/api/cn/symbols`、`/api/market/candles?timeframe=1d` |
+| A10 | 回测适配 | T+1、涨跌停不成交、252/242 年化、手数 | `test_cn_backtest.py`、`periods_per_year=242` |
+| A11 | 客户端不能关闭规则 | 服务端强制覆盖 config | `test_cn_end_to_end.py` |
+| A12 | 同花顺网关 | `ThsHttpGateway` + 契约文档 | `test_ths_gateway.py`、`ths-live.md` |
+| A13 | 实盘下单 | 三重条件、网关受理、`broker_order_id` | `test_live_cn_order_requires_confirm_and_routes_to_gateway` |
+| A14 | 成交回报 | `LiveReconciler` 轮询、增量回写、幂等 | `test_reconciler_books_gateway_fill_once` |
+| A15 | 实盘对账 | 本地 vs 网关持仓逐标的比对 | `/api/brokers/ths/reconcile` |
+| A16 | 演练网关 | `MockThsGateway` 全链路可演练 | `LQ_THS_MOCK_ENABLED=true` |
+| A17 | 前端 A股 | 独立 A股页 + 交易面板（可用/冻结、涨跌停、网关） | `docs/reviews/` 截图、浏览器实测 |
+| A18 | 策略实例支持 A股 | 市场一致性校验、收盘 K 线评估 | `test_runtime_instance_accepts_cn_symbol_on_cn_account` |
+| A19 | 数据导入支持日线 | A股可导入 `1d`，其他周期聚合 | `test_cn_daily_import_allowed_and_other_timeframes_rejected` |
+| A20 | 压测 | 200 单 0 错误，P95 153ms，T+1 不变量成立 | `tests/stress/cn_load.py` |
+| A21 | 文档 | A股规则、同花顺接入、API、配置 | `cn-market.md`、`ths-live.md`、`api.md`、`.env.example` |
+
 ## 复现命令
 
 ```powershell

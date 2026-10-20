@@ -157,11 +157,19 @@ class RuntimeService:
             raise ValidationError("position_pct must be between 0.01 and 1")
         if max_order_notional <= 0:
             raise ValidationError("max_order_notional must be positive")
+        # Market must match the account, otherwise every signal would be rejected
+        # at order time and the failure would only surface in the logs.
+        account = self.accounts.require(account_id)
+        symbol_view = self.market.require_symbol(symbol)
+        if account.market != symbol_view.market:
+            raise ValidationError(
+                f"{symbol_view.code} 属于 {symbol_view.market} 市场，与账户市场 {account.market} 不一致"
+            )
         row = StrategyInstance(
             id=new_id(),
             account_id=account_id,
             strategy_key=strategy_key,
-            symbol=symbol.upper().strip(),
+            symbol=symbol_view.code,
             timeframe=timeframe,
             params_json=json.dumps(parsed.model_dump()),
             position_pct=float(position_pct),
