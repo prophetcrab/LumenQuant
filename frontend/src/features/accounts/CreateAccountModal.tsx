@@ -10,6 +10,7 @@ export function CreateAccountModal({ open, onClose }: { open: boolean; onClose: 
   const queryClient = useQueryClient();
   const { setAccountId, refresh } = useAccount();
   const toast = useToast();
+  const [market, setMarket] = useState<"crypto" | "cn_stock">("crypto");
   const [name, setName] = useState("研究账户");
   const [balance, setBalance] = useState("100000");
   const [leverage, setLeverage] = useState("1");
@@ -19,7 +20,8 @@ export function CreateAccountModal({ open, onClose }: { open: boolean; onClose: 
       api.createAccount({
         name: name.trim(),
         initial_balance: Number(balance),
-        leverage: Number(leverage),
+        leverage: market === "cn_stock" ? 1 : Number(leverage),
+        market,
       }),
     onSuccess: async (account) => {
       toast.push(`账户「${account.name}」已创建`);
@@ -36,7 +38,7 @@ export function CreateAccountModal({ open, onClose }: { open: boolean; onClose: 
   return (
     <Modal
       open={open}
-      title="创建模拟账户"
+      title={market === "cn_stock" ? "创建 A 股模拟账户" : "创建模拟账户"}
       onClose={onClose}
       footer={
         <>
@@ -53,10 +55,16 @@ export function CreateAccountModal({ open, onClose }: { open: boolean; onClose: 
         </>
       }
     >
+      <Field label="市场" hint="A股账户为人民币现金账户，不支持杠杆与做空">
+        <select className="select" value={market} onChange={(event) => setMarket(event.target.value as "crypto" | "cn_stock")}>
+          <option value="crypto">加密货币（24/7）</option>
+          <option value="cn_stock">A股（沪深，T+1）</option>
+        </select>
+      </Field>
       <Field label="账户名称" hint="用于区分不同研究方法或资金曲线">
         <input className="input" value={name} onChange={(event) => setName(event.target.value)} maxLength={64} />
       </Field>
-      <Field label="初始资金（USDT）" hint="仅影响模拟账户，可随时出入金">
+      <Field label={market === "cn_stock" ? "初始资金（CNY）" : "初始资金（USDT）"} hint="仅影响模拟账户，可随时出入金">
         <input
           className="input num"
           type="number"
@@ -65,17 +73,19 @@ export function CreateAccountModal({ open, onClose }: { open: boolean; onClose: 
           onChange={(event) => setBalance(event.target.value)}
         />
       </Field>
-      <Field label="杠杆" hint="1 倍为现货全额，最高 10 倍">
-        <input
-          className="input num"
-          type="number"
-          min={1}
-          max={10}
-          step={1}
-          value={leverage}
-          onChange={(event) => setLeverage(event.target.value)}
-        />
-      </Field>
+      {market === "crypto" ? (
+        <Field label="杠杆" hint="1 倍为现货全额，最高 10 倍">
+          <input
+            className="input num"
+            type="number"
+            min={1}
+            max={10}
+            step={1}
+            value={leverage}
+            onChange={(event) => setLeverage(event.target.value)}
+          />
+        </Field>
+      ) : null}
     </Modal>
   );
 }

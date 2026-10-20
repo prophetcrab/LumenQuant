@@ -14,6 +14,9 @@ class AccountCashAdapter:
     def kind(self, account_id: str) -> str:
         return self.accounts.require(account_id).kind
 
+    def market(self, account_id: str) -> str:
+        return self.accounts.require(account_id).market
+
     def cash(self, account_id: str) -> float:
         return self.accounts.cash(account_id)
 

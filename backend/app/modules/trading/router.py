@@ -4,56 +4,22 @@ from fastapi import APIRouter, Depends, Query, Request
 from sqlalchemy.orm import Session
 
 from app.api.deps import get_session
+from app.api.wiring import build_accounts, build_trading
 from app.core.errors import ForbiddenError
-from app.modules.accounts.service import AccountService
-from app.modules.brokers.binance import build_broker
-from app.modules.market.service import MarketService
-from app.modules.risk.policy import RiskLimits, RiskPolicy
-from app.modules.risk.service import RiskService
-from app.modules.trading.adapters import AccountCashAdapter, MarketPriceAdapter
 from app.modules.trading.schemas import ClosePositionRequest, OrderCreate
-from app.modules.trading.service import TradingService
 
 
 router = APIRouter(prefix="/trading", tags=["trading"])
 
 
-def build_service(request: Request, session: Session) -> TradingService:
-    settings = request.app.state.settings
-    engine = getattr(request.app.state, "market_engine", None)
-    accounts = AccountService(
-        session, live_trading_enabled=settings.live_trading_enabled
-    )
-    market = MarketService(
-        session, clock=getattr(engine, "clock", None), live=engine if engine else None
-    )
-    limits = RiskLimits(
-        max_order_notional=settings.risk_max_order_notional,
-        max_position_notional=settings.risk_max_position_notional,
-        min_order_notional=settings.risk_min_order_notional,
-        max_orders_per_minute=settings.risk_max_orders_per_minute,
-        max_daily_loss_pct=settings.risk_max_daily_loss_pct,
-        max_drawdown_pct=settings.risk_max_drawdown_pct,
-    )
-    return TradingService(
-        session,
-        cash=AccountCashAdapter(accounts),
-        prices=MarketPriceAdapter(market),
-        policy=RiskPolicy(limits),
-        bus=request.app.state.bus,
-        fee_bps=settings.fee_bps,
-        slippage_bps=settings.slippage_bps,
-        risk=RiskService(session),
-        broker=build_broker(settings),
-    )
+def build_service(request: Request, session: Session):
+    return build_trading(request, session, with_brokers=True)
 
 
 def _assert_live_confirmation(request: Request, session: Session, account_id: str) -> None:
     """Live orders need an explicit opt-in header in addition to the server switch."""
     settings = request.app.state.settings
-    account = AccountService(
-        session, live_trading_enabled=settings.live_trading_enabled
-    ).require(account_id)
+    account = build_accounts(request, session).require(account_id)
     if account.kind != "live":
         return
     if not settings.live_trading_enabled:
@@ -125,7 +91,14 @@ def close_position(
     request: Request,
     session: Session = Depends(get_session),
 ):
+    _assert_live_confirmation(request, session, payload.account_id)
     return build_service(request, session).close_position(payload.account_id, symbol)
+
+
+@router.post("/settle")
+def settle(request: Request, session: Session = Depends(get_session)):
+    """Manually release T+1 holds (the scheduler does this at each session open)."""
+    return {"unlocked": build_service(request, session).settle_t1()}
 
 
 @router.post("/match")

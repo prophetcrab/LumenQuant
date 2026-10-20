@@ -36,17 +36,31 @@ class TradeRecord:
         }
 
 
-def periods_per_year(timeframe: str) -> float:
-    mapping = {
-        "1m": 365 * 24 * 60,
-        "5m": 365 * 24 * 12,
-        "15m": 365 * 24 * 4,
-        "30m": 365 * 24 * 2,
-        "1h": 365 * 24,
-        "4h": 365 * 6,
-        "1d": 365,
-    }
-    return float(mapping.get(timeframe, 365 * 24))
+# Bars per year for a 24/7 market versus a 4-hour A-share session day.
+CRYPTO_BARS_PER_YEAR = {
+    "1m": 365 * 24 * 60,
+    "5m": 365 * 24 * 12,
+    "15m": 365 * 24 * 4,
+    "30m": 365 * 24 * 2,
+    "1h": 365 * 24,
+    "4h": 365 * 6,
+    "1d": 365,
+}
+# A-share: 242 trading days, 4h per day -> 16 x 15m bars, 4 x 1h bars.
+CN_TRADING_DAYS = 242
+CN_BARS_PER_YEAR = {
+    "15m": CN_TRADING_DAYS * 16,
+    "30m": CN_TRADING_DAYS * 8,
+    "1h": CN_TRADING_DAYS * 4,
+    "4h": CN_TRADING_DAYS,
+    "1d": CN_TRADING_DAYS,
+}
+
+
+def periods_per_year(timeframe: str, market: str = "crypto") -> float:
+    if market == "cn_stock":
+        return float(CN_BARS_PER_YEAR.get(timeframe, CN_TRADING_DAYS * 4))
+    return float(CRYPTO_BARS_PER_YEAR.get(timeframe, 365 * 24))
 
 
 def _std(values: list[float]) -> float:
@@ -64,6 +78,7 @@ def compute_metrics(
     trades: list[TradeRecord],
     timeframe: str,
     bars_in_market: int,
+    market: str = "crypto",
 ) -> dict:
     final = equity[-1] if equity else initial
     total_return = safe_div(final - initial, initial)
@@ -72,7 +87,7 @@ def compute_metrics(
         for i in range(1, len(equity))
         if equity[i - 1] > 0
     ]
-    ppy = periods_per_year(timeframe)
+    ppy = periods_per_year(timeframe, market)
     mean_return = sum(returns) / len(returns) if returns else 0.0
     volatility = _std(returns)
     sharpe = safe_div(mean_return, volatility) * math.sqrt(ppy) if volatility else 0.0
@@ -139,6 +154,8 @@ def compute_metrics(
         ),
         "exposure_pct": round(safe_div(bars_in_market, len(equity)) * 100, 4),
         "bars": len(equity),
+        "market": market,
+        "periods_per_year": round(ppy, 2),
     }
 
 

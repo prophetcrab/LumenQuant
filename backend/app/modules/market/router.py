@@ -6,6 +6,7 @@ from fastapi import APIRouter, Depends, Query, Request
 from sqlalchemy.orm import Session
 
 from app.api.deps import get_session
+from app.api.wiring import build_market
 from app.core.errors import ValidationError
 from app.modules.market.schemas import SymbolCreate, SymbolUpdate
 from app.modules.market.service import SUPPORTED_TIMEFRAMES, MarketService
@@ -37,12 +38,7 @@ _DEFAULTS = {
 
 
 def _service(request: Request, session: Session) -> MarketService:
-    engine = getattr(request.app.state, "market_engine", None)
-    return MarketService(
-        session,
-        clock=getattr(engine, "clock", None),
-        live=engine if engine is not None else None,
-    )
+    return build_market(request, session)
 
 
 def parse_specs(raw: str) -> list[tuple[str, dict[str, float]]]:
@@ -75,8 +71,12 @@ def _candle_dict(point: CandlePoint) -> dict:
 
 
 @router.get("/symbols")
-def list_symbols(request: Request, session: Session = Depends(get_session)):
-    return _service(request, session).list_symbols()
+def list_symbols(
+    request: Request,
+    market: str | None = None,
+    session: Session = Depends(get_session),
+):
+    return _service(request, session).list_symbols(market=market)
 
 
 @router.post("/symbols", status_code=201)
@@ -161,23 +161,32 @@ def snapshot(
 
 
 @router.get("/snapshots")
-def snapshots(request: Request, session: Session = Depends(get_session)):
+def snapshots(
+    request: Request,
+    market: str | None = None,
+    session: Session = Depends(get_session),
+):
     cache = getattr(request.app.state, "market_cache", None)
     if cache is None:
-        return [asdict(s) for s in _service(request, session).snapshots()]
+        return [asdict(s) for s in _service(request, session).snapshots(market=market)]
     # The dashboard polls this every few seconds; a 1.5s cache collapses
     # duplicate work from multiple tabs without making prices feel stale.
     return cache.get_or_load(
-        "snapshots", lambda: [asdict(s) for s in _service(request, session).snapshots()]
+        f"snapshots:{market or 'all'}",
+        lambda: [asdict(s) for s in _service(request, session).snapshots(market=market)],
     )
 
 
 @router.get("/clock")
 def clock(request: Request):
-    engine = getattr(request.app.state, "market_engine", None)
-    if engine is None:
-        return {"simulated_now": 0, "speed": 1.0, "timeframe": "15m", "tick_seconds": 0}
-    return engine.clock_info()
+    crypto = getattr(request.app.state, "market_engine", None)
+    cn = getattr(request.app.state, "cn_market_engine", None)
+    payload = {"simulated_now": 0, "speed": 1.0, "timeframe": "15m", "tick_seconds": 0}
+    if crypto is not None:
+        payload = {**payload, **crypto.clock_info()}
+    if cn is not None:
+        payload["cn"] = cn.clock_info()
+    return payload
 
 
 @router.get("/symbols/{code}")

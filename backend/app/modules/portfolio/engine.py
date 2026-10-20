@@ -12,6 +12,7 @@ import logging
 from app.core.config import Settings
 from app.core.db import Database
 from app.modules.accounts.service import AccountService
+from app.modules.cn.fees import CnFeeSchedule
 from app.modules.market.service import MarketService
 from app.modules.portfolio.service import PortfolioService
 from app.modules.risk.policy import RiskContext, RiskLimits, RiskPolicy
@@ -83,6 +84,15 @@ class PortfolioEngine:
                 policy=policy,
                 fee_bps=settings.fee_bps,
                 slippage_bps=settings.slippage_bps,
+                cn_fees=CnFeeSchedule(
+                    commission_bps=settings.cn_commission_bps,
+                    min_commission=settings.cn_min_commission,
+                    stamp_duty_bps=settings.cn_stamp_duty_bps,
+                    transfer_fee_bps=settings.cn_transfer_fee_bps,
+                ),
+                cn_session_enforced=settings.cn_session_enforced,
+        cn_live_session_gate=getattr(settings, "cn_live_session_gate", True),
+                live_market=self.market_engine,
             )
             portfolio = PortfolioService(session, accounts_service, trading)
             risk = RiskService(session)

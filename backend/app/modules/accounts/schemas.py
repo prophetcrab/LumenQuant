@@ -8,8 +8,9 @@ from pydantic import BaseModel, Field
 class AccountCreate(BaseModel):
     name: str = Field(min_length=1, max_length=64)
     kind: Literal["paper", "live"] = "paper"
+    market: Literal["crypto", "cn_stock"] = "crypto"
     initial_balance: float = Field(default=100_000.0, gt=0, le=1_000_000_000)
-    base_currency: str = Field(default="USDT", min_length=2, max_length=12)
+    base_currency: str | None = Field(default=None, min_length=2, max_length=12)
     broker: str | None = Field(default=None, max_length=32)
     leverage: float = Field(default=1.0, ge=1, le=10)
 

@@ -1,14 +1,25 @@
-"""Background loop that matches resting limit orders against live prices."""
+"""Background loop that matches resting limit orders against live prices.
+
+Also performs once-per-session A-share duties: T+1 release and previous-close
+refresh, so the 09:30 open starts with correct limits and sellable quantities.
+"""
 
 from __future__ import annotations
 
 import asyncio
 import logging
+from datetime import date
+
+from sqlalchemy import select
 
 from app.core.config import Settings
 from app.core.db import Database
 from app.modules.accounts.service import AccountService
+from app.modules.cn.calendar import day_key, is_session_open
+from app.modules.market.models import Symbol
 from app.modules.market.service import MarketService
+from app.modules.risk.policy import RiskLimits, RiskPolicy
+from app.modules.risk.service import RiskService
 from app.modules.trading.adapters import AccountCashAdapter, MarketPriceAdapter
 from app.modules.trading.service import TradingService
 
@@ -23,6 +34,7 @@ class TradingEngine:
         self.bus = bus
         self._task: asyncio.Task | None = None
         self._stopping = asyncio.Event()
+        self._last_settlement_day: date | None = None
 
     async def start(self) -> None:
         self._stopping.clear()
@@ -54,6 +66,7 @@ class TradingEngine:
 
     def tick(self) -> int:
         with self.db.session() as session:
+            self._session_duties(session)
             accounts = AccountService(
                 session, live_trading_enabled=self.settings.live_trading_enabled
             )
@@ -66,8 +79,52 @@ class TradingEngine:
                 session,
                 cash=AccountCashAdapter(accounts),
                 prices=MarketPriceAdapter(market),
+                policy=RiskPolicy(
+                    RiskLimits(
+                        max_order_notional=self.settings.risk_max_order_notional,
+                        max_position_notional=self.settings.risk_max_position_notional,
+                        min_order_notional=self.settings.risk_min_order_notional,
+                        max_orders_per_minute=self.settings.risk_max_orders_per_minute,
+                        max_daily_loss_pct=self.settings.risk_max_daily_loss_pct,
+                        max_drawdown_pct=self.settings.risk_max_drawdown_pct,
+                    )
+                ),
                 bus=self.bus,
                 fee_bps=self.settings.fee_bps,
                 slippage_bps=self.settings.slippage_bps,
+                risk=RiskService(session),
+                live_market=self.market_engine,
             )
             return service.match_open_orders()
+
+    def _session_duties(self, session) -> None:
+        """Release T+1 and refresh limits once per trading day at the open."""
+        cn_engine = getattr(self.market_engine, "cn", None)
+        clock = getattr(cn_engine, "clock", None)
+        if clock is None:
+            return
+        now = clock.now_ms()
+        today = day_key(now)
+        if self._last_settlement_day == today:
+            return
+        if not is_session_open(now):
+            return
+        rows = session.scalars(
+            select(Symbol).where(Symbol.market == "cn_stock")
+        ).all()
+        from app.modules.trading.models import Position
+
+        positions = session.scalars(
+            select(Position).where(Position.quantity > Position.available_quantity)
+        ).all()
+        for position in positions:
+            position.available_quantity = position.quantity
+        if cn_engine is not None:
+            for row in rows:
+                last = cn_engine.prev_close(row.code)
+                if last:
+                    row.prev_close = last
+        session.commit()
+        self._last_settlement_day = today
+        if positions:
+            logger.info("T+1 settlement: released %s position(s)", len(positions))

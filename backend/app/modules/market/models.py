@@ -2,7 +2,16 @@ from __future__ import annotations
 
 from datetime import datetime
 
-from sqlalchemy import BigInteger, Boolean, DateTime, Float, Index, Integer, String, UniqueConstraint
+from sqlalchemy import (
+    BigInteger,
+    Boolean,
+    DateTime,
+    Float,
+    Index,
+    Integer,
+    String,
+    UniqueConstraint,
+)
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.core.db import Base
@@ -17,12 +26,22 @@ class Symbol(Base):
     code: Mapped[str] = mapped_column(String(24), unique=True, index=True)
     name: Mapped[str] = mapped_column(String(64))
     asset_class: Mapped[str] = mapped_column(String(24), default="crypto")
+    # Market decides which rule set applies: crypto (24/7, bps fees) or cn_stock.
+    market: Mapped[str] = mapped_column(String(16), default="crypto", index=True)
+    exchange: Mapped[str] = mapped_column(String(8), default="")
+    board: Mapped[str] = mapped_column(String(16), default="")
     base: Mapped[str] = mapped_column(String(12), default="")
     quote: Mapped[str] = mapped_column(String(12), default="USDT")
     tick_size: Mapped[float] = mapped_column(Float, default=0.01)
     lot_size: Mapped[float] = mapped_column(Float, default=0.0001)
     initial_price: Mapped[float] = mapped_column(Float, default=100.0)
     volume_bias: Mapped[float] = mapped_column(Float, default=1.0)
+    # Previous session close, used for daily price limits and change display.
+    prev_close: Mapped[float] = mapped_column(Float, default=0.0)
+    limit_pct: Mapped[float] = mapped_column(Float, default=0.0)
+    is_st: Mapped[bool] = mapped_column(Boolean, default=False)
+    suspended: Mapped[bool] = mapped_column(Boolean, default=False)
+    base_timeframe: Mapped[str] = mapped_column(String(8), default="15m")
     enabled: Mapped[bool] = mapped_column(Boolean, default=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
 

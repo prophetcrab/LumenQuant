@@ -7,6 +7,7 @@ import { useToast } from "../../shared/toast";
 import { money, orderStatusLabel, orderStatusTone, price, qty, signed, timeOnly } from "../../shared/format";
 import { Badge, Card, EmptyState, Field, Loader, Segmented, Stat } from "../../components/ui";
 import { ButtonField } from "../../components/form";
+import { CnTradingPanel } from "../cn/CnTradingPanel";
 
 export function TradingPage() {
   const { account, accountId } = useAccount();
@@ -77,6 +78,9 @@ export function TradingPage() {
 
   if (!account) {
     return <EmptyState title="请先创建账户" text="交易需要一个模拟账户作为资金与持仓的载体。" />;
+  }
+  if (account.market === "cn_stock") {
+    return <CnTradingPanel />;
   }
 
   const data = overview.data;

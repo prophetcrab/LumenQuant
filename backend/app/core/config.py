@@ -47,6 +47,30 @@ class Settings(BaseSettings):
     fee_bps: float = 10.0
     slippage_bps: float = 3.0
 
+    # A-share mode.
+    cn_symbols_enabled: bool = True
+    cn_seed_days: int = 600
+    # Paper accounts skip the session gate by default so the demo works at night.
+    # Live A-share orders are always gated on the real Beijing session.
+    cn_session_enforced: bool = False
+    # Live A-share orders are gated on the real Beijing session by default.
+    # Only disable for rehearsal environments; never for real money.
+    cn_live_session_gate: bool = True
+    cn_extra_holidays: list[str] = []
+    cn_commission_bps: float = 2.5
+    cn_min_commission: float = 5.0
+    cn_stamp_duty_bps: float = 5.0
+    cn_transfer_fee_bps: float = 0.1
+
+    # Tonghuashun (同花顺) order gateway. Empty URL disables the channel.
+    # The gateway is an authorized local/broker-side HTTP service; this platform
+    # never automates the THS desktop client.
+    ths_gateway_url: str = ""
+    ths_gateway_token: str = ""
+    # Deterministic in-process gateway for demos and tests of the live path.
+    ths_mock_enabled: bool = False
+    live_reconcile_seconds: float = 3.0
+
     # Risk limits. Percent fields are fractions (0.05 == 5%); 0 disables a breaker.
     risk_max_order_notional: float = 1_000_000.0
     risk_max_position_notional: float = 5_000_000.0

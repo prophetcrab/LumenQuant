@@ -27,6 +27,7 @@ class AccountView:
     id: str
     name: str
     kind: str
+    market: str
     broker: str
     base_currency: str
     initial_balance: float
@@ -89,6 +90,7 @@ class AccountService:
             id=account.id,
             name=account.name,
             kind=account.kind,
+            market=account.market,
             broker=account.broker,
             base_currency=account.base_currency,
             initial_balance=round_money(account.initial_balance),
@@ -137,28 +139,38 @@ class AccountService:
         name: str,
         kind: str = "paper",
         initial_balance: float = 100_000.0,
-        base_currency: str = "USDT",
+        base_currency: str | None = None,
         broker: str | None = None,
         leverage: float = 1.0,
+        market: str = "crypto",
     ) -> AccountView:
         name = name.strip()
         if not name:
             raise ValidationError("account name must not be empty")
         if kind not in {"paper", "live"}:
             raise ValidationError("account kind must be paper or live")
+        if market not in {"crypto", "cn_stock"}:
+            raise ValidationError("market must be crypto or cn_stock")
         if kind == "live" and not self.live_trading_enabled:
             raise ForbiddenError("live trading is disabled by server configuration")
         if initial_balance <= 0:
             raise ValidationError("initial balance must be positive")
+        if market == "cn_stock":
+            # A-share cash accounts are not margin accounts in this platform.
+            leverage = 1.0
+            base_currency = base_currency or "CNY"
+        else:
+            base_currency = base_currency or "USDT"
         if leverage < 1 or leverage > 10:
             raise ValidationError("leverage must be between 1 and 10")
-        broker = broker or ("paper" if kind == "paper" else "binance")
+        broker = broker or ("paper" if kind == "paper" else ("ths" if market == "cn_stock" else "binance"))
         if self.session.scalar(select(Account.id).where(Account.name == name)) is not None:
             raise ConflictError(f"account name '{name}' already exists")
 
         account = Account(
             name=name,
             kind=kind,
+            market=market,
             broker=broker,
             base_currency=base_currency.upper(),
             initial_balance=round_money(initial_balance),
@@ -179,7 +191,7 @@ class AccountService:
                 action="account.created",
                 entity="account",
                 entity_id=account.id,
-                detail=json.dumps({"name": name, "kind": kind}),
+                detail=json.dumps({"name": name, "kind": kind, "market": market}),
             )
             self.session.commit()
         except IntegrityError as exc:

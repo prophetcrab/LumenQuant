@@ -13,6 +13,7 @@ def market_client(tmp_path):
     settings = Settings(
         database_url=f"sqlite:///{(tmp_path / 'market_api.db').as_posix()}",
         seed_market=True,
+        cn_symbols_enabled=False,
         market_seed_bars=260,
         market_tick_seconds=3600,
         runtime_enabled=False,
@@ -29,9 +30,10 @@ def test_symbol_catalog(market_client):
     response = market_client.get("/api/market/symbols")
     assert response.status_code == 200
     symbols = response.json()
-    assert len(symbols) == 6
     codes = {s["code"] for s in symbols}
     assert {"BTCUSDT", "ETHUSDT", "SOLUSDT"} <= codes
+    crypto = [s for s in symbols if s["market"] == "crypto"]
+    assert len(crypto) == 6
 
 
 def test_candles_contract(market_client):

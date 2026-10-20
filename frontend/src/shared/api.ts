@@ -2,6 +2,7 @@ export type Account = {
   id: string;
   name: string;
   kind: "paper" | "live";
+  market: "crypto" | "cn_stock";
   broker: string;
   base_currency: string;
   initial_balance: number;
@@ -27,11 +28,19 @@ export type SymbolInfo = {
   code: string;
   name: string;
   asset_class: string;
+  market: "crypto" | "cn_stock";
+  exchange: string;
+  board: string;
   base: string;
   quote: string;
   tick_size: number;
   lot_size: number;
   initial_price: number;
+  prev_close: number;
+  limit_pct: number;
+  is_st: boolean;
+  suspended: boolean;
+  base_timeframe: string;
   enabled: boolean;
 };
 
@@ -43,6 +52,10 @@ export type Snapshot = {
   low_24h: number;
   volume_24h: number;
   time: number;
+  market: "crypto" | "cn_stock";
+  prev_close: number;
+  limit_up: number;
+  limit_down: number;
 };
 
 export type Candle = {
@@ -81,6 +94,7 @@ export type Order = {
   status: "new" | "open" | "partially_filled" | "filled" | "cancelled" | "rejected";
   source: string;
   client_order_id: string | null;
+  broker_order_id: string;
   reject_reason: string;
   created_at: string;
   updated_at: string;
@@ -102,6 +116,7 @@ export type Position = {
   account_id: string;
   symbol: string;
   quantity: number;
+  available_quantity: number;
   avg_price: number;
   realized_pnl: number;
   market_price: number;
@@ -164,6 +179,9 @@ export type BacktestMetrics = {
   exposure_pct: number;
   bars: number;
   buy_hold_pct: number;
+  market?: string;
+  periods_per_year?: number;
+  blocked_orders?: { limit_up: number; limit_down: number; t_plus_one: number };
 };
 
 export type BacktestTrade = {
@@ -223,6 +241,91 @@ export type RuntimeLog = {
   order_id: string;
   bar_time: number;
   created_at: string;
+};
+
+export type CnRules = {
+  lot_size: number;
+  boards: Record<string, { limit_pct: number }>;
+  st_limit_pct: number;
+  t_plus_one: boolean;
+  settlement: string;
+  sessions: { open: string; close: string }[];
+  fees: {
+    commission_bps: number;
+    min_commission: number;
+    stamp_duty_bps: number;
+    transfer_fee_bps: number;
+  };
+  session_enforced_for_paper: boolean;
+  symbols: number;
+};
+
+export type CnSession = {
+  simulated_now: number;
+  speed: number;
+  open: boolean;
+  day: string;
+  session: string;
+  session_open: number;
+  session_close: number;
+  next_open: number;
+};
+
+export type CnCalendar = {
+  today: string;
+  is_trading_day: boolean;
+  prev_trading_day: string;
+  next_trading_day: string;
+  upcoming: string[];
+};
+
+export type CnSymbol = SymbolInfo & {
+  price: number;
+  change_pct: number;
+  limit_up: number;
+  limit_down: number;
+};
+
+export type ThsPosition = {
+  symbol: string;
+  quantity: number;
+  available_quantity: number;
+  avg_price: number;
+};
+
+export type ThsHealth = {
+  ok: boolean;
+  gateway: string;
+  can_trade: boolean;
+  balances: Record<string, number>;
+};
+
+export type ThsReconcile = {
+  account_id: string;
+  gateway: string;
+  all_match: boolean;
+  positions: {
+    symbol: string;
+    local_quantity: number;
+    gateway_quantity: number;
+    local_available: number;
+    gateway_available: number;
+    match: boolean;
+  }[];
+};
+
+export type BrokerChannels = {
+  live_trading_enabled: boolean;
+  channels: Record<
+    string,
+    {
+      market: string;
+      ready: boolean;
+      credentials_configured?: boolean;
+      gateway_configured?: boolean;
+      mock_enabled?: boolean;
+    }
+  >;
 };
 
 export type AssistantTool = {
@@ -386,6 +489,7 @@ export const api = {
     initial_balance: number;
     leverage?: number;
     kind?: "paper" | "live";
+    market?: "crypto" | "cn_stock";
   }) => request<Account>("/accounts", { method: "POST", body: JSON.stringify(body) }),
   updateAccount: (id: string, body: { name?: string; status?: string; leverage?: number }) =>
     request<Account>(`/accounts/${id}`, { method: "PATCH", body: JSON.stringify(body) }),
@@ -548,6 +652,19 @@ export const api = {
   audit: (limit = 100, action?: string) =>
     request<AuditEntry[]>(`/system/audit${qs({ limit, action })}`),
   auditSummary: () => request<{ action: string; count: number }[]>("/system/audit/summary"),
+
+  cnRules: () => request<CnRules>("/cn/rules"),
+  cnSession: () => request<CnSession>("/cn/session"),
+  cnCalendar: (days = 20) => request<CnCalendar>(`/cn/calendar${qs({ days })}`),
+  cnSymbols: () => request<CnSymbol[]>("/cn/symbols"),
+  suspendSymbol: (code: string, suspended: boolean) =>
+    request<SymbolInfo>(`/cn/symbols/${code}/suspend${qs({ suspended })}`, { method: "POST" }),
+  settleT1: () => request<{ unlocked: number }>("/trading/settle", { method: "POST" }),
+  brokerChannels: () => request<BrokerChannels>("/brokers/status"),
+  thsHealth: () => request<ThsHealth>("/brokers/ths/health"),
+  thsPositions: () => request<ThsPosition[]>("/brokers/ths/positions"),
+  thsReconcile: (accountId: string) =>
+    request<ThsReconcile>(`/brokers/ths/reconcile${qs({ account_id: accountId })}`),
 
   assistantStatus: () =>
     request<{ mode: "local" | "llm"; model: string }>("/assistant/status"),

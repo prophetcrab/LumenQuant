@@ -20,6 +20,7 @@ class Account(Base):
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
     name: Mapped[str] = mapped_column(String(64), unique=True, index=True)
     kind: Mapped[str] = mapped_column(String(16), default="paper")  # paper | live
+    market: Mapped[str] = mapped_column(String(16), default="crypto", index=True)
     broker: Mapped[str] = mapped_column(String(32), default="paper")
     base_currency: Mapped[str] = mapped_column(String(12), default="USDT")
     initial_balance: Mapped[float] = mapped_column(Float, default=100_000.0)

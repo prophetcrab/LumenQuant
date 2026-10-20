@@ -14,6 +14,7 @@ from app.core.errors import NotFoundError, ValidationError
 from app.core.timeutil import iso
 from app.modules.backtest.engine import BacktestConfig, BacktestEngine
 from app.modules.backtest.models import BacktestRun
+from app.modules.cn.fees import CnFeeSchedule
 from app.modules.market.service import MarketService, SUPPORTED_TIMEFRAMES
 from app.modules.strategies.registry import get
 
@@ -26,11 +27,13 @@ class BacktestService:
         *,
         fee_bps: float = 10.0,
         slippage_bps: float = 3.0,
+        cn_fee_schedule: CnFeeSchedule | None = None,
     ) -> None:
         self.session = session
         self.market = market
         self.default_fee_bps = fee_bps
         self.default_slippage_bps = slippage_bps
+        self.cn_fees = cn_fee_schedule or CnFeeSchedule()
 
     def run(
         self,
@@ -53,9 +56,18 @@ class BacktestService:
             parsed = strategy.validate_params(params)
         except Exception as exc:
             raise ValidationError(f"invalid strategy parameters: {exc}") from exc
+        symbol_view = self.market.require_symbol(symbol)
         raw_config = dict(config or {})
         raw_config.setdefault("fee_bps", self.default_fee_bps)
         raw_config.setdefault("slippage_bps", self.default_slippage_bps)
+        # Symbol rules always win over caller-supplied overrides, otherwise a
+        # client could "backtest" A-shares without T+1 or price limits.
+        raw_config["market"] = symbol_view.market
+        raw_config["tick_size"] = symbol_view.tick_size
+        if symbol_view.market == "cn_stock":
+            raw_config["limit_pct"] = symbol_view.limit_pct
+            raw_config["lot_size"] = 100.0
+            raw_config["t_plus_one"] = True
         cfg = BacktestConfig.from_dict(raw_config)
 
         candles = self.market.candles(symbol, timeframe=timeframe, limit=bars)
@@ -66,7 +78,9 @@ class BacktestService:
             )
         started = time.perf_counter()
         try:
-            result = BacktestEngine(cfg).run(strategy, parsed, candles, timeframe)
+            result = BacktestEngine(cfg, cn_fees=self.cn_fees).run(
+                strategy, parsed, candles, timeframe
+            )
         except ValueError as exc:
             raise ValidationError(str(exc)) from exc
         duration_ms = (time.perf_counter() - started) * 1000

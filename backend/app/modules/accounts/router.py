@@ -31,6 +31,7 @@ def create_account(payload: AccountCreate, request: Request, session: Session = 
         base_currency=payload.base_currency,
         broker=payload.broker,
         leverage=payload.leverage,
+        market=payload.market,
     )
 
 

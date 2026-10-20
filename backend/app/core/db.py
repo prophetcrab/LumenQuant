@@ -75,6 +75,19 @@ class Database:
 
         additions = {
             "equity_snapshots": {"net_contributions": "FLOAT NOT NULL DEFAULT 0"},
+            "market_symbols": {
+                "market": "VARCHAR(16) NOT NULL DEFAULT 'crypto'",
+                "exchange": "VARCHAR(8) NOT NULL DEFAULT ''",
+                "board": "VARCHAR(16) NOT NULL DEFAULT ''",
+                "prev_close": "FLOAT NOT NULL DEFAULT 0",
+                "limit_pct": "FLOAT NOT NULL DEFAULT 0",
+                "is_st": "BOOLEAN NOT NULL DEFAULT 0",
+                "suspended": "BOOLEAN NOT NULL DEFAULT 0",
+                "base_timeframe": "VARCHAR(8) NOT NULL DEFAULT '15m'",
+            },
+            "accounts": {"market": "VARCHAR(16) NOT NULL DEFAULT 'crypto'"},
+            "positions": {"available_quantity": "FLOAT NOT NULL DEFAULT 0"},
+            "orders": {"broker_order_id": "VARCHAR(64) NOT NULL DEFAULT ''"},
         }
         inspector = inspect(self.engine)
         with self.engine.begin() as connection:

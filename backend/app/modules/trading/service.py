@@ -3,6 +3,11 @@
 All writes for one order action happen in a single transaction: order row, fill,
 position, cash ledger and audit. The service never imports another module's ORM
 models; it talks to `CashPort` and `PricePort`.
+
+Market rules are resolved per account:
+* crypto — 24/7, fractional lots, flat bps fee, instantly sellable;
+* cn_stock — 100-share lots, daily price band, T+1 availability, asymmetric fees,
+  and (optionally) a session gate.
 """
 
 from __future__ import annotations
@@ -19,8 +24,16 @@ from app.core.errors import ConflictError, ForbiddenError, NotFoundError, Valida
 from app.core.events import EventBus, OrderFilled
 from app.core.money import round_money, round_price, round_qty
 from app.core.timeutil import iso, utcnow
-from app.modules.risk.policy import OrderIntent, RiskContext, RiskPolicy
 from app.modules.brokers.base import BrokerOrderRequest, BrokerPort
+from app.modules.cn.calendar import is_session_open
+from app.modules.cn.fees import CnFeeSchedule
+from app.modules.cn.rules import (
+    PriceBand,
+    price_band,
+    validate_limit_price,
+    validate_quantity,
+)
+from app.modules.risk.policy import OrderIntent, RiskContext, RiskPolicy
 from app.modules.risk.service import RiskService
 from app.modules.trading.models import Fill, Order, Position, new_id
 from app.modules.trading.ports import CashPort, PricePort
@@ -44,6 +57,7 @@ class OrderView:
     status: str
     source: str
     client_order_id: str | None
+    broker_order_id: str
     reject_reason: str
     created_at: str
     updated_at: str
@@ -67,6 +81,7 @@ class PositionView:
     account_id: str
     symbol: str
     quantity: float
+    available_quantity: float
     avg_price: float
     realized_pnl: float
     market_price: float
@@ -88,6 +103,11 @@ class TradingService:
         slippage_bps: float = 3.0,
         risk: RiskService | None = None,
         broker: BrokerPort | None = None,
+        cn_broker: BrokerPort | None = None,
+        cn_fees: CnFeeSchedule | None = None,
+        cn_session_enforced: bool = False,
+        cn_live_session_gate: bool = True,
+        live_market=None,
     ) -> None:
         self.session = session
         self.cash = cash
@@ -98,6 +118,11 @@ class TradingService:
         self.slippage_bps = slippage_bps
         self.risk = risk
         self.broker = broker
+        self.cn_broker = cn_broker
+        self.cn_fees = cn_fees or CnFeeSchedule()
+        self.cn_session_enforced = cn_session_enforced
+        self.cn_live_session_gate = cn_live_session_gate
+        self.live_market = live_market
 
     # ---------------------------------------------------------------- views
     def _order_view(self, order: Order) -> OrderView:
@@ -115,6 +140,7 @@ class TradingService:
             status=order.status,
             source=order.source,
             client_order_id=order.client_order_id,
+            broker_order_id=order.broker_order_id,
             reject_reason=order.reject_reason,
             created_at=iso(order.created_at),
             updated_at=iso(order.updated_at),
@@ -148,6 +174,7 @@ class TradingService:
             account_id=position.account_id,
             symbol=position.symbol,
             quantity=position.quantity,
+            available_quantity=position.available_quantity,
             avg_price=position.avg_price,
             realized_pnl=round_money(position.realized_pnl),
             market_price=price,
@@ -198,6 +225,33 @@ class TradingService:
         ).all()
         return [self._fill_view(f) for f in rows]
 
+    # --------------------------------------------------------------- market
+    def _account_market(self, account_id: str) -> str:
+        return getattr(self.cash, "market", lambda _id: "crypto")(account_id)
+
+    def _fee(self, market: str, side: str, notional: float) -> float:
+        if market == "cn_stock":
+            return self.cn_fees.total(side, notional)
+        return round_money(notional * self.fee_bps / 10_000.0)
+
+    def _band(self, symbol_view, market: str) -> PriceBand | None:
+        if market != "cn_stock":
+            return None
+        return price_band(
+            symbol_view.prev_close,
+            symbol_view.board,
+            symbol_view.is_st,
+            symbol_view.tick_size or 0.01,
+        )
+
+    def _assert_session(self, market: str, *, live: bool) -> None:
+        if market != "cn_stock":
+            return
+        if not (live and self.cn_live_session_gate) and not self.cn_session_enforced:
+            return
+        if not is_session_open():
+            raise ConflictError("A股非交易时段，无法下单（09:30-11:30 / 13:00-15:00）")
+
     # ---------------------------------------------------------------- place
     def place_order(
         self,
@@ -238,10 +292,42 @@ class TradingService:
             if existing is not None:
                 return self._order_view(existing)
 
+        market = self._account_market(account_id)
+        account_kind = self.cash.kind(account_id)
         symbol_view = self.prices.symbol(symbol)
+        if symbol_view.market != market:
+            raise ValidationError(
+                f"{symbol} 属于 {symbol_view.market} 市场，与账户市场 {market} 不一致"
+            )
+        if symbol_view.suspended:
+            raise ConflictError(f"{symbol} 停牌中，无法交易")
+
         market_price = self.prices.price(symbol)
         reference_price = limit_price or market_price
         position = self._position(account_id, symbol)
+
+        if market == "cn_stock":
+            self._assert_session(market, live=account_kind == "live")
+            validate_quantity(
+                side,
+                quantity,
+                position_quantity=position.quantity if position else 0.0,
+                available_quantity=position.available_quantity if position else 0.0,
+            )
+            band = self._band(symbol_view, market)
+            if limit_price is not None:
+                validate_limit_price(limit_price, band, symbol_view.tick_size or 0.01)
+            if band is not None:
+                locked = getattr(self.live_market, "is_locked", lambda _s: "")(symbol)
+                if side == "buy" and (
+                    locked == "up" or at_or_above(market_price, band.up, symbol_view.tick_size)
+                ):
+                    raise ConflictError(f"{symbol} 涨停，无法买入")
+                if side == "sell" and (
+                    locked == "down" or at_or_below(market_price, band.down, symbol_view.tick_size)
+                ):
+                    raise ConflictError(f"{symbol} 跌停，无法卖出")
+
         cutoff = utcnow() - timedelta(minutes=1)
         recent = self.session.scalar(
             select(func.count(Order.id)).where(
@@ -250,7 +336,10 @@ class TradingService:
         )
         ctx = RiskContext(
             cash=self.cash.cash(account_id),
-            position_qty=position.quantity if position else 0.0,
+            position_qty=(
+                position.available_quantity if market == "cn_stock" and position else
+                (position.quantity if position else 0.0)
+            ),
             position_avg_price=position.avg_price if position else 0.0,
             orders_last_minute=int(recent or 0),
         )
@@ -273,19 +362,23 @@ class TradingService:
             if not breaker.allowed:
                 self.risk.trip(account_id, breaker.reason)
                 raise ConflictError(f"trading halted: {breaker.reason}")
+
+        estimated_fee = self._fee(market, side, reference_price * quantity)
         self.policy.validate(
             OrderIntent(
                 side=side,
                 quantity=quantity,
                 price=reference_price,
-                fee_bps=self.fee_bps,
+                fee_bps=(estimated_fee / (reference_price * quantity) * 10_000.0)
+                if reference_price * quantity
+                else 0.0,
             ),
             ctx,
             symbol_view,
         )
 
-        account_kind = self.cash.kind(account_id)
         if account_kind == "live":
+            gateway = self.cn_broker if market == "cn_stock" else self.broker
             return self._place_live_order(
                 account_id=account_id,
                 symbol=symbol,
@@ -296,6 +389,10 @@ class TradingService:
                 source=source,
                 client_order_id=client_order_id,
                 market_price=market_price,
+                market=market,
+                gateway=gateway,
+                band=self._band(symbol_view, market),
+                tick=symbol_view.tick_size or 0.01,
             )
 
         order = Order(
@@ -314,10 +411,18 @@ class TradingService:
         self.session.flush()
 
         if order_type == "market":
-            fill_price = self._market_fill_price(side, market_price)
-            self._execute(order, quantity, fill_price)
+            fill_price = self._market_fill_price(
+                side, market_price, band=self._band(symbol_view, market),
+                tick=symbol_view.tick_size or 0.01,
+            )
+            self._execute(order, quantity, fill_price, market=market)
         elif self._is_marketable(order, market_price):
-            self._execute(order, quantity, self._limit_fill_price(order, market_price))
+            self._execute(
+                order,
+                quantity,
+                self._limit_fill_price(order, market_price),
+                market=market,
+            )
         else:
             order.status = "open"
 
@@ -334,6 +439,7 @@ class TradingService:
                     "type": order_type,
                     "quantity": quantity,
                     "status": order.status,
+                    "market": market,
                 }
             ),
         )
@@ -353,20 +459,27 @@ class TradingService:
         source: str,
         client_order_id: str | None,
         market_price: float,
+        market: str,
+        gateway: BrokerPort | None,
+        band: PriceBand | None,
+        tick: float,
     ) -> OrderView:
-        """Route to the exchange, then mirror the result locally.
+        """Submit to the gateway and book whatever it reports as filled.
 
-        The exchange is the source of truth for the fill. Local position and cash
-        ledgers are updated from the *actual* fill so equity math stays consistent;
-        a live account's cash must be reconciled against the exchange balance
-        (see /api/brokers/binance/verify) before relying on it for sizing.
+        A-share gateways are asynchronous: the usual result is `open`, and the
+        LiveReconciler books fills later. Crypto (Binance) answers immediately
+        with the fill, so the same code handles both.
         """
-        if self.broker is None:
+        if gateway is None:
+            if market == "cn_stock":
+                raise ForbiddenError(
+                    "A股实盘需要同花顺下单网关：设置 LQ_THS_GATEWAY_URL（或启用 LQ_THS_MOCK_ENABLED 做演练）"
+                )
             raise ForbiddenError(
                 "live account requires broker credentials; set LQ_BINANCE_API_KEY/SECRET "
                 "and enable live trading"
             )
-        result = self.broker.place_order(
+        result = gateway.place_order(
             BrokerOrderRequest(
                 symbol=symbol,
                 side=side,
@@ -387,68 +500,24 @@ class TradingService:
             status=result.status,
             source=f"live:{source}",
             client_order_id=client_order_id,
-            filled_quantity=result.filled_quantity,
-            avg_fill_price=result.avg_price,
+            broker_order_id=result.broker_order_id,
+            filled_quantity=0.0,
+            avg_fill_price=0.0,
         )
         self.session.add(order)
         self.session.flush()
 
         fill_price = result.avg_price or market_price
         if result.filled_quantity > 0 and fill_price > 0:
-            notional = round_money(result.filled_quantity * fill_price)
-            fee = round_money(notional * self.fee_bps / 10_000.0)
-            order.fee = fee
-            position = self._position(account_id, symbol)
-            if position is None:
-                position = Position(
-                    id=new_id(),
-                    account_id=account_id,
-                    symbol=symbol,
-                    quantity=0.0,
-                    avg_price=0.0,
-                    realized_pnl=0.0,
-                )
-                self.session.add(position)
-                self.session.flush()
-            if side == "buy":
-                new_qty = round_qty(position.quantity + result.filled_quantity)
-                weighted = position.quantity * position.avg_price + notional + fee
-                position.avg_price = round_price(weighted / new_qty) if new_qty else 0.0
-                position.quantity = new_qty
-                self.cash.post_cash(
-                    account_id,
-                    amount=-round_money(notional + fee),
-                    kind="trade",
-                    ref=order.id,
-                    note=f"live buy {result.filled_quantity} {symbol} @ {fill_price}",
-                )
-            else:
-                realized = round_money((fill_price - position.avg_price) * result.filled_quantity - fee)
-                position.realized_pnl = round_money(position.realized_pnl + realized)
-                position.quantity = round_qty(position.quantity - result.filled_quantity)
-                if position.quantity <= 1e-9:
-                    position.quantity = 0.0
-                    position.avg_price = 0.0
-                self.cash.post_cash(
-                    account_id,
-                    amount=round_money(notional - fee),
-                    kind="trade",
-                    ref=order.id,
-                    note=f"live sell {result.filled_quantity} {symbol} @ {fill_price}",
-                )
-            self.session.add(
-                Fill(
-                    id=new_id(),
-                    order_id=order.id,
-                    account_id=account_id,
-                    symbol=symbol,
-                    side=side,
-                    quantity=result.filled_quantity,
-                    price=fill_price,
-                    fee=fee,
-                )
+            if band is not None:
+                fill_price = min(max(fill_price, band.down), band.up)
+            self._book_fill(
+                order,
+                result.filled_quantity,
+                fill_price,
+                market=market,
+                status=result.status,
             )
-            self.session.flush()
 
         record_audit(
             self.session,
@@ -462,6 +531,7 @@ class TradingService:
                     "symbol": symbol,
                     "side": side,
                     "quantity": quantity,
+                    "market": market,
                 }
             ),
         )
@@ -473,7 +543,17 @@ class TradingService:
         positions_value = sum(p.market_value for p in self.positions(account_id))
         return round_money(cash + positions_value)
 
-    def _market_fill_price(self, side: str, price: float) -> float:
+    def _market_fill_price(
+        self,
+        side: str,
+        price: float,
+        *,
+        band: PriceBand | None = None,
+        tick: float = 0.01,
+    ) -> float:
+        if band is not None:
+            # A-share market orders cannot transact outside the daily band.
+            return round_price(min(max(price, band.down), band.up))
         adjustment = self.slippage_bps / 10_000.0
         return round_price(price * (1.0 + adjustment if side == "buy" else 1.0 - adjustment))
 
@@ -489,9 +569,22 @@ class TradingService:
         return round_price(min(price, order.limit_price) if order.side == "buy" else max(price, order.limit_price))
 
     # -------------------------------------------------------------- execute
-    def _execute(self, order: Order, quantity: float, price: float) -> None:
+    def _execute(
+        self, order: Order, quantity: float, price: float, *, market: str = "crypto"
+    ) -> None:
+        self._book_fill(order, quantity, price, market=market, status="filled")
+
+    def _book_fill(
+        self,
+        order: Order,
+        quantity: float,
+        price: float,
+        *,
+        market: str,
+        status: str = "filled",
+    ) -> None:
         notional = round_money(quantity * price)
-        fee = round_money(notional * self.fee_bps / 10_000.0)
+        fee = self._fee(market, order.side, notional)
         position = self._position(order.account_id, order.symbol)
         if position is None:
             position = Position(
@@ -499,6 +592,7 @@ class TradingService:
                 account_id=order.account_id,
                 symbol=order.symbol,
                 quantity=0.0,
+                available_quantity=0.0,
                 avg_price=0.0,
                 realized_pnl=0.0,
             )
@@ -514,6 +608,9 @@ class TradingService:
             weighted = position.quantity * position.avg_price + notional + fee
             position.avg_price = round_price(weighted / new_qty)
             position.quantity = new_qty
+            if market != "cn_stock":
+                # Crypto settles instantly; A-shares unlock at next settlement.
+                position.available_quantity = new_qty
             self.cash.post_cash(
                 order.account_id,
                 amount=-total_cost,
@@ -522,14 +619,27 @@ class TradingService:
                 note=f"buy {quantity} {order.symbol} @ {price}",
             )
         else:
-            if quantity > position.quantity + 1e-9:
-                raise ConflictError("insufficient position at execution time")
+            sellable = (
+                position.available_quantity if market == "cn_stock" else position.quantity
+            )
+            if quantity > sellable + 1e-9:
+                raise ConflictError(
+                    f"可卖数量不足：可卖 {sellable:g}"
+                    + ("（T+1 当日买入次日可用）" if market == "cn_stock" else "")
+                )
             proceeds = round_money(notional - fee)
             realized = round_money((price - position.avg_price) * quantity - fee)
             position.realized_pnl = round_money(position.realized_pnl + realized)
             position.quantity = round_qty(position.quantity - quantity)
+            if market == "cn_stock":
+                position.available_quantity = max(
+                    0.0, round_qty(position.available_quantity - quantity)
+                )
+            else:
+                position.available_quantity = position.quantity
             if position.quantity <= 1e-9:
                 position.quantity = 0.0
+                position.available_quantity = 0.0
                 position.avg_price = 0.0
             self.cash.post_cash(
                 order.account_id,
@@ -556,7 +666,9 @@ class TradingService:
             (prior_notional + notional) / order.filled_quantity
         )
         order.fee = round_money(order.fee + fee)
-        order.status = "filled"
+        order.status = status if status in {"filled", "partially_filled"} else order.status
+        if order.filled_quantity >= order.quantity - 1e-9:
+            order.status = "filled"
         self.session.flush()
 
         if self.bus is not None:
@@ -579,6 +691,15 @@ class TradingService:
             raise NotFoundError(f"order {order_id} not found")
         if order.status not in OPEN_STATUSES:
             raise ConflictError(f"order is {order.status} and cannot be cancelled")
+        if order.broker_order_id:
+            gateway = (
+                self.cn_broker
+                if self._account_market(order.account_id) == "cn_stock"
+                else self.broker
+            )
+            if gateway is None:
+                raise ConflictError("gateway unavailable; cannot cancel live order")
+            gateway.cancel_order(order.symbol, order.broker_order_id)
         order.status = "cancelled"
         record_audit(
             self.session,
@@ -595,12 +716,18 @@ class TradingService:
         position = self._position(account_id, symbol)
         if position is None or position.quantity <= 0:
             raise ConflictError(f"no open position for {symbol.upper()}")
+        market = self._account_market(account_id)
+        quantity = (
+            position.available_quantity if market == "cn_stock" else position.quantity
+        )
+        if quantity <= 0:
+            raise ConflictError("无可卖数量（T+1：当日买入次日可用）")
         return self.place_order(
             account_id=account_id,
             symbol=symbol,
             side="sell",
             order_type="market",
-            quantity=position.quantity,
+            quantity=quantity,
             source="manual-close",
         )
 
@@ -610,10 +737,23 @@ class TradingService:
         orders = self.open_orders(account_id=account_id)
         filled = 0
         for order in orders:
+            if order.broker_order_id:
+                continue  # live orders are advanced by the reconciler
             try:
+                symbol_view = self.prices.symbol(order.symbol)
                 price = self.prices.price(order.symbol)
             except Exception:
                 continue
+            if symbol_view.suspended:
+                continue
+            market = symbol_view.market
+            band = self._band(symbol_view, market)
+            if band is not None:
+                tick = symbol_view.tick_size or 0.01
+                if order.side == "buy" and at_or_above(price, band.up, tick):
+                    continue  # limit-up: nothing to buy
+                if order.side == "sell" and at_or_below(price, band.down, tick):
+                    continue
             if not self._is_marketable(order, price):
                 continue
             remaining = round_qty(order.quantity - order.filled_quantity)
@@ -621,7 +761,12 @@ class TradingService:
                 order.status = "filled"
                 continue
             try:
-                self._execute(order, remaining, self._limit_fill_price(order, price))
+                self._execute(
+                    order,
+                    remaining,
+                    self._limit_fill_price(order, price),
+                    market=market,
+                )
                 record_audit(
                     self.session,
                     action="order.filled",
@@ -639,3 +784,22 @@ class TradingService:
                     order.reject_reason = "execution failed: funds or position changed"
                     self.session.commit()
         return filled
+
+    # ----------------------------------------------------------- settlement
+    def settle_t1(self) -> int:
+        """Release T+1 holds for A-share positions. Run once per session open."""
+        rows = self.session.scalars(
+            select(Position).where(Position.quantity > Position.available_quantity)
+        ).all()
+        for position in rows:
+            position.available_quantity = position.quantity
+        self.session.commit()
+        return len(rows)
+
+
+def at_or_above(price: float, level: float, tick: float) -> bool:
+    return level > 0 and price >= level - tick / 2
+
+
+def at_or_below(price: float, level: float, tick: float) -> bool:
+    return level > 0 and price <= level + tick / 2

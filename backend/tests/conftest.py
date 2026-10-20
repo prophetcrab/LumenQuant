@@ -20,6 +20,7 @@ def settings(tmp_path: Path) -> Settings:
     return Settings(
         database_url=f"sqlite:///{(tmp_path / 'test.db').as_posix()}",
         seed_market=False,
+        cn_symbols_enabled=False,
         runtime_enabled=False,
         live_trading_enabled=False,
         auth_enabled=False,

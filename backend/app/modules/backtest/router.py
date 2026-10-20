@@ -4,26 +4,16 @@ from fastapi import APIRouter, Depends, Query, Request
 from sqlalchemy.orm import Session
 
 from app.api.deps import get_session
+from app.api.wiring import build_backtests
 from app.modules.backtest.schemas import BacktestRequest
 from app.modules.backtest.service import BacktestService
-from app.modules.market.service import MarketService
 
 
 router = APIRouter(prefix="/backtests", tags=["backtest"])
 
 
 def build_service(request: Request, session: Session) -> BacktestService:
-    settings = request.app.state.settings
-    engine = getattr(request.app.state, "market_engine", None)
-    market = MarketService(
-        session, clock=getattr(engine, "clock", None), live=None
-    )
-    return BacktestService(
-        session,
-        market,
-        fee_bps=settings.fee_bps,
-        slippage_bps=settings.slippage_bps,
-    )
+    return build_backtests(request, session)
 
 
 @router.post("", status_code=201)

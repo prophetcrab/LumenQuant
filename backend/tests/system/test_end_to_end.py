@@ -20,6 +20,7 @@ def live_app(tmp_path):
     settings = Settings(
         database_url=f"sqlite:///{(tmp_path / 'e2e.db').as_posix()}",
         seed_market=True,
+        cn_symbols_enabled=False,
         market_seed_bars=3000,
         market_tick_seconds=3600,
         runtime_enabled=False,

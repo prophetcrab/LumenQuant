@@ -8,6 +8,7 @@ import logging
 from app.core.config import Settings
 from app.core.db import Database
 from app.modules.accounts.service import AccountService
+from app.modules.cn.fees import CnFeeSchedule
 from app.modules.market.service import MarketService
 from app.modules.runtime.service import RuntimeService
 from app.modules.trading.adapters import AccountCashAdapter, MarketPriceAdapter
@@ -70,6 +71,14 @@ class StrategyRuntimeEngine:
                 bus=self.bus,
                 fee_bps=self.settings.fee_bps,
                 slippage_bps=self.settings.slippage_bps,
+                cn_fees=CnFeeSchedule(
+                    commission_bps=self.settings.cn_commission_bps,
+                    min_commission=self.settings.cn_min_commission,
+                    stamp_duty_bps=self.settings.cn_stamp_duty_bps,
+                    transfer_fee_bps=self.settings.cn_transfer_fee_bps,
+                ),
+                cn_session_enforced=self.settings.cn_session_enforced,
+                live_market=self.market_engine,
             )
             service = RuntimeService(
                 session, accounts_service=accounts, market=market, trading=trading

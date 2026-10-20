@@ -6,6 +6,7 @@ from app.modules.accounts.router import router as accounts_router
 from app.modules.assistant.router import router as assistant_router
 from app.modules.backtest.router import router as backtest_router
 from app.modules.brokers.router import router as brokers_router
+from app.modules.cn.router import router as cn_router
 from app.modules.data.router import router as data_router
 from app.modules.market.router import router as market_router
 from app.modules.portfolio.router import router as portfolio_router
@@ -29,6 +30,7 @@ api_router.include_router(brokers_router)
 api_router.include_router(risk_router)
 api_router.include_router(system_router)
 api_router.include_router(data_router)
+api_router.include_router(cn_router)
 
 
 @api_router.get("/meta")
@@ -47,12 +49,21 @@ def meta():
             "risk",
             "system",
             "data",
+            "cn",
         ],
         "capabilities": {
             "paper_trading": True,
-            "live_trading": False,
+            "live_trading": True,
             "backtest": True,
             "auto_trading": True,
             "assistant": True,
+            "markets": ["crypto", "cn_stock"],
+            "cn_rules": {
+                "t_plus_one": True,
+                "price_limits": True,
+                "lot_size": 100,
+                "session": "09:30-11:30, 13:00-15:00",
+            },
+            "live_gateways": ["binance", "ths"],
         },
     }

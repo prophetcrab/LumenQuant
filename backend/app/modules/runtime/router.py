@@ -6,32 +6,18 @@ from fastapi import APIRouter, Depends, Query, Request
 from sqlalchemy.orm import Session
 
 from app.api.deps import get_session
-from app.modules.accounts.service import AccountService
-from app.modules.market.service import MarketService
+from app.api.wiring import build_accounts, build_market, build_trading
 from app.modules.runtime.schemas import InstanceCreate, InstanceUpdate, RunningToggle
 from app.modules.runtime.service import RuntimeService
-from app.modules.trading.adapters import AccountCashAdapter, MarketPriceAdapter
-from app.modules.trading.service import TradingService
 
 
 router = APIRouter(prefix="/runtime", tags=["runtime"])
 
 
 def build_service(request: Request, session: Session) -> RuntimeService:
-    settings = request.app.state.settings
-    engine = getattr(request.app.state, "market_engine", None)
-    accounts = AccountService(session, live_trading_enabled=settings.live_trading_enabled)
-    market = MarketService(
-        session, clock=getattr(engine, "clock", None), live=engine if engine else None
-    )
-    trading = TradingService(
-        session,
-        cash=AccountCashAdapter(accounts),
-        prices=MarketPriceAdapter(market),
-        bus=request.app.state.bus,
-        fee_bps=settings.fee_bps,
-        slippage_bps=settings.slippage_bps,
-    )
+    accounts = build_accounts(request, session)
+    market = build_market(request, session)
+    trading = build_trading(request, session, accounts=accounts, market=market, with_brokers=True)
     return RuntimeService(
         session, accounts_service=accounts, market=market, trading=trading
     )

@@ -33,6 +33,8 @@ class Order(Base):
     status: Mapped[str] = mapped_column(String(20), default="new", index=True)
     source: Mapped[str] = mapped_column(String(48), default="manual")
     client_order_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    # Exchange-side identifier for live orders; used by the fill reconciler.
+    broker_order_id: Mapped[str] = mapped_column(String(64), default="")
     reject_reason: Mapped[str] = mapped_column(String(240), default="")
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=utcnow, index=True
@@ -70,6 +72,9 @@ class Position(Base):
     )
     symbol: Mapped[str] = mapped_column(String(24))
     quantity: Mapped[float] = mapped_column(Float, default=0.0)
+    # Sellable quantity. For A-shares this lags quantity until the next session
+    # (T+1); for crypto it always mirrors quantity.
+    available_quantity: Mapped[float] = mapped_column(Float, default=0.0)
     avg_price: Mapped[float] = mapped_column(Float, default=0.0)
     realized_pnl: Mapped[float] = mapped_column(Float, default=0.0)
     updated_at: Mapped[datetime] = mapped_column(
