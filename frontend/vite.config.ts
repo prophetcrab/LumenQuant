@@ -16,4 +16,17 @@ export default defineConfig({
     },
   },
   preview: { port: 4173, host: "127.0.0.1" },
+  build: {
+    chunkSizeWarningLimit: 900,
+    rolldownOptions: {
+      output: {
+        advancedChunks: {
+          groups: [
+            { name: "echarts", test: /node_modules[\\/]echarts/ },
+            { name: "react", test: /node_modules[\\/](react|react-dom|react-router|scheduler)/ },
+          ],
+        },
+      },
+    },
+  },
 });

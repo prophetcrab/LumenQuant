@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
-import ReactECharts from "echarts-for-react";
+import { Chart, type EChartsOption } from "../../shared/echarts";
 import { useMutation, useQuery } from "@tanstack/react-query";
 import { api } from "../../shared/api";
 import type { StrategyMeta } from "../../shared/api";
@@ -240,7 +240,7 @@ function SignalChart({
   // would flatten the price scale if drawn on the same y-axis.
   const PRICE_SERIES = new Set(["fast", "slow", "ema", "middle", "upper", "lower", "center", "atr"]);
 
-  const option = useMemo(() => {
+  const option = useMemo<EChartsOption | null>(() => {
     if (!candles.data) return null;
     const priceOverlays = Object.fromEntries(
       Object.entries(preview.overlays).filter(([name]) => PRICE_SERIES.has(name)),
@@ -279,5 +279,5 @@ function SignalChart({
   }, [candles.data, preview]);
 
   if (candles.isLoading || !option) return <div className="skeleton" style={{ height: 320, margin: 10 }} />;
-  return <ReactECharts option={option} style={{ height: 340 }} notMerge lazyUpdate />;
+  return <Chart option={option} height={340} notMerge lazyUpdate />;
 }

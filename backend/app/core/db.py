@@ -20,8 +20,17 @@ class Base(DeclarativeBase):
 class Database:
     def __init__(self, url: str, *, echo: bool = False) -> None:
         connect_args = {"check_same_thread": False} if url.startswith("sqlite") else {}
+        # SQLite defaults to a 5+10 pool, which serialises bursts of read requests
+        # into multi-second waits. Reads are cheap here, so widen the pool.
+        pool_kwargs = (
+            {"pool_size": 20, "max_overflow": 30, "pool_timeout": 10, "pool_recycle": 1800}
+            if url.startswith("sqlite")
+            else {}
+        )
         self.url = url
-        self.engine = create_engine(url, echo=echo, connect_args=connect_args, future=True)
+        self.engine = create_engine(
+            url, echo=echo, connect_args=connect_args, future=True, **pool_kwargs
+        )
         if url.startswith("sqlite"):
             self._install_sqlite_pragmas()
         self.session_factory = sessionmaker(

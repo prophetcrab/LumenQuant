@@ -9,6 +9,7 @@ from fastapi.responses import JSONResponse
 from sqlalchemy import text
 
 from app.api.router import api_router
+from app.core.cache import TTLCache
 from app.core.config import Settings, get_settings
 from app.core.db import Database
 from app.core.errors import AppError
@@ -78,6 +79,8 @@ def create_app(settings: Settings | None = None, database: Database | None = Non
     app.state.settings = settings
     app.state.db = db
     app.state.bus = bus
+    app.state.market_cache = TTLCache(ttl_seconds=1.5, max_entries=32)
+    app.state.candle_cache = TTLCache(ttl_seconds=2.0, max_entries=256)
     app.state.market_engine = market_engine
     app.state.trading_engine = trading_engine
     app.state.runtime_engine = runtime_engine

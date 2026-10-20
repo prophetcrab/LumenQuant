@@ -1,5 +1,5 @@
 import { useMemo, useState } from "react";
-import ReactECharts from "echarts-for-react";
+import { Chart } from "../../shared/echarts";
 import { useQuery } from "@tanstack/react-query";
 import { api } from "../../shared/api";
 import { useMarketClock, useSnapshots, useSymbols } from "../../shared/hooks";
@@ -92,7 +92,7 @@ export function MarketsPage() {
             {candles.isLoading ? (
               <div className="skeleton" style={{ height: 520, margin: 10 }} />
             ) : option ? (
-              <ReactECharts option={option} style={{ height: 528 }} notMerge lazyUpdate />
+              <Chart option={option} height={528} notMerge lazyUpdate />
             ) : (
               <EmptyState title="暂无行情数据" text="行情引擎启动后会自动合成历史 K 线。" />
             )}

@@ -112,7 +112,17 @@ def candles(
 ):
     if timeframe not in SUPPORTED_TIMEFRAMES:
         raise ValidationError(f"timeframe must be one of {', '.join(SUPPORTED_TIMEFRAMES)}")
-    points = _service(request, session).candles(symbol, timeframe=timeframe, limit=limit)
+    cache = getattr(request.app.state, "candle_cache", None)
+    if cache is None:
+        points = _service(request, session).candles(symbol, timeframe=timeframe, limit=limit)
+    else:
+        key = f"{symbol.upper()}:{timeframe}:{limit}"
+        points = cache.get_or_load(
+            key,
+            lambda: _service(request, session).candles(
+                symbol, timeframe=timeframe, limit=limit
+            ),
+        )
     return {
         "symbol": symbol.upper(),
         "timeframe": timeframe,
@@ -152,7 +162,14 @@ def snapshot(
 
 @router.get("/snapshots")
 def snapshots(request: Request, session: Session = Depends(get_session)):
-    return [asdict(s) for s in _service(request, session).snapshots()]
+    cache = getattr(request.app.state, "market_cache", None)
+    if cache is None:
+        return [asdict(s) for s in _service(request, session).snapshots()]
+    # The dashboard polls this every few seconds; a 1.5s cache collapses
+    # duplicate work from multiple tabs without making prices feel stale.
+    return cache.get_or_load(
+        "snapshots", lambda: [asdict(s) for s in _service(request, session).snapshots()]
+    )
 
 
 @router.get("/clock")

@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from datetime import datetime
 
-from sqlalchemy import BigInteger, Boolean, DateTime, Float, Integer, String, UniqueConstraint
+from sqlalchemy import BigInteger, Boolean, DateTime, Float, Index, Integer, String, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.core.db import Base
@@ -29,7 +29,11 @@ class Symbol(Base):
 
 class Candle(Base):
     __tablename__ = "market_candles"
-    __table_args__ = (UniqueConstraint("symbol", "timeframe", "open_time", name="uq_candle"),)
+    __table_args__ = (
+        UniqueConstraint("symbol", "timeframe", "open_time", name="uq_candle"),
+        # Primary read pattern: latest N bars for one symbol/timeframe.
+        Index("ix_candles_lookup", "symbol", "timeframe", "open_time"),
+    )
 
     # Integer (not BigInteger) so SQLite treats it as the rowid alias and autoincrements.
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)

@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
-import ReactECharts from "echarts-for-react";
+import { Chart } from "../../shared/echarts";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { api } from "../../shared/api";
 import type { BacktestRun } from "../../shared/api";
@@ -190,7 +190,7 @@ export function BacktestPage() {
               padded={false}
             >
               <div style={{ padding: "6px 8px 8px" }}>
-                {equityOption ? <ReactECharts option={equityOption} style={{ height: 320 }} notMerge /> : null}
+                {equityOption ? <Chart option={equityOption} height={320} notMerge /> : null}
               </div>
             </Card>
             <Card title="详细指标" padded={false}>

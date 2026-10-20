@@ -1,5 +1,5 @@
 import { useMemo, useState } from "react";
-import ReactECharts from "echarts-for-react";
+import { Chart } from "../../shared/echarts";
 import { Link } from "react-router-dom";
 import { useQuery } from "@tanstack/react-query";
 import { useAccount } from "../../shared/account-context";
@@ -102,9 +102,9 @@ export function DashboardPage() {
             {history.isLoading ? (
               <div className="skeleton" style={{ height: 264, margin: 12 }} />
             ) : equityOptionData.length > 1 ? (
-              <ReactECharts
+              <Chart
                 option={equityOption(equityOptionData, data?.net_contributions)}
-                style={{ height: 272 }}
+                height={272}
                 notMerge
               />
             ) : (
@@ -119,9 +119,9 @@ export function DashboardPage() {
         <Card title="资产配置" subtitle="按市值与现金拆分">
           {data && (data.positions_value > 0 || data.cash > 0) ? (
             <>
-              <ReactECharts
+              <Chart
                 option={allocationOption(data.allocations, data.cash)}
-                style={{ height: 196 }}
+                height={196}
                 notMerge
               />
               <div className="stack" style={{ gap: 6, marginTop: 4 }}>

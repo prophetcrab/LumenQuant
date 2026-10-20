@@ -1,5 +1,5 @@
 import { useMemo } from "react";
-import ReactECharts from "echarts-for-react";
+import { Chart, type EChartsOption } from "../../shared/echarts";
 import { useQuery } from "@tanstack/react-query";
 import { api } from "../../shared/api";
 import { useAccount } from "../../shared/account-context";
@@ -44,7 +44,7 @@ export function PortfolioPage() {
 
   if (!accountId) return <EmptyState title="请先创建账户" />;
 
-  const drawdownOption = {
+  const drawdownOption: EChartsOption = {
     animationDuration: 300,
     grid: { left: 8, right: 14, top: 18, bottom: 4, containLabel: true },
     tooltip: { trigger: "axis", valueFormatter: (value: unknown) => `${Number(value).toFixed(2)}%` },
@@ -102,8 +102,8 @@ export function PortfolioPage() {
           <div style={{ padding: "6px 8px 8px" }}>
             {points.length > 1 ? (
               <>
-                <ReactECharts option={equityOption(points, data?.net_contributions)} style={{ height: 260 }} notMerge />
-                <ReactECharts option={drawdownOption} style={{ height: 150 }} notMerge />
+                <Chart option={equityOption(points, data?.net_contributions)} height={260} notMerge />
+                <Chart option={drawdownOption} height={150} notMerge />
               </>
             ) : (
               <EmptyState title="正在积累快照" text="产生成交后会记录权益点；也可以等待系统定时快照。" />
@@ -113,7 +113,7 @@ export function PortfolioPage() {
 
         <Card title="配置构成" padded={false}>
           <div style={{ padding: 10 }}>
-            {data ? <ReactECharts option={allocationOption(data.allocations, data.cash)} style={{ height: 250 }} notMerge /> : <Loader />}
+            {data ? <Chart option={allocationOption(data.allocations, data.cash)} height={250} notMerge /> : <Loader />}
           </div>
           <div style={{ padding: "0 18px 18px" }}>
             {data?.allocations.map((item) => (
