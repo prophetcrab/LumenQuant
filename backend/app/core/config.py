@@ -59,6 +59,7 @@ class Settings(BaseSettings):
     live_trading_enabled: bool = False
     auth_enabled: bool = False
     auth_token: str = ""
+    rate_limit_per_minute: int = 600
 
     # Optional OpenAI-compatible assistant.
     llm_base_url: str = ""

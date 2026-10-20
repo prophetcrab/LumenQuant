@@ -15,6 +15,7 @@ from app.core.db import Database
 from app.core.errors import AppError
 from app.core.events import EventBus
 from app.core.observability import Metrics, RequestContextMiddleware
+from app.core.security import AuthMiddleware, RateLimitMiddleware
 
 
 def create_app(settings: Settings | None = None, database: Database | None = None) -> FastAPI:
@@ -89,6 +90,12 @@ def create_app(settings: Settings | None = None, database: Database | None = Non
     app.state.portfolio_engine = portfolio_engine
 
     app.add_middleware(RequestContextMiddleware, metrics=app.state.metrics)
+    app.add_middleware(
+        RateLimitMiddleware, limit=settings.rate_limit_per_minute, window_seconds=60.0
+    )
+    app.add_middleware(
+        AuthMiddleware, token=settings.auth_token, enabled=settings.auth_enabled
+    )
     app.add_middleware(
         CORSMiddleware,
         allow_origins=settings.cors_origins,
