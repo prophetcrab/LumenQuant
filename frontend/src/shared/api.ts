@@ -225,6 +225,18 @@ export type RuntimeLog = {
   created_at: string;
 };
 
+export type AssistantTool = {
+  name: string;
+  description: string;
+  parameters: Record<string, string>;
+};
+
+export type AssistantReply = {
+  answer: string;
+  mode: "local" | "llm";
+  tool_calls: { tool: string; arguments: Record<string, unknown>; result: unknown }[];
+};
+
 export type Overview = {
   account_id: string;
   account_name: string;
@@ -414,6 +426,15 @@ export const api = {
     request<Overview>(`/portfolio/overview${qs({ account_id: accountId })}`),
   portfolioHistory: (accountId?: string, limit = 500) =>
     request<EquityPoint[]>(`/portfolio/history${qs({ account_id: accountId, limit })}`),
+
+  assistantStatus: () =>
+    request<{ mode: "local" | "llm"; model: string }>("/assistant/status"),
+  assistantTools: () => request<AssistantTool[]>("/assistant/tools"),
+  assistantChat: (message: string, accountId?: string) =>
+    request<AssistantReply>("/assistant/chat", {
+      method: "POST",
+      body: JSON.stringify({ message, account_id: accountId }),
+    }),
 
   meta: () => request<{ modules: string[]; capabilities: Record<string, boolean> }>("/meta"),
 };
