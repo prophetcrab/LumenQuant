@@ -28,6 +28,9 @@ from app.modules.market.service_types import CandlePoint, Snapshot, SymbolView
 
 BASE_TIMEFRAME = "15m"
 SUPPORTED_TIMEFRAMES = ("15m", "30m", "1h", "4h", "1d")
+# A-shares trade 4 hours a day; a 4h "bar" would be a half-session, which no
+# broker or charting tool calls 4h. Offering it invites misleading comparisons.
+CN_TIMEFRAMES = ("15m", "30m", "1h", "1d")
 MARKETS = ("crypto", "cn_stock")
 
 
@@ -211,6 +214,9 @@ class MarketService:
             or 0
         )
 
+    def supported_timeframes(self, market: str = "crypto") -> tuple[str, ...]:
+        return CN_TIMEFRAMES if market == "cn_stock" else SUPPORTED_TIMEFRAMES
+
     def candles(
         self,
         symbol: str,
@@ -225,6 +231,11 @@ class MarketService:
         row = self._symbol(symbol)
         base_tf = row.base_timeframe or BASE_TIMEFRAME
         symbol = row.code
+        allowed = self.supported_timeframes(row.market)
+        if timeframe not in allowed:
+            raise ValidationError(
+                f"{row.market} 支持 {', '.join(allowed)}，不支持 {timeframe}"
+            )
 
         # Native series (e.g. A-share daily) beat aggregation when long enough.
         if timeframe != base_tf and self._native_count(symbol, timeframe) >= min(limit, 30):
@@ -238,7 +249,12 @@ class MarketService:
             if current is not None and (not points or current.time > points[-1].time):
                 points.append(current)
         if timeframe != base_tf:
-            points = aggregate(points, timeframe)
+            if row.market == "cn_stock":
+                from app.modules.cn.aggregate import aggregate_session_bars
+
+                points = aggregate_session_bars(points, timeframe)
+            else:
+                points = aggregate(points, timeframe)
         return points[-limit:]
 
     def snapshot(self, symbol: str) -> Snapshot:

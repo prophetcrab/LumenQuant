@@ -6,6 +6,29 @@ export function money(value: number | null | undefined, digits = 2): string {
   });
 }
 
+const CURRENCY_SYMBOL: Record<string, string> = {
+  CNY: "¥",
+  USD: "$",
+  USDT: "$",
+};
+
+export function currencySymbol(code: string | null | undefined): string {
+  return CURRENCY_SYMBOL[(code ?? "USDT").toUpperCase()] ?? "";
+}
+
+/** Amount with the account's currency symbol, e.g. "¥1,234.56" or "$1,234.56". */
+export function cash(value: number | null | undefined, currency = "USDT", digits = 2): string {
+  if (value === null || value === undefined || Number.isNaN(value)) return "—";
+  return `${currencySymbol(currency)}${money(value, digits)}`;
+}
+
+/** Signed amount for P&L displays. */
+export function cashSigned(value: number | null | undefined, currency = "USDT", digits = 2): string {
+  if (value === null || value === undefined || Number.isNaN(value)) return "—";
+  const sign = value >= 0 ? "+" : "-";
+  return `${sign}${currencySymbol(currency)}${money(Math.abs(value), digits)}`;
+}
+
 export function compact(value: number | null | undefined): string {
   if (value === null || value === undefined || Number.isNaN(value)) return "—";
   const abs = Math.abs(value);

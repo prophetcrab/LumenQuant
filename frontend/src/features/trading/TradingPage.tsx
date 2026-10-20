@@ -4,7 +4,7 @@ import { api } from "../../shared/api";
 import { useAccount } from "../../shared/account-context";
 import { useBookOverview, useFills, useOrders, usePositions, useSnapshots } from "../../shared/hooks";
 import { useToast } from "../../shared/toast";
-import { money, orderStatusLabel, orderStatusTone, price, qty, signed, timeOnly } from "../../shared/format";
+import { cash, cashSigned, money, orderStatusLabel, orderStatusTone, price, qty, timeOnly } from "../../shared/format";
 import { Badge, Card, EmptyState, Field, Loader, Segmented, Stat } from "../../components/ui";
 import { ButtonField } from "../../components/form";
 import { CnTradingPanel } from "../cn/CnTradingPanel";
@@ -90,18 +90,18 @@ export function TradingPage() {
   return (
     <div className="stack" style={{ gap: 16 }}>
       <div className="grid grid-4">
-        <Stat label="账户权益" value={data ? `$${money(data.equity)}` : "—"} meta={<span className="muted">{account.name}</span>} />
-        <Stat label="可用现金" value={data ? `$${money(data.cash)}` : "—"} meta={<span className="muted">可用于新开仓</span>} />
+        <Stat label="账户权益" value={data ? cash(data.equity, account.base_currency) : "—"} meta={<span className="muted">{account.name}</span>} />
+        <Stat label="可用现金" value={data ? cash(data.cash, account.base_currency) : "—"} meta={<span className="muted">可用于新开仓</span>} />
         <Stat
           label="浮动盈亏"
-          value={data ? `${data.unrealized_pnl >= 0 ? "+" : ""}$${money(data.unrealized_pnl)}` : "—"}
+          value={data ? cashSigned(data.unrealized_pnl, account.base_currency) : "—"}
           accent={(data?.unrealized_pnl ?? 0) >= 0 ? "positive" : "negative"}
           meta={<span className="muted">{data?.position_count ?? 0} 个持仓</span>}
         />
         <Stat
           label="当前敞口"
           value={data ? `${data.exposure_pct.toFixed(1)}%` : "—"}
-          meta={<span className="muted">持仓市值 ${money(data?.positions_value)}</span>}
+          meta={<span className="muted">持仓市值 {cash(data?.positions_value, account.base_currency)}</span>}
         />
       </div>
 
@@ -167,12 +167,12 @@ export function TradingPage() {
             <div className="row" style={{ justifyContent: "space-between", fontSize: 12.5 }}>
               <span className="muted">预估名义金额</span>
               <span className="num" style={{ fontWeight: 600 }}>
-                ${money(estimatedNotional)}
+                {cash(estimatedNotional, account.base_currency)}
               </span>
             </div>
             <div className="row" style={{ justifyContent: "space-between", fontSize: 12.5 }}>
               <span className="muted">预计手续费 (0.10%)</span>
-              <span className="num">${money(estimatedNotional * 0.001)}</span>
+              <span className="num">{cash(estimatedNotional * 0.001, account.base_currency)}</span>
             </div>
 
             <ButtonField
@@ -217,9 +217,9 @@ export function TradingPage() {
                         <td className="numeric">{qty(item.quantity)}</td>
                         <td className="numeric">{price(item.avg_price)}</td>
                         <td className="numeric">{price(item.market_price)}</td>
-                        <td className="numeric">{money(item.market_value)}</td>
-                        <td className={`numeric ${item.unrealized_pnl >= 0 ? "up" : "down"}`}>{signed(item.unrealized_pnl)}</td>
-                        <td className="numeric muted">{signed(item.realized_pnl)}</td>
+                        <td className="numeric">{cash(item.market_value, account.base_currency)}</td>
+                        <td className={`numeric ${item.unrealized_pnl >= 0 ? "up" : "down"}`}>{cashSigned(item.unrealized_pnl, account.base_currency)}</td>
+                        <td className="numeric muted">{cashSigned(item.realized_pnl, account.base_currency)}</td>
                         <td>
                           <button
                             className="button small danger"

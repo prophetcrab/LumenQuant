@@ -180,7 +180,9 @@ def session_state(ts_ms: int | None = None) -> SessionState:
             session=label,
             session_open_ms=bounds[0],
             session_close_ms=bounds[1],
-            next_open_ms=bounds[1],
+            # While open this must be the *next session's* open, not this
+            # session's close — callers schedule the next evaluation with it.
+            next_open_ms=next_open_ms(bounds[1]),
         )
     return SessionState(
         open=False,

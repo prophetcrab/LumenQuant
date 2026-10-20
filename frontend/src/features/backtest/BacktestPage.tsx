@@ -4,7 +4,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { api } from "../../shared/api";
 import type { BacktestRun } from "../../shared/api";
 import { backtestEquityOption } from "../../shared/charts";
-import { money, pct, price, timeLabel } from "../../shared/format";
+import { cash, pct, price, timeLabel } from "../../shared/format";
 import { Badge, Card, EmptyState, Field, Loader, Stat } from "../../components/ui";
 import { ButtonField } from "../../components/form";
 
@@ -77,6 +77,10 @@ export function BacktestPage() {
   });
 
   const metrics = selectedRun?.metrics;
+  // Backtest currency follows the traded symbol's market; A-shares are CNY.
+  const runCurrency = selectedRun?.symbol?.endsWith(".SH") || selectedRun?.symbol?.endsWith(".SZ") || selectedRun?.symbol?.endsWith(".BJ")
+    ? "CNY"
+    : "USDT";
   const equityOption = useMemo(
     () => (selectedRun?.equity ? backtestEquityOption(selectedRun.equity) : null),
     [selectedRun],
@@ -195,7 +199,7 @@ export function BacktestPage() {
             </Card>
             <Card title="详细指标" padded={false}>
               <div style={{ padding: "10px 18px 16px" }}>
-                <MetricRow label="期末权益" value={`$${money(metrics.final_equity)}`} />
+                <MetricRow label="期末权益" value={cash(metrics.final_equity, runCurrency)} />
                 <MetricRow label="年化收益" value={pct(metrics.cagr_pct)} />
                 <MetricRow label="年化波动" value={`${metrics.volatility_pct.toFixed(2)}%`} />
                 <MetricRow label="Calmar" value={metrics.calmar.toFixed(2)} />
@@ -232,7 +236,7 @@ export function BacktestPage() {
                         <td className="numeric">{price(trade.entry_price)}</td>
                         <td className="numeric">{price(trade.exit_price)}</td>
                         <td className="numeric">{trade.quantity}</td>
-                        <td className={`numeric ${trade.pnl >= 0 ? "up" : "down"}`}>{money(trade.pnl)}</td>
+                        <td className={`numeric ${trade.pnl >= 0 ? "up" : "down"}`}>{cash(trade.pnl, runCurrency)}</td>
                         <td className={`numeric ${trade.pnl_pct >= 0 ? "up" : "down"}`}>{pct(trade.pnl_pct * 100)}</td>
                         <td>
                           <Badge tone={trade.reason === "stop_loss" ? "red" : trade.reason === "take_profit" ? "green" : ""}>

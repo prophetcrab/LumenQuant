@@ -201,66 +201,85 @@ class CnMarketEngine:
         price = row.initial_price
         intraday_rows: list[dict] = []
         daily_rows: list[dict] = []
+        tick = row.tick_size or 0.01
         for day in calendar:
-            o, h, low, c = self.feed.daily_range(row.code, day, price, row.board)
+            # The daily generator only sets the session's closing direction; the
+            # daily bar itself is derived from the intraday bars below so the two
+            # timeframes can never disagree (a real defect in the first version).
+            _o, _h, _low, target_close = self.feed.daily_range(
+                row.code, day, price, row.board
+            )
             day_sessions = sessions(day)
             if not day_sessions:
                 continue
-            bar_prices: list[tuple[int, float, float, float, float, float]] = []
+            band = price_band(price, row.board, row.is_st, tick)
             step = self.step_ms
+            bars: list[tuple[int, float, float, float, float, float]] = []
             cursor = day_sessions[0][0]
-            last = o
+            last = price
             while cursor < day_sessions[-1][1]:
                 if not any(start <= cursor < end for start, end in day_sessions):
                     cursor = next(
                         (start for start, _ in day_sessions if start > cursor), cursor + step
                     )
                     continue
-                bar = self.feed.intraday_bar(row.code, cursor, price, row.board, last)
-                bar_prices.append((cursor, *bar))
-                last = bar[3]
-                cursor += step
-            # Rescale intraday closes so the session lands exactly on the daily close.
-            if bar_prices and bar_prices[-1][4]:
-                factor = c / bar_prices[-1][4]
-                bar_prices = [
-                    (
-                        ts,
-                        max(0.01, round_tick(o_ * factor)),
-                        max(0.01, round_tick(h * max(factor, 1.0))),
-                        max(0.01, round_tick(lo * min(factor, 1.0))),
-                        max(0.01, round_tick(cl * factor)),
-                        vol,
-                    )
-                    for ts, o_, h, lo, cl, vol in bar_prices
+                o_, h_, l_, c_, vol = self.feed.intraday_bar(
+                    row.code, cursor, price, row.board, last
+                )
+                bars.append((cursor, o_, h_, l_, c_, vol))
+                last = c_
+                cursor += self.step_ms
+
+            # Bridge the intraday path onto the intended close, then clamp every
+            # bar into the daily limit band so no bar can be impossible.
+            if bars and bars[-1][4] > 0:
+                factor = target_close / bars[-1][4]
+                bars = [
+                    (ts, o_ * factor, h_ * factor, l_ * factor, c_ * factor, v)
+                    for ts, o_, h_, l_, c_, v in bars
                 ]
-            for ts, o_, h, lo, cl, vol in bar_prices:
-                intraday_rows.append(
+            normalised: list[dict] = []
+            for ts, o_, h_, l_, c_, v in bars:
+                o_ = round_tick(max(0.01, o_), tick)
+                c_ = round_tick(max(0.01, c_), tick)
+                h_ = round_tick(max(o_, c_, h_), tick)
+                l_ = round_tick(min(o_, c_, l_), tick)
+                if band is not None:
+                    o_ = min(max(o_, band.down), band.up)
+                    c_ = min(max(c_, band.down), band.up)
+                    h_ = min(max(h_, max(o_, c_)), band.up)
+                    l_ = max(min(l_, min(o_, c_)), band.down)
+                normalised.append(
                     {
                         "symbol": row.code,
                         "timeframe": CN_BASE_TIMEFRAME,
                         "open_time": ts,
                         "open": o_,
-                        "high": max(h, o_, cl),
-                        "low": min(lo, o_, cl),
-                        "close": cl,
-                        "volume": vol,
+                        "high": h_,
+                        "low": l_,
+                        "close": c_,
+                        "volume": round(max(v, 0.0), 2),
                     }
                 )
-            day_open = int(datetime.combine(day, datetime.min.time(), tzinfo=CN_TZ).timestamp() * 1000)
-            daily_rows.append(
-                {
-                    "symbol": row.code,
-                    "timeframe": "1d",
-                    "open_time": day_open,
-                    "open": o,
-                    "high": max(h, o, c),
-                    "low": min(low, o, c),
-                    "close": c,
-                    "volume": sum(p[5] for p in bar_prices),
-                }
-            )
-            price = c
+            intraday_rows.extend(normalised)
+            if normalised:
+                day_open = int(
+                    datetime.combine(day, datetime.min.time(), tzinfo=CN_TZ).timestamp()
+                    * 1000
+                )
+                daily_rows.append(
+                    {
+                        "symbol": row.code,
+                        "timeframe": "1d",
+                        "open_time": day_open,
+                        "open": normalised[0]["open"],
+                        "high": max(bar["high"] for bar in normalised),
+                        "low": min(bar["low"] for bar in normalised),
+                        "close": normalised[-1]["close"],
+                        "volume": round(sum(bar["volume"] for bar in normalised), 2),
+                    }
+                )
+                price = normalised[-1]["close"]
 
         for start in range(0, len(intraday_rows), 4000):
             session.execute(insert(Candle), intraday_rows[start : start + 4000])

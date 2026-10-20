@@ -5,6 +5,7 @@ import type { CnSymbol } from "../../shared/api";
 import { useAccount } from "../../shared/account-context";
 import { useToast } from "../../shared/toast";
 import {
+  cashSigned,
   dateTimeLabel,
   money,
   orderStatusLabel,
@@ -12,7 +13,6 @@ import {
   pct,
   price,
   qty,
-  signed,
   timeLabel,
 } from "../../shared/format";
 import { Badge, Card, EmptyState, Field, Loader, Stat } from "../../components/ui";
@@ -309,7 +309,7 @@ export function CnTradingPanel() {
                         <td className="numeric">{price(item.avg_price)}</td>
                         <td className="numeric">{price(item.market_price)}</td>
                         <td className={`numeric ${item.unrealized_pnl >= 0 ? "up" : "down"}`}>
-                          {signed(item.unrealized_pnl)}
+                          {cashSigned(item.unrealized_pnl, account.base_currency)}
                         </td>
                       </tr>
                     ))}

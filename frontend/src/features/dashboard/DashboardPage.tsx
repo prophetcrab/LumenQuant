@@ -6,7 +6,17 @@ import { useAccount } from "../../shared/account-context";
 import { useBookOverview, useEquityHistory, useOrders, useSnapshots, useSymbols } from "../../shared/hooks";
 import { api } from "../../shared/api";
 import { allocationOption, equityOption } from "../../shared/charts";
-import { compact, dateTimeLabel, money, orderStatusLabel, orderStatusTone, pct, price, signed, timeOnly } from "../../shared/format";
+import {
+  cash,
+  cashSigned,
+  compact,
+  dateTimeLabel,
+  orderStatusLabel,
+  orderStatusTone,
+  pct,
+  price,
+  timeOnly,
+} from "../../shared/format";
 import { Badge, Card, EmptyState, ErrorState, Loader, Stat } from "../../components/ui";
 import { CreateAccountModal } from "../accounts/CreateAccountModal";
 
@@ -62,25 +72,25 @@ export function DashboardPage() {
       <div className="grid grid-4">
         <Stat
           label="账户权益"
-          value={data ? `$${money(data.equity)}` : "—"}
+          value={data ? cash(data.equity, account.base_currency) : "—"}
           delta={data?.total_return_pct}
           meta={<span className="muted">净投入 ${compact(data?.net_contributions)}</span>}
         />
         <Stat
           label="可用现金"
-          value={data ? `$${money(data.cash)}` : "—"}
+          value={data ? cash(data.cash, account.base_currency) : "—"}
           meta={<span className="muted">占权益 {data ? (100 - data.exposure_pct).toFixed(1) : "—"}%</span>}
         />
         <Stat
           label="持仓市值"
-          value={data ? `$${money(data.positions_value)}` : "—"}
+          value={data ? cash(data.positions_value, account.base_currency) : "—"}
           meta={<span className="muted">{data?.position_count ?? 0} 个持仓 · 敞口 {data?.exposure_pct ?? 0}%</span>}
         />
         <Stat
           label="浮动盈亏"
-          value={data ? `${winning ? "+" : ""}$${money(data.unrealized_pnl)}` : "—"}
+          value={data ? cashSigned(data.unrealized_pnl, account.base_currency) : "—"}
           accent={winning ? "positive" : "negative"}
-          meta={<span className="muted">已实现 {signed(data?.realized_pnl ?? 0)}</span>}
+          meta={<span className="muted">已实现 {cashSigned(data?.realized_pnl, account.base_currency)}</span>}
         />
       </div>
 

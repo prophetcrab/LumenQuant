@@ -3,7 +3,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { api } from "../../shared/api";
 import { useAccount } from "../../shared/account-context";
 import { useToast } from "../../shared/toast";
-import { dateTimeLabel, money, signed } from "../../shared/format";
+import { cash, cashSigned, dateTimeLabel } from "../../shared/format";
 import { Badge, Card, EmptyState, Field, Loader, Modal } from "../../components/ui";
 import { ButtonField } from "../../components/form";
 import { CreateAccountModal } from "./CreateAccountModal";
@@ -63,8 +63,8 @@ export function AccountsPage() {
             }
           >
             <div className="grid" style={{ gridTemplateColumns: "repeat(3, 1fr)", gap: 14 }}>
-              <MiniStat label="现金余额" value={`$${money(account.cash_balance)}`} />
-              <MiniStat label="初始资金" value={`$${money(account.initial_balance)}`} />
+              <MiniStat label="现金余额" value={cash(account.cash_balance, account.base_currency)} />
+              <MiniStat label="初始资金" value={cash(account.initial_balance, account.base_currency)} />
               <MiniStat label="杠杆" value={`${account.leverage.toFixed(0)}x`} />
             </div>
             <div className="row" style={{ marginTop: 18, gap: 9 }}>
@@ -108,7 +108,7 @@ export function AccountsPage() {
                     </Badge>
                   </div>
                   <div className="helper" style={{ marginTop: 3 }}>
-                    现金 ${money(item.cash_balance)} · {item.status === "active" ? "运行中" : "已归档"}
+                    现金 {cash(item.cash_balance, item.base_currency)} · {item.status === "active" ? "运行中" : "已归档"}
                   </div>
                 </button>
               ))}
@@ -155,8 +155,8 @@ export function AccountsPage() {
                         {ledgerLabel(entry.kind)}
                       </Badge>
                     </td>
-                    <td className={`numeric ${entry.amount >= 0 ? "up" : "down"}`}>{signed(entry.amount)}</td>
-                    <td className="numeric">{money(entry.balance_after)}</td>
+                    <td className={`numeric ${entry.amount >= 0 ? "up" : "down"}`}>{cashSigned(entry.amount, account?.base_currency)}</td>
+                    <td className="numeric">{cash(entry.balance_after, account?.base_currency)}</td>
                     <td className="secondary" style={{ maxWidth: 320, overflow: "hidden", textOverflow: "ellipsis" }}>
                       {entry.note || "—"}
                     </td>

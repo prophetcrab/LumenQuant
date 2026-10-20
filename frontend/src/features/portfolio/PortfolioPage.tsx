@@ -5,12 +5,13 @@ import { api } from "../../shared/api";
 import { useAccount } from "../../shared/account-context";
 import { useBookOverview, useEquityHistory, usePositions } from "../../shared/hooks";
 import { allocationOption, equityOption } from "../../shared/charts";
-import { dateTimeLabel, money, pct, price, qty, signed } from "../../shared/format";
+import { cash, cashSigned, dateTimeLabel, pct, price, qty } from "../../shared/format";
 import { Card, EmptyState, Loader, Stat } from "../../components/ui";
 import { RiskPanel } from "../risk/RiskPanel";
 
 export function PortfolioPage() {
-  const { accountId } = useAccount();
+  const { account, accountId } = useAccount();
+  const currency = account?.base_currency ?? "USDT";
   const overview = useBookOverview();
   const history = useEquityHistory(600);
   const positions = usePositions();
@@ -83,12 +84,12 @@ export function PortfolioPage() {
   return (
     <div className="stack" style={{ gap: 16 }}>
       <div className="grid grid-4">
-        <Stat label="账户权益" value={data ? `$${money(data.equity)}` : "—"} meta={<span className="muted">{data?.account_name}</span>} />
+        <Stat label="账户权益" value={data ? cash(data.equity, currency) : "—"} meta={<span className="muted">{data?.account_name}</span>} />
         <Stat
           label="累计收益"
           value={data ? pct(data.total_return_pct) : "—"}
           accent={(data?.total_return_pct ?? 0) >= 0 ? "positive" : "negative"}
-          meta={<span className="muted">净投入 ${money(data?.net_contributions)}</span>}
+          meta={<span className="muted">净投入 {cash(data?.net_contributions, currency)}</span>}
         />
         <Stat
           label="最大回撤"
@@ -96,7 +97,7 @@ export function PortfolioPage() {
           accent="negative"
           meta={<span className="muted">基于权益快照</span>}
         />
-        <Stat label="现金占比" value={data ? `${(100 - data.exposure_pct).toFixed(1)}%` : "—"} meta={<span className="muted">持仓 ${money(data?.positions_value)}</span>} />
+        <Stat label="现金占比" value={data ? `${(100 - data.exposure_pct).toFixed(1)}%` : "—"} meta={<span className="muted">持仓 {cash(data?.positions_value, currency)}</span>} />
       </div>
 
       <div className="analysis-grid">
@@ -128,7 +129,7 @@ export function PortfolioPage() {
                 <span>{item.symbol}</span>
                 <span className="row" style={{ gap: 12 }}>
                   <span className="num muted">{item.weight_pct.toFixed(1)}%</span>
-                  <span className={`num ${item.unrealized_pnl >= 0 ? "up" : "down"}`}>{signed(item.unrealized_pnl)}</span>
+                  <span className={`num ${item.unrealized_pnl >= 0 ? "up" : "down"}`}>{cashSigned(item.unrealized_pnl, currency)}</span>
                 </span>
               </div>
             ))}
@@ -189,8 +190,8 @@ export function PortfolioPage() {
                           <td className="numeric">{qty(item.quantity)}</td>
                           <td className="numeric">{price(item.avg_price)}</td>
                           <td className="numeric">{price(item.market_price)}</td>
-                          <td className="numeric">{money(item.market_value)}</td>
-                          <td className={`numeric ${item.unrealized_pnl >= 0 ? "up" : "down"}`}>{signed(item.unrealized_pnl)}</td>
+                          <td className="numeric">{cash(item.market_value, currency)}</td>
+                          <td className={`numeric ${item.unrealized_pnl >= 0 ? "up" : "down"}`}>{cashSigned(item.unrealized_pnl, currency)}</td>
                           <td className={`numeric ${rate >= 0 ? "up" : "down"}`}>{pct(rate)}</td>
                         </tr>
                       );
@@ -220,13 +221,13 @@ export function PortfolioPage() {
                   {analytics.data.attribution.map((item) => (
                     <tr key={item.symbol}>
                       <td style={{ fontWeight: 600 }}>{item.symbol}</td>
-                      <td className="numeric">{money(item.market_value)}</td>
+                      <td className="numeric">{cash(item.market_value, currency)}</td>
                       <td className={`numeric ${item.unrealized_pnl >= 0 ? "up" : "down"}`}>
-                        {signed(item.unrealized_pnl)}
+                        {cashSigned(item.unrealized_pnl, currency)}
                       </td>
-                      <td className="numeric muted">{signed(item.realized_pnl)}</td>
+                      <td className="numeric muted">{cashSigned(item.realized_pnl, currency)}</td>
                       <td className={`numeric ${item.total_pnl >= 0 ? "up" : "down"}`} style={{ fontWeight: 600 }}>
-                        {signed(item.total_pnl)}
+                        {cashSigned(item.total_pnl, currency)}
                       </td>
                     </tr>
                   ))}

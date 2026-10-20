@@ -59,7 +59,11 @@ class MarketEngine:
         with self.db.session() as session:
             self._ensure_symbols(session)
             last_times = []
-            for symbol in session.scalars(select(Symbol).where(Symbol.enabled.is_(True))).all():
+            for symbol in session.scalars(
+                select(Symbol).where(
+                    Symbol.enabled.is_(True), Symbol.market == "crypto"
+                )
+            ).all():
                 count = session.scalar(
                     select(func.count(Candle.id)).where(
                         Candle.symbol == symbol.code, Candle.timeframe == BASE_TIMEFRAME
@@ -161,7 +165,11 @@ class MarketEngine:
         closed: list[dict] = []
         with self._lock:
             with self.db.session() as session:
-                symbols = session.scalars(select(Symbol).where(Symbol.enabled.is_(True))).all()
+                symbols = session.scalars(
+                    select(Symbol).where(
+                        Symbol.enabled.is_(True), Symbol.market == "crypto"
+                    )
+                ).all()
                 for symbol in symbols:
                     bar = self._live.get(symbol.code)
                     if bar is None:
