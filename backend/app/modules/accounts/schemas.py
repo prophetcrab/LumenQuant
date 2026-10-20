@@ -2,10 +2,12 @@ from __future__ import annotations
 
 from typing import Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 
 class AccountCreate(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
     name: str = Field(min_length=1, max_length=64)
     kind: Literal["paper", "live"] = "paper"
     market: Literal["crypto", "cn_stock"] = "crypto"

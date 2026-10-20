@@ -2,10 +2,12 @@ from __future__ import annotations
 
 from typing import Literal
 
-from pydantic import BaseModel, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 
 class SymbolCreate(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
     code: str = Field(min_length=2, max_length=24)
     name: str = Field(default="", max_length=64)
     market: Literal["crypto", "cn_stock"] = "crypto"

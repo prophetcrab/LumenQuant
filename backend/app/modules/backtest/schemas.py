@@ -2,10 +2,12 @@ from __future__ import annotations
 
 from typing import Any
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 
 class BacktestRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
     strategy: str = Field(min_length=2, max_length=48)
     symbol: str = Field(default="BTCUSDT", min_length=2, max_length=24)
     timeframe: str = "1h"

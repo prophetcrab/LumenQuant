@@ -2,10 +2,12 @@ from __future__ import annotations
 
 from typing import Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 
 class OrderCreate(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
     account_id: str
     symbol: str = Field(min_length=2, max_length=24)
     side: Literal["buy", "sell"]
