@@ -188,6 +188,24 @@ export type BacktestMetrics = {
     insufficient_capital?: number;
   };
   warnings?: string[];
+  benchmark?: {
+    benchmark: string;
+    periods: number;
+    strategy_return_pct: number;
+    benchmark_return_pct: number;
+    excess_return_pct: number;
+    alpha_pct: number;
+    beta: number;
+    correlation: number;
+    tracking_error_pct: number;
+    information_ratio: number;
+    up_capture_pct: number;
+    down_capture_pct: number;
+    excess_win_rate_pct: number;
+    strategy_vol_pct: number;
+    benchmark_vol_pct: number;
+    verdict: string;
+  };
 };
 
 export type BacktestTrade = {
@@ -216,6 +234,7 @@ export type BacktestRun = {
   started_at: string;
   duration_ms: number;
   equity?: { time: number; equity: number }[];
+  comparison?: { time: number; strategy: number; benchmark: number }[];
   trades?: BacktestTrade[];
 };
 

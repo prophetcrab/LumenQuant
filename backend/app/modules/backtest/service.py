@@ -12,6 +12,7 @@ from sqlalchemy.orm import Session
 
 from app.core.errors import NotFoundError, ValidationError
 from app.core.timeutil import iso
+from app.modules.backtest.benchmark import compare, equity_option_points
 from app.modules.backtest.engine import BacktestConfig, BacktestEngine
 from app.modules.backtest.models import BacktestRun
 from app.modules.cn.fees import CnFeeSchedule
@@ -102,14 +103,33 @@ class BacktestService:
         buy_hold = (
             (candles[-1].close / candles[0].close - 1.0) * 100 if candles[0].close else 0.0
         )
+        # Risk-adjusted comparison against buy-and-hold on the same series.
+        benchmark = compare(
+            strategy_equity=[point["equity"] for point in result.equity_curve],
+            prices=[bar.close for bar in candles],
+            periods_per_year=float(result.metrics.get("periods_per_year", 252) or 252),
+            benchmark_name="买入持有",
+        )
+        comparison_points = equity_option_points(
+            [point["equity"] for point in result.equity_curve],
+            [bar.close for bar in candles],
+            [bar.time for bar in candles],
+        )
         run = BacktestRun(
             strategy=strategy_key,
             symbol=symbol.upper(),
             timeframe=timeframe,
             params_json=json.dumps(parsed.model_dump()),
             config_json=json.dumps(asdict(cfg)),
-            metrics_json=json.dumps({**result.metrics, "buy_hold_pct": round(buy_hold, 4)}),
+            metrics_json=json.dumps(
+                {
+                    **result.metrics,
+                    "buy_hold_pct": round(buy_hold, 4),
+                    "benchmark": benchmark.as_dict(),
+                }
+            ),
             equity_json=json.dumps(result.equity_curve),
+            comparison_json=json.dumps(comparison_points),
             trades_json=json.dumps([t.as_dict() for t in result.trades]),
             initial_capital=cfg.initial_capital,
             final_equity=result.metrics["final_equity"],
@@ -160,4 +180,6 @@ class BacktestService:
         if include_series:
             payload["equity"] = json.loads(row.equity_json)
             payload["trades"] = json.loads(row.trades_json)
+            # Older runs were stored before the comparison series existed.
+            payload["comparison"] = json.loads(getattr(row, "comparison_json", "[]") or "[]")
         return payload

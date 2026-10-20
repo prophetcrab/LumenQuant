@@ -44,13 +44,16 @@ export function baseTooltip(): EChartsOption["tooltip"] {
 }
 
 export function timeAxis(dates: string[]): Record<string, unknown> {
+  // A `time` axis must NOT receive a `data` array: ECharts would treat those
+  // strings as category boundaries, leaving most of the plotting area empty when
+  // the series spans many points. The series data carries the timestamps.
+  void dates;
   return {
     type: "time",
     axisLine: { lineStyle: { color: AXIS_COLOR } },
     axisTick: { show: false },
     axisLabel: { color: LABEL_COLOR, fontSize: 11, hideOverlap: true },
     splitLine: { show: false },
-    data: dates,
   };
 }
 
@@ -246,7 +249,10 @@ export function candleOption(candles: Candle[], overlays: Record<string, (number
   };
 }
 
-export function backtestEquityOption(points: { time: number; equity: number }[]): EChartsOption {
+export function backtestEquityOption(
+  points: { time: number; equity: number }[],
+  comparison?: { time: number; strategy: number; benchmark: number }[],
+): EChartsOption {
   const dates = points.map((p) => new Date(p.time).toISOString());
   return {
     animationDuration: 400,
@@ -291,6 +297,22 @@ export function backtestEquityOption(points: { time: number; equity: number }[])
         },
         data: points.map((p, i) => [dates[i], p.equity]),
       },
+      ...(comparison && comparison.length > 1
+        ? [
+            {
+              name: "买入持有",
+              type: "line" as const,
+              showSymbol: false,
+              smooth: 0.2,
+              lineStyle: { color: "#94a3b8", width: 1.5, type: "dashed" as const },
+              itemStyle: { color: "#94a3b8" },
+              data: comparison.map((point) => [
+                new Date(point.time).toISOString(),
+                Number(((point.benchmark / 100) * (points[0]?.equity ?? 100)).toFixed(2)),
+              ]),
+            },
+          ]
+        : []),
     ],
   };
 }

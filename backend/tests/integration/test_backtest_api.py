@@ -217,3 +217,37 @@ def test_walk_forward_validation(backtest_client):
         json={"strategy": "sma_cross", "bars": 1200, "space": {}, "windows": 3},
     )
     assert empty.status_code == 422
+
+
+def test_backtest_includes_benchmark_comparison(backtest_client):
+    response = backtest_client.post(
+        "/api/backtests",
+        json={
+            "strategy": "sma_cross",
+            "symbol": "BTCUSDT",
+            "timeframe": "1h",
+            "bars": 600,
+            "params": {"fast": 10, "slow": 30},
+        },
+    )
+    assert response.status_code == 201, response.text
+    body = response.json()
+    bench = body["metrics"]["benchmark"]
+    assert bench["benchmark"] == "买入持有"
+    assert bench["periods"] > 0
+    assert bench["verdict"]
+    for key in (
+        "excess_return_pct",
+        "alpha_pct",
+        "beta",
+        "information_ratio",
+        "up_capture_pct",
+        "down_capture_pct",
+        "excess_win_rate_pct",
+    ):
+        assert key in bench
+    # The comparison series is stored for the overlay chart.
+    comparison = body["comparison"]
+    assert len(comparison) > 1
+    assert comparison[0]["strategy"] == pytest.approx(100.0)
+    assert comparison[0]["benchmark"] == pytest.approx(100.0)

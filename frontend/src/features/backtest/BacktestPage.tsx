@@ -79,7 +79,10 @@ export function BacktestPage() {
     ? "CNY"
     : "USDT";
   const equityOption = useMemo(
-    () => (selectedRun?.equity ? backtestEquityOption(selectedRun.equity) : null),
+    () =>
+      selectedRun?.equity
+        ? backtestEquityOption(selectedRun.equity, selectedRun.comparison)
+        : null,
     [selectedRun],
   );
 
@@ -262,6 +265,49 @@ export function BacktestPage() {
               }
             />
           </div>
+
+          {metrics.benchmark ? (
+            <Card
+              title="基准对比"
+              subtitle={metrics.benchmark.verdict}
+              actions={
+                <Badge
+                  tone={
+                    metrics.benchmark.excess_return_pct >= 0 ? "green" : "red"
+                  }
+                >
+                  超额 {pct(metrics.benchmark.excess_return_pct)}
+                </Badge>
+              }
+            >
+              <div className="grid" style={{ gridTemplateColumns: "repeat(auto-fit, minmax(140px, 1fr))" }}>
+                <MetricInline label="策略收益" value={pct(metrics.benchmark.strategy_return_pct)} />
+                <MetricInline label="买入持有" value={pct(metrics.benchmark.benchmark_return_pct)} />
+                <MetricInline label="Alpha（年化）" value={pct(metrics.benchmark.alpha_pct)} />
+                <MetricInline label="Beta" value={metrics.benchmark.beta.toFixed(2)} />
+                <MetricInline
+                  label="信息比率"
+                  value={metrics.benchmark.information_ratio.toFixed(2)}
+                />
+                <MetricInline
+                  label="跟踪误差"
+                  value={`${metrics.benchmark.tracking_error_pct.toFixed(1)}%`}
+                />
+                <MetricInline
+                  label="上涨捕获"
+                  value={`${metrics.benchmark.up_capture_pct.toFixed(0)}%`}
+                />
+                <MetricInline
+                  label="下跌捕获"
+                  value={`${metrics.benchmark.down_capture_pct.toFixed(0)}%`}
+                />
+              </div>
+              <div className="helper" style={{ marginTop: 10 }}>
+                超额胜率 {metrics.benchmark.excess_win_rate_pct.toFixed(0)}%（逐根比较跑赢基准的比例）·
+                相关系数 {metrics.benchmark.correlation.toFixed(2)}
+              </div>
+            </Card>
+          ) : null}
 
           <div className="analysis-grid">
             <Card
@@ -448,4 +494,15 @@ function reasonLabel(reason: string): string {
     end_of_data: "区间结束",
   };
   return map[reason] ?? reason;
+}
+
+function MetricInline({ label, value }: { label: string; value: string }) {
+  return (
+    <div style={{ padding: "8px 10px", background: "var(--surface-subtle)", borderRadius: 9 }}>
+      <div className="helper">{label}</div>
+      <div className="num" style={{ fontWeight: 600, fontSize: 14, marginTop: 2 }}>
+        {value}
+      </div>
+    </div>
+  );
 }

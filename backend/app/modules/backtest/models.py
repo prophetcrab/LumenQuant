@@ -21,6 +21,8 @@ class BacktestRun(Base):
     config_json: Mapped[str] = mapped_column(Text, default="{}")
     metrics_json: Mapped[str] = mapped_column(Text, default="{}")
     equity_json: Mapped[str] = mapped_column(Text, default="[]")
+    # Rebased strategy-vs-benchmark series for the overlay chart.
+    comparison_json: Mapped[str] = mapped_column(Text, default="[]")
     trades_json: Mapped[str] = mapped_column(Text, default="[]")
     initial_capital: Mapped[float] = mapped_column(Float, default=100_000.0)
     final_equity: Mapped[float] = mapped_column(Float, default=0.0)
