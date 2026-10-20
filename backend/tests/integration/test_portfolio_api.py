@@ -59,3 +59,13 @@ def test_overview_and_history(portfolio_client):
     ).json()
     assert len(history) >= 1
     assert history[-1]["equity"] == pytest.approx(body["equity"])
+
+    analytics = portfolio_client.get(
+        "/api/portfolio/analytics", params={"account_id": account["id"]}
+    )
+    assert analytics.status_code == 200, analytics.text
+    payload = analytics.json()
+    assert payload["account_id"] == account["id"]
+    assert payload["attribution"][0]["symbol"] == "BTCUSDT"
+    assert payload["max_drawdown_pct"] >= 0
+    assert set(payload) >= {"sharpe_per_sample", "profit_factor", "best_sample_pct"}

@@ -262,6 +262,30 @@ export type BrokerStatus = {
   ready: boolean;
 };
 
+export type Analytics = {
+  account_id: string;
+  samples: number;
+  start_equity: number;
+  current_equity: number;
+  total_return_pct: number;
+  max_drawdown_pct: number;
+  max_drawdown_samples: number;
+  volatility_pct: number;
+  sharpe_per_sample: number;
+  sortino_per_sample: number;
+  positive_return_pct: number;
+  profit_factor: number | null;
+  best_sample_pct: number;
+  worst_sample_pct: number;
+  attribution: {
+    symbol: string;
+    market_value: number;
+    unrealized_pnl: number;
+    realized_pnl: number;
+    total_pnl: number;
+  }[];
+};
+
 export type Overview = {
   account_id: string;
   account_name: string;
@@ -449,6 +473,8 @@ export const api = {
 
   portfolioOverview: (accountId?: string) =>
     request<Overview>(`/portfolio/overview${qs({ account_id: accountId })}`),
+  portfolioAnalytics: (accountId?: string, limit = 1000) =>
+    request<Analytics>(`/portfolio/analytics${qs({ account_id: accountId, limit })}`),
   portfolioHistory: (accountId?: string, limit = 500) =>
     request<EquityPoint[]>(`/portfolio/history${qs({ account_id: accountId, limit })}`),
 

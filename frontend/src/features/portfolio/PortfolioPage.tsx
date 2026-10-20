@@ -19,6 +19,12 @@ export function PortfolioPage() {
     queryFn: () => api.fills(accountId as string, 200),
     enabled: Boolean(accountId),
   });
+  const analytics = useQuery({
+    queryKey: ["portfolio-analytics", accountId],
+    queryFn: () => api.portfolioAnalytics(accountId),
+    enabled: Boolean(accountId),
+    refetchInterval: 15_000,
+  });
 
   const points = useMemo(() => (history.data ?? []).map((p) => ({ time: p.time, equity: p.equity })), [history.data]);
   const data = overview.data;
@@ -123,6 +129,29 @@ export function PortfolioPage() {
         </Card>
       </div>
 
+      <div className="grid grid-4">
+        <Stat
+          label="样本收益率"
+          value={analytics.data ? pct(analytics.data.total_return_pct) : "—"}
+          meta={<span className="muted">{analytics.data?.samples ?? 0} 个快照</span>}
+        />
+        <Stat
+          label="每样本 Sharpe"
+          value={analytics.data ? analytics.data.sharpe_per_sample.toFixed(3) : "—"}
+          meta={<span className="muted">Sortino {analytics.data?.sortino_per_sample.toFixed(3) ?? "—"}</span>}
+        />
+        <Stat
+          label="正收益样本"
+          value={analytics.data ? `${analytics.data.positive_return_pct.toFixed(1)}%` : "—"}
+          meta={<span className="muted">盈亏因子 {analytics.data?.profit_factor ?? "—"}</span>}
+        />
+        <Stat
+          label="单样本极值"
+          value={analytics.data ? `${analytics.data.best_sample_pct.toFixed(4)}%` : "—"}
+          meta={<span className="muted">最差 {analytics.data ? analytics.data.worst_sample_pct.toFixed(4) : "—"}%</span>}
+        />
+      </div>
+
       <RiskPanel />
 
       <div className="grid" style={{ gridTemplateColumns: "minmax(0, 1.6fr) minmax(0, 1fr)" }}>
@@ -167,6 +196,43 @@ export function PortfolioPage() {
           )}
         </Card>
 
+        <Card title="盈亏归因" subtitle="按标的汇总" padded={false}>
+          {analytics.data && analytics.data.attribution.length > 0 ? (
+            <div className="table-wrap">
+              <table className="table">
+                <thead>
+                  <tr>
+                    <th>标的</th>
+                    <th className="numeric">市值</th>
+                    <th className="numeric">浮盈</th>
+                    <th className="numeric">已实现</th>
+                    <th className="numeric">合计</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {analytics.data.attribution.map((item) => (
+                    <tr key={item.symbol}>
+                      <td style={{ fontWeight: 600 }}>{item.symbol}</td>
+                      <td className="numeric">{money(item.market_value)}</td>
+                      <td className={`numeric ${item.unrealized_pnl >= 0 ? "up" : "down"}`}>
+                        {signed(item.unrealized_pnl)}
+                      </td>
+                      <td className="numeric muted">{signed(item.realized_pnl)}</td>
+                      <td className={`numeric ${item.total_pnl >= 0 ? "up" : "down"}`} style={{ fontWeight: 600 }}>
+                        {signed(item.total_pnl)}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          ) : (
+            <EmptyState title="暂无归因数据" text="产生持仓后会按标的汇总浮动与已实现盈亏。" />
+          )}
+        </Card>
+      </div>
+
+      <div className="grid" style={{ gridTemplateColumns: "minmax(0, 1fr)" }}>
         <Card title="最近成交" subtitle="用于核对成本" padded={false}>
           {realized.data && realized.data.length > 0 ? (
             <div className="table-wrap" style={{ maxHeight: 320 }}>

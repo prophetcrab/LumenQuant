@@ -44,6 +44,16 @@ def overview(
     return asdict(build_service(request, session).overview(account_id, record=record))
 
 
+@router.get("/analytics")
+def analytics(
+    request: Request,
+    account_id: str | None = None,
+    limit: int = Query(default=1000, ge=2, le=5000),
+    session: Session = Depends(get_session),
+):
+    return build_service(request, session).analytics(account_id, limit=limit)
+
+
 @router.get("/history")
 def history(
     request: Request,

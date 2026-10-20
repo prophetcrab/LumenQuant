@@ -137,6 +137,87 @@ class PortfolioService:
         )
         self.session.commit()
 
+    def analytics(self, account_id: str | None = None, *, limit: int = 1000) -> dict:
+        """Return-based analytics derived from equity snapshots + open positions."""
+        resolved = self._resolve(account_id)
+        rows = self.session.scalars(
+            select(EquitySnapshot)
+            .where(EquitySnapshot.account_id == resolved)
+            .order_by(EquitySnapshot.created_at.asc())
+            .limit(max(2, min(limit, 5000)))
+        ).all()
+        equities = [row.equity for row in rows]
+        returns: list[float] = []
+        for i in range(1, len(equities)):
+            if equities[i - 1] > 0:
+                returns.append(equities[i] / equities[i - 1] - 1.0)
+
+        peak = equities[0] if equities else 0.0
+        max_drawdown = 0.0
+        current_streak = 0
+        max_streak = 0
+        for value in equities:
+            if value >= peak:
+                peak = value
+                current_streak = 0
+            else:
+                current_streak += 1
+                max_streak = max(max_streak, current_streak)
+                max_drawdown = max(max_drawdown, safe_div(peak - value, peak))
+
+        mean = sum(returns) / len(returns) if returns else 0.0
+        variance = (
+            sum((r - mean) ** 2 for r in returns) / (len(returns) - 1)
+            if len(returns) > 1
+            else 0.0
+        )
+        volatility = variance**0.5
+        downside = [r for r in returns if r < 0]
+        downside_std = (
+            (sum((r - sum(downside) / len(downside)) ** 2 for r in downside) / (len(downside) - 1)) ** 0.5
+            if len(downside) > 1
+            else 0.0
+        )
+        # Snapshots are throttled to >=10s; annualising assumes the observed cadence
+        # instead of pretending they are daily bars.
+        positive = sum(r for r in returns if r > 0)
+        negative = abs(sum(r for r in returns if r < 0))
+
+        positions = self.trading.positions(resolved)
+        attribution = [
+            {
+                "symbol": p.symbol,
+                "market_value": p.market_value,
+                "unrealized_pnl": p.unrealized_pnl,
+                "realized_pnl": p.realized_pnl,
+                "total_pnl": round_money(p.unrealized_pnl + p.realized_pnl),
+            }
+            for p in sorted(
+                positions, key=lambda p: p.unrealized_pnl + p.realized_pnl, reverse=True
+            )
+        ]
+        return {
+            "account_id": resolved,
+            "samples": len(equities),
+            "start_equity": equities[0] if equities else 0.0,
+            "current_equity": equities[-1] if equities else 0.0,
+            "total_return_pct": round(safe_div(equities[-1] - equities[0], equities[0]) * 100, 4)
+            if equities
+            else 0.0,
+            "max_drawdown_pct": round(max_drawdown * 100, 4),
+            "max_drawdown_samples": max_streak,
+            "volatility_pct": round(volatility * 100, 6),
+            "sharpe_per_sample": round(safe_div(mean, volatility), 4) if volatility else 0.0,
+            "sortino_per_sample": round(safe_div(mean, downside_std), 4) if downside_std else 0.0,
+            "positive_return_pct": round(
+                safe_div(len([r for r in returns if r > 0]), len(returns)) * 100, 2
+            ),
+            "profit_factor": round(safe_div(positive, negative), 4) if negative else None,
+            "best_sample_pct": round(max(returns) * 100, 6) if returns else 0.0,
+            "worst_sample_pct": round(min(returns) * 100, 6) if returns else 0.0,
+            "attribution": attribution,
+        }
+
     def history(self, account_id: str | None = None, *, limit: int = 500) -> list[dict]:
         account_id = self._resolve(account_id)
         rows = self.session.scalars(
