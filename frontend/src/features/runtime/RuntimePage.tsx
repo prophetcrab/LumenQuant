@@ -7,6 +7,7 @@ import { useToast } from "../../shared/toast";
 import { dateTimeLabel, timeLabel, timeframeLabel } from "../../shared/format";
 import { Badge, Card, EmptyState, Field, Loader, Modal, Stat } from "../../components/ui";
 import { ButtonField } from "../../components/form";
+import { buildParams, initialParams, type ParamValue } from "../../shared/strategy-params";
 
 const TIMEFRAMES = ["15m", "30m", "1h", "4h", "1d"] as const;
 
@@ -21,7 +22,7 @@ export function RuntimePage() {
   const [timeframe, setTimeframe] = useState<(typeof TIMEFRAMES)[number]>("1h");
   const [positionPct, setPositionPct] = useState("20");
   const [maxNotional, setMaxNotional] = useState("20000");
-  const [params, setParams] = useState<Record<string, string>>({});
+  const [params, setParams] = useState<Record<string, ParamValue>>({});
 
   const catalog = useQuery({ queryKey: ["strategies"], queryFn: api.strategies });
   const symbols = useQuery({ queryKey: ["symbols", "all"], queryFn: () => api.symbols() });
@@ -47,12 +48,7 @@ export function RuntimePage() {
   const meta: StrategyMeta | undefined = catalog.data?.find((item) => item.key === strategyKey);
 
   useEffect(() => {
-    if (!meta) return;
-    const initial: Record<string, string> = {};
-    Object.entries(meta.params_schema.properties ?? {}).forEach(([key, schema]) => {
-      initial[key] = String(schema.default ?? "");
-    });
-    setParams(initial);
+    setParams(initialParams(meta));
   }, [meta]);
 
   useEffect(() => {
@@ -63,10 +59,7 @@ export function RuntimePage() {
 
   const create = useMutation({
     mutationFn: () => {
-      const parsed: Record<string, number> = {};
-      Object.entries(params).forEach(([key, value]) => {
-        parsed[key] = Number(value);
-      });
+      const parsed = buildParams(meta, params);
       return api.createRuntimeInstance({
         account_id: accountId as string,
         strategy_key: strategyKey,
@@ -361,12 +354,25 @@ export function RuntimePage() {
           </Field>
           {Object.entries(meta?.params_schema.properties ?? {}).map(([key, schema]) => (
             <Field key={key} label={schema.title ?? key}>
-              <input
-                className="input num"
-                type="number"
-                value={params[key] ?? ""}
-                onChange={(event) => setParams((prev) => ({ ...prev, [key]: event.target.value }))}
-              />
+              {schema.type === "boolean" ? (
+                <label className="row" style={{ gap: 8, height: 36 }}>
+                  <input
+                    type="checkbox"
+                    checked={Boolean(params[key])}
+                    onChange={(event) =>
+                      setParams((prev) => ({ ...prev, [key]: event.target.checked }))
+                    }
+                  />
+                  <span className="helper">启用</span>
+                </label>
+              ) : (
+                <input
+                  className="input num"
+                  type="number"
+                  value={String(params[key] ?? "")}
+                  onChange={(event) => setParams((prev) => ({ ...prev, [key]: event.target.value }))}
+                />
+              )}
             </Field>
           ))}
         </div>

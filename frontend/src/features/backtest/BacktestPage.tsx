@@ -7,6 +7,7 @@ import { backtestEquityOption } from "../../shared/charts";
 import { cash, pct, price, timeLabel } from "../../shared/format";
 import { Badge, Card, EmptyState, Field, Loader, Stat } from "../../components/ui";
 import { ButtonField } from "../../components/form";
+import { buildParams, initialParams, type ParamValue } from "../../shared/strategy-params";
 
 const TIMEFRAMES = ["15m", "30m", "1h", "4h", "1d"] as const;
 
@@ -23,26 +24,18 @@ export function BacktestPage() {
   const [positionPct, setPositionPct] = useState("95");
   const [stopLoss, setStopLoss] = useState("0");
   const [takeProfit, setTakeProfit] = useState("0");
-  const [params, setParams] = useState<Record<string, string>>({});
+  const [params, setParams] = useState<Record<string, ParamValue>>({});
   const [selectedRun, setSelectedRun] = useState<BacktestRun | null>(null);
 
   const meta = catalog.data?.find((item) => item.key === strategy) ?? null;
 
   useEffect(() => {
-    if (!meta) return;
-    const initial: Record<string, string> = {};
-    Object.entries(meta.params_schema.properties ?? {}).forEach(([key, schema]) => {
-      initial[key] = String(schema.default ?? "");
-    });
-    setParams(initial);
+    setParams(initialParams(meta));
   }, [meta]);
 
   const run = useMutation({
     mutationFn: () => {
-      const parsedParams: Record<string, number> = {};
-      Object.entries(params).forEach(([key, value]) => {
-        parsedParams[key] = Number(value);
-      });
+      const parsedParams = buildParams(meta, params);
       return api.runBacktest({
         strategy,
         symbol,
@@ -138,12 +131,25 @@ export function BacktestPage() {
           </Field>
           {Object.entries(meta?.params_schema.properties ?? {}).map(([key, schema]) => (
             <Field key={key} label={schema.title ?? key}>
-              <input
-                className="input num"
-                type="number"
-                value={params[key] ?? ""}
-                onChange={(event) => setParams((prev) => ({ ...prev, [key]: event.target.value }))}
-              />
+              {schema.type === "boolean" ? (
+                <label className="row" style={{ gap: 8, height: 36 }}>
+                  <input
+                    type="checkbox"
+                    checked={Boolean(params[key])}
+                    onChange={(event) =>
+                      setParams((prev) => ({ ...prev, [key]: event.target.checked }))
+                    }
+                  />
+                  <span className="helper">启用</span>
+                </label>
+              ) : (
+                <input
+                  className="input num"
+                  type="number"
+                  value={String(params[key] ?? "")}
+                  onChange={(event) => setParams((prev) => ({ ...prev, [key]: event.target.value }))}
+                />
+              )}
             </Field>
           ))}
         </div>

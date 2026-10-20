@@ -68,7 +68,7 @@
 
 ```powershell
 cd D:\LumenQuant\backend
-..\.venv\Scripts\python.exe -m pytest -q        # 240 passed
+..\.venv\Scripts\python.exe -m pytest -q        # 247 passed
 cd ..\frontend
 npx tsc --noEmit; npx vite build                # 0 errors
 ```
@@ -145,3 +145,17 @@ npx tsc --noEmit; npx vite build                # 0 errors
 
 **新增交付文档**：`docs/delivery/cn-data-source.md`（模式、配置、接口、
 数据语义、已知限制）。
+
+### 真实数据持续迭代（C19–C23）
+
+| 轮次 | 内容 | 证据 |
+|---|---|---|
+| C19 | 真实行情下的交易闭环（T+1、非对称费用、权益守恒） | 实测记录 |
+| C20 | 真实数据暴露 ema_trend 胜率 4%，加牛熊过滤后 -28%→-6.8% | `test_ema_trend_regime_filter_avoids_bear_market_entries` |
+| C21 | 过滤非交易日 K 线、滞后期非负 | `test_sync_drops_non_trading_day_bars` |
+| C22 | 量化后仅对 sma_cross/donchian 提供可选过滤；暖机不足提示原因 | `test_regime_filter_defaults_differ_by_strategy` |
+| C23 | 布尔参数前端渲染修复（原被 `Number()` 抹平） | `test_boolean_strategy_param_is_accepted` |
+
+**真实数据策略矩阵（800 根日线）**：招商银行（上涨市）基准 +28.2%，
+ema_trend +20.2%；茅台（下跌市）基准 -6.3%，多数趋势策略亏损、
+均值回归类为正。结论与市场结构一致。

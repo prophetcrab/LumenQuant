@@ -7,13 +7,14 @@ import { candleOption, palette } from "../../shared/charts";
 import { categoryLabel, price, timeLabel } from "../../shared/format";
 import { Badge, Card, EmptyState, Field, Loader } from "../../components/ui";
 import { ButtonField } from "../../components/form";
+import { buildParams, initialParams, type ParamValue } from "../../shared/strategy-params";
 
 const TIMEFRAMES = ["15m", "30m", "1h", "4h", "1d"] as const;
 
 export function StrategiesPage() {
   const catalog = useQuery({ queryKey: ["strategies"], queryFn: api.strategies });
   const [selected, setSelected] = useState<string | null>(null);
-  const [params, setParams] = useState<Record<string, string>>({});
+  const [params, setParams] = useState<Record<string, ParamValue>>({});
   const [symbol, setSymbol] = useState("BTCUSDT");
   const [timeframe, setTimeframe] = useState<(typeof TIMEFRAMES)[number]>("1h");
   const symbols = useQuery({ queryKey: ["symbols", "all"], queryFn: () => api.symbols() });
@@ -24,22 +25,18 @@ export function StrategiesPage() {
   );
 
   useEffect(() => {
-    if (!meta) return;
-    const initial: Record<string, string> = {};
-    Object.entries(meta.params_schema.properties ?? {}).forEach(([key, schema]) => {
-      initial[key] = String(schema.default ?? meta.defaults[key] ?? "");
-    });
-    setParams(initial);
+    setParams(initialParams(meta));
   }, [meta]);
 
   const preview = useMutation({
     mutationFn: () => {
       if (!meta) throw new Error("未选择策略");
-      const parsed: Record<string, number> = {};
-      Object.entries(params).forEach(([key, value]) => {
-        parsed[key] = Number(value);
+      return api.strategySignals(meta.key, {
+        symbol,
+        timeframe,
+        limit: 800,
+        params: buildParams(meta, params),
       });
-      return api.strategySignals(meta.key, { symbol, timeframe, limit: 800, params: parsed });
     },
   });
 
@@ -110,13 +107,34 @@ export function StrategiesPage() {
                   </select>
                 </Field>
                 {Object.entries(meta.params_schema.properties ?? {}).map(([key, schema]) => (
-                  <Field key={key} label={schema.title ?? key} hint={`${schema.minimum ?? ""}${schema.maximum ? ` – ${schema.maximum}` : ""}`}>
-                    <input
-                      className="input num"
-                      type="number"
-                      value={params[key] ?? ""}
-                      onChange={(event) => setParams((prev) => ({ ...prev, [key]: event.target.value }))}
-                    />
+                  <Field
+                    key={key}
+                    label={schema.title ?? key}
+                    hint={
+                      schema.type === "boolean"
+                        ? schema.description
+                        : `${schema.minimum ?? ""}${schema.maximum ? ` – ${schema.maximum}` : ""}`
+                    }
+                  >
+                    {schema.type === "boolean" ? (
+                      <label className="row" style={{ gap: 8, height: 36 }}>
+                        <input
+                          type="checkbox"
+                          checked={Boolean(params[key])}
+                          onChange={(event) =>
+                            setParams((prev) => ({ ...prev, [key]: event.target.checked }))
+                          }
+                        />
+                        <span className="helper">启用</span>
+                      </label>
+                    ) : (
+                      <input
+                        className="input num"
+                        type="number"
+                        value={String(params[key] ?? "")}
+                        onChange={(event) => setParams((prev) => ({ ...prev, [key]: event.target.value }))}
+                      />
+                    )}
                   </Field>
                 ))}
               </div>

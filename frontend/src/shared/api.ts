@@ -146,7 +146,7 @@ export type StrategyMeta = {
     >;
     required?: string[];
   };
-  defaults: Record<string, number | string>;
+  defaults: Record<string, number | string | boolean>;
 };
 
 export type SignalPreview = {

@@ -70,3 +70,44 @@ def test_signal_errors(strategy_client):
         json={"limit": 20, "params": {"entry": 55, "exit": 20}},
     )
     assert too_short.status_code == 422
+
+
+def test_boolean_strategy_param_is_accepted(strategy_client):
+    """Boolean params must survive the HTTP round trip.
+
+    The UI rendered them as numbers before (`Number(false) === 0`), which made the
+    regime filter impossible to toggle from the browser.
+    """
+    enabled = strategy_client.post(
+        "/api/strategies/sma_cross/signals",
+        json={
+            "symbol": "BTCUSDT",
+            "timeframe": "1h",
+            "limit": 400,
+            "params": {"fast": 10, "slow": 30, "require_regime": True, "regime_period": 100},
+        },
+    )
+    assert enabled.status_code == 200, enabled.text
+    assert enabled.json()["params"]["require_regime"] is True
+
+    disabled = strategy_client.post(
+        "/api/strategies/sma_cross/signals",
+        json={
+            "symbol": "BTCUSDT",
+            "timeframe": "1h",
+            "limit": 400,
+            "params": {"fast": 10, "slow": 30, "require_regime": False, "regime_period": 100},
+        },
+    )
+    assert disabled.status_code == 200
+    assert disabled.json()["params"]["require_regime"] is False
+    # The filter can only remove entries, never add them.
+    assert len(enabled.json()["signals"]) <= len(disabled.json()["signals"])
+
+
+def test_catalog_exposes_boolean_param_type(strategy_client):
+    catalog = strategy_client.get("/api/strategies").json()
+    sma = next(item for item in catalog if item["key"] == "sma_cross")
+    prop = sma["params_schema"]["properties"]["require_regime"]
+    assert prop["type"] == "boolean"
+    assert sma["defaults"]["require_regime"] is False
