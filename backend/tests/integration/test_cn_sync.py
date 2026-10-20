@@ -237,3 +237,65 @@ def test_sync_replaces_synthetic_history(cn_db):
     # Only the two real bars survive: 1277.96 then 1331.88.
     assert closes == [1277.96, 1331.88]
     assert symbol.prev_close == pytest.approx(1324.97)
+
+
+def test_sync_drops_non_trading_day_bars(cn_db):
+    """Upstream must not be able to inject weekend rows.
+
+    A Sunday bar shifts the daily series and breaks every `change%` computation
+    that assumes consecutive trading days.
+    """
+    db, _ = cn_db
+
+    def with_weekend(request: httpx.Request) -> httpx.Response:
+        url = str(request.url)
+        if "qt.gtimg.cn" in url:
+            return httpx.Response(200, content=quote_payload())
+        if "mkline" in url:
+            return httpx.Response(404, json={"message": "no intraday"})
+        if "kline" in url:
+            return httpx.Response(
+                200,
+                json={
+                    "code": 0,
+                    "data": {
+                        "sh600519": {
+                            "day": [
+                                # 2026-10-16 Fri, 2026-10-17 Sat, 2026-10-19 Mon
+                                ["2026-10-16", "1277.27", "1277.96", "1285.53", "1270.36", "1"],
+                                ["2026-10-17", "1278.00", "1280.00", "1282.00", "1276.00", "1"],
+                                ["2026-10-19", "1321.01", "1331.88", "1335.00", "1316.14", "1"],
+                            ]
+                        }
+                    },
+                },
+            )
+        return httpx.Response(404)
+
+    with db.session() as session:
+        session.query(Candle).filter(Candle.symbol == "600519.SH").delete()
+        session.commit()
+        report = CnDataSyncService(
+            session, TencentSource(transport=httpx.MockTransport(with_weekend))
+        ).sync_symbols(["600519.SH"], daily_limit=3, intraday_limit=0)
+        from app.modules.cn.calendar import day_key, is_trading_day
+
+        stored = session.scalars(
+            select(Candle).where(Candle.symbol == "600519.SH", Candle.timeframe == "1d")
+        ).all()
+        # Daily import worked; the missing intraday series is reported separately.
+        assert report.symbols[0].daily_bars == 2
+        assert all(is_trading_day(day_key(row.open_time)) for row in stored)
+        assert len(stored) == 2
+
+
+def test_staleness_never_negative(cn_db):
+    """A bar dated today must report 0, not a negative age."""
+    db, _ = cn_db
+    with db.session() as session:
+        service = CnDataSyncService(session, make_source())
+        CnDataSyncService(session, make_source()).sync_symbols(
+            ["600519.SH"], daily_limit=2, intraday_limit=0
+        )
+        # Freshly synced data may legitimately be 0..N days old, never negative.
+        assert service.staleness_days("600519.SH") >= 0

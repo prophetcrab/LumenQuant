@@ -22,7 +22,7 @@ from sqlalchemy import delete, select
 from sqlalchemy.orm import Session
 
 from app.core.audit import record_audit
-from app.modules.cn.calendar import day_key
+from app.modules.cn.calendar import day_key, is_trading_day
 from app.modules.cn.rules import limit_pct
 from app.modules.cn.sources.base import MarketDataSource, SourceUnavailable
 from app.modules.market.models import Candle, Symbol
@@ -188,6 +188,13 @@ class CnDataSyncService:
     def _upsert(self, code: str, timeframe: str, bars: list) -> int:
         if not bars:
             return 0
+        # Upstream occasionally reports non-trading days (e.g. a Sunday row).
+        # Keeping them would create gaps in the calendar and distort daily
+        # change calculations, so they are dropped for daily bars.
+        if timeframe == "1d":
+            bars = [bar for bar in bars if is_trading_day(day_key(bar.time))]
+            if not bars:
+                return 0
         times = [bar.time for bar in bars]
         existing = {
             ts
@@ -247,9 +254,15 @@ class CnDataSyncService:
         return int(value or 0)
 
     def staleness_days(self, code: str) -> int:
-        """Calendar days between the newest daily bar and today (CN time)."""
+        """Calendar days between the newest daily bar and today (CN time).
+
+        Clamped at 0: a bar stamped today (or a source that reports an
+        ahead-of-北京time row) must not produce a negative age, which would read
+        as "this data is from the future" and break any `> N` staleness check.
+        """
         latest = self.latest_local_bar(code, "1d")
         if not latest:
             return 9999
         today = day_key(int(datetime.now().timestamp() * 1000))
-        return (today - day_key(latest)).days
+        age = (today - day_key(latest)).days
+        return max(0, age)
