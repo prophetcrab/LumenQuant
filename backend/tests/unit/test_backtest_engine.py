@@ -130,6 +130,19 @@ def test_metrics_math():
     assert metrics["exposure_pct"] == pytest.approx(50.0)
 
 
+def test_avg_hold_converts_timestamps_to_bars():
+    hour = 3_600_000
+    trades = [
+        TradeRecord(0, 3 * hour, 100, 101, 1, 1, 0.01, 0, "signal"),
+        TradeRecord(3 * hour, 4 * hour, 101, 102, 1, 1, 0.01, 0, "signal"),
+    ]
+    metrics = compute_metrics(
+        initial=100.0, equity=[100.0, 101.0, 102.0, 103.0, 104.0],
+        trades=trades, timeframe="1h", bars_in_market=4,
+    )
+    assert metrics["avg_hold_bars"] == pytest.approx(2.0)
+
+
 def test_warmup_insufficient_data():
     candles = flat_candles([100.0] * 10)
     with pytest.raises(ValueError):

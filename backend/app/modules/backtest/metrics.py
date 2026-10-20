@@ -7,6 +7,7 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 
 from app.core.money import safe_div
+from app.modules.market.feed import timeframe_ms
 
 
 @dataclass(frozen=True)
@@ -128,7 +129,14 @@ def compute_metrics(
         ),
         "best_trade_pct": round(max((t.pnl_pct for t in trades), default=0.0) * 100, 4),
         "worst_trade_pct": round(min((t.pnl_pct for t in trades), default=0.0) * 100, 4),
-        "avg_hold_bars": round(safe_div(sum((t.exit_time - t.entry_time) for t in trades), len(trades)), 2),
+        # Timestamps are epoch milliseconds; convert to bar counts.
+        "avg_hold_bars": round(
+            safe_div(
+                sum((t.exit_time - t.entry_time) for t in trades),
+                len(trades) * timeframe_ms(timeframe),
+            ),
+            2,
+        ),
         "exposure_pct": round(safe_div(bars_in_market, len(equity)) * 100, 4),
         "bars": len(equity),
     }

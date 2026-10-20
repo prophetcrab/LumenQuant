@@ -65,6 +65,17 @@ class AccountService:
         self.require(account_id)
         return self._cash(account_id)
 
+    def net_contributions(self, account_id: str) -> float:
+        """Capital actually put in by the owner (initial + deposits - withdrawals)."""
+        self.require(account_id)
+        total = self.session.scalar(
+            select(func.coalesce(func.sum(LedgerEntry.amount), 0.0)).where(
+                LedgerEntry.account_id == account_id,
+                LedgerEntry.kind.in_(("initial", "deposit", "withdraw")),
+            )
+        )
+        return round_money(float(total or 0.0))
+
     def _cash(self, account_id: str) -> float:
         total = self.session.scalar(
             select(func.coalesce(func.sum(LedgerEntry.amount), 0.0)).where(
