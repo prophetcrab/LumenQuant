@@ -68,7 +68,7 @@
 
 ```powershell
 cd D:\LumenQuant\backend
-..\.venv\Scripts\python.exe -m pytest -q        # 119 passed
+..\.venv\Scripts\python.exe -m pytest -q        # 164 passed
 cd ..\frontend
 npx tsc --noEmit; npx vite build                # 0 errors
 ```
