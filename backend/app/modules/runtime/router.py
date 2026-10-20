@@ -1,0 +1,112 @@
+from __future__ import annotations
+
+from dataclasses import asdict
+
+from fastapi import APIRouter, Depends, Query, Request
+from sqlalchemy.orm import Session
+
+from app.api.deps import get_session
+from app.modules.accounts.service import AccountService
+from app.modules.market.service import MarketService
+from app.modules.runtime.schemas import InstanceCreate, InstanceUpdate, RunningToggle
+from app.modules.runtime.service import RuntimeService
+from app.modules.trading.adapters import AccountCashAdapter, MarketPriceAdapter
+from app.modules.trading.service import TradingService
+
+
+router = APIRouter(prefix="/runtime", tags=["runtime"])
+
+
+def build_service(request: Request, session: Session) -> RuntimeService:
+    settings = request.app.state.settings
+    engine = getattr(request.app.state, "market_engine", None)
+    accounts = AccountService(session, live_trading_enabled=settings.live_trading_enabled)
+    market = MarketService(
+        session, clock=getattr(engine, "clock", None), live=engine if engine else None
+    )
+    trading = TradingService(
+        session,
+        cash=AccountCashAdapter(accounts),
+        prices=MarketPriceAdapter(market),
+        bus=request.app.state.bus,
+        fee_bps=settings.fee_bps,
+        slippage_bps=settings.slippage_bps,
+    )
+    return RuntimeService(
+        session, accounts_service=accounts, market=market, trading=trading
+    )
+
+
+@router.get("/instances")
+def list_instances(
+    request: Request,
+    account_id: str | None = None,
+    session: Session = Depends(get_session),
+):
+    return build_service(request, session).list(account_id=account_id)
+
+
+@router.post("/instances", status_code=201)
+def create_instance(
+    payload: InstanceCreate, request: Request, session: Session = Depends(get_session)
+):
+    return build_service(request, session).create(
+        account_id=payload.account_id,
+        strategy_key=payload.strategy_key,
+        symbol=payload.symbol,
+        timeframe=payload.timeframe,
+        params=payload.params,
+        position_pct=payload.position_pct,
+        max_order_notional=payload.max_order_notional,
+        start=payload.start,
+    )
+
+
+@router.patch("/instances/{instance_id}")
+def update_instance(
+    instance_id: str,
+    payload: InstanceUpdate,
+    request: Request,
+    session: Session = Depends(get_session),
+):
+    return build_service(request, session).update(
+        instance_id,
+        params=payload.params,
+        position_pct=payload.position_pct,
+        max_order_notional=payload.max_order_notional,
+    )
+
+
+@router.post("/instances/{instance_id}/toggle")
+def toggle_instance(
+    instance_id: str,
+    payload: RunningToggle,
+    request: Request,
+    session: Session = Depends(get_session),
+):
+    return build_service(request, session).set_running(instance_id, payload.running)
+
+
+@router.delete("/instances/{instance_id}", status_code=204)
+def delete_instance(instance_id: str, request: Request, session: Session = Depends(get_session)):
+    build_service(request, session).delete(instance_id)
+
+
+@router.get("/instances/{instance_id}/logs")
+def instance_logs(
+    instance_id: str,
+    request: Request,
+    limit: int = Query(default=100, ge=1, le=200),
+    session: Session = Depends(get_session),
+):
+    return build_service(request, session).logs(instance_id, limit=limit)
+
+
+@router.post("/tick")
+def tick(request: Request, session: Session = Depends(get_session)):
+    """Manual evaluation pass, used by the UI refresh and by tests."""
+    service = build_service(request, session)
+    results = {}
+    for row in service.running_instances():
+        results[row.id] = service.evaluate_instance(row)
+    return {"evaluated": results}

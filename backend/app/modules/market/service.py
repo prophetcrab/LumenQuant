@@ -128,7 +128,12 @@ class MarketService:
         ]
 
     def candles(
-        self, symbol: str, *, timeframe: str = BASE_TIMEFRAME, limit: int = 300
+        self,
+        symbol: str,
+        *,
+        timeframe: str = BASE_TIMEFRAME,
+        limit: int = 300,
+        closed_only: bool = False,
     ) -> list[CandlePoint]:
         if timeframe not in SUPPORTED_TIMEFRAMES:
             raise ValidationError(f"timeframe must be one of {', '.join(SUPPORTED_TIMEFRAMES)}")
@@ -136,11 +141,7 @@ class MarketService:
         ratio = timeframe_ms(timeframe) // timeframe_ms(BASE_TIMEFRAME)
         needed = min(limit * ratio + ratio, 20_000)
         points = self.base_candles(symbol, limit=needed)
-        if self.live is not None and timeframe == BASE_TIMEFRAME:
-            current = self.live.live_candle(symbol.upper())
-            if current is not None and (not points or current.time > points[-1].time):
-                points.append(current)
-        elif self.live is not None:
+        if self.live is not None and not closed_only:
             current = self.live.live_candle(symbol.upper())
             if current is not None and (not points or current.time > points[-1].time):
                 points.append(current)

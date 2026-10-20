@@ -7,6 +7,7 @@ import { StrategiesPage } from "./features/strategies/StrategiesPage";
 import { BacktestPage } from "./features/backtest/BacktestPage";
 import { AccountsPage } from "./features/accounts/AccountsPage";
 import { PortfolioPage } from "./features/portfolio/PortfolioPage";
+import { RuntimePage } from "./features/runtime/RuntimePage";
 import { AssistantPage } from "./features/assistant/AssistantPage";
 
 export default function App() {
@@ -16,6 +17,7 @@ export default function App() {
         <Route path="/" element={<DashboardPage />} />
         <Route path="/markets" element={<MarketsPage />} />
         <Route path="/trading" element={<TradingPage />} />
+        <Route path="/runtime" element={<RuntimePage />} />
         <Route path="/strategies" element={<StrategiesPage />} />
         <Route path="/backtest" element={<BacktestPage />} />
         <Route path="/accounts" element={<AccountsPage />} />

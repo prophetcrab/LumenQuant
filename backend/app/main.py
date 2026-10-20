@@ -25,14 +25,19 @@ def create_app(settings: Settings | None = None, database: Database | None = Non
     bus = EventBus()
     market_engine = None
     trading_engine = None
+    runtime_engine = None
     if settings.seed_market:
         from app.modules.market.engine import MarketEngine
 
         market_engine = MarketEngine(db, settings)
     if settings.runtime_enabled and market_engine is not None:
+        from app.modules.runtime.engine import StrategyRuntimeEngine
         from app.modules.trading.engine import TradingEngine
 
         trading_engine = TradingEngine(db, settings, market_engine=market_engine, bus=bus)
+        runtime_engine = StrategyRuntimeEngine(
+            db, settings, market_engine=market_engine, bus=bus
+        )
 
     @asynccontextmanager
     async def lifespan(app: FastAPI):
@@ -42,9 +47,13 @@ def create_app(settings: Settings | None = None, database: Database | None = Non
             await market_engine.start()
         if trading_engine is not None:
             await trading_engine.start()
+        if runtime_engine is not None:
+            await runtime_engine.start()
         try:
             yield
         finally:
+            if runtime_engine is not None:
+                await runtime_engine.stop()
             if trading_engine is not None:
                 await trading_engine.stop()
             if market_engine is not None:
@@ -63,6 +72,7 @@ def create_app(settings: Settings | None = None, database: Database | None = Non
     app.state.bus = bus
     app.state.market_engine = market_engine
     app.state.trading_engine = trading_engine
+    app.state.runtime_engine = runtime_engine
 
     app.add_middleware(
         CORSMiddleware,

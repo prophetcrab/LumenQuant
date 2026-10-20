@@ -195,6 +195,36 @@ export type BacktestRun = {
   trades?: BacktestTrade[];
 };
 
+export type StrategyInstance = {
+  id: string;
+  account_id: string;
+  strategy_key: string;
+  strategy_name: string;
+  symbol: string;
+  timeframe: string;
+  params: Record<string, number | string>;
+  position_pct: number;
+  max_order_notional: number;
+  running: boolean;
+  last_bar_time: number;
+  last_signal_at: string;
+  last_error: string;
+  executions: number;
+  created_at: string;
+  updated_at: string;
+};
+
+export type RuntimeLog = {
+  id: string;
+  instance_id: string;
+  level: "info" | "warn" | "error";
+  event: string;
+  message: string;
+  order_id: string;
+  bar_time: number;
+  created_at: string;
+};
+
 export type Overview = {
   account_id: string;
   account_name: string;
@@ -340,6 +370,33 @@ export const api = {
     key: string,
     body: { symbol: string; timeframe: string; limit: number; params: Record<string, unknown> },
   ) => request<SignalPreview>(`/strategies/${key}/signals`, { method: "POST", body: JSON.stringify(body) }),
+
+  runtimeInstances: (accountId?: string) =>
+    request<StrategyInstance[]>(`/runtime/instances${qs({ account_id: accountId })}`),
+  createRuntimeInstance: (body: {
+    account_id: string;
+    strategy_key: string;
+    symbol: string;
+    timeframe: string;
+    params: Record<string, unknown>;
+    position_pct: number;
+    max_order_notional: number;
+    start: boolean;
+  }) => request<StrategyInstance>("/runtime/instances", { method: "POST", body: JSON.stringify(body) }),
+  updateRuntimeInstance: (
+    id: string,
+    body: { params?: Record<string, unknown>; position_pct?: number; max_order_notional?: number },
+  ) => request<StrategyInstance>(`/runtime/instances/${id}`, { method: "PATCH", body: JSON.stringify(body) }),
+  toggleRuntimeInstance: (id: string, running: boolean) =>
+    request<StrategyInstance>(`/runtime/instances/${id}/toggle`, {
+      method: "POST",
+      body: JSON.stringify({ running }),
+    }),
+  deleteRuntimeInstance: (id: string) =>
+    request<void>(`/runtime/instances/${id}`, { method: "DELETE" }),
+  runtimeLogs: (id: string, limit = 100) =>
+    request<RuntimeLog[]>(`/runtime/instances/${id}/logs${qs({ limit })}`),
+  runtimeTick: () => request<{ evaluated: Record<string, string> }>("/runtime/tick", { method: "POST" }),
 
   backtests: (limit = 30) => request<BacktestRun[]>(`/backtests${qs({ limit })}`),
   backtest: (id: string) => request<BacktestRun>(`/backtests/${id}`),
