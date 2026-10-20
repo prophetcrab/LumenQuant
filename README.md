@@ -45,13 +45,13 @@ powershell -ExecutionPolicy Bypass -File .\scripts\start-all.ps1
 powershell -ExecutionPolicy Bypass -File .\scripts\run-tests.ps1
 ```
 
-当前：**219 项后端测试全绿**，前端 `tsc` 零错误、生产构建通过。
+当前：**240 项后端测试全绿**，前端 `tsc` 零错误、生产构建通过。
 
 ## 文档
 
 - 思路：[docs/thinking/architecture.md](docs/thinking/architecture.md)、[docs/thinking/roadmap.md](docs/thinking/roadmap.md)
 - 交付：[快速开始](docs/delivery/quickstart.md)、[架构](docs/delivery/architecture.md)、[API](docs/delivery/api.md)、[代码报告](docs/delivery/code-report.md)、[验收清单](docs/delivery/acceptance.md)
-- A股：[A股交易模式](docs/delivery/cn-market.md)、[同花顺接入与实盘](docs/delivery/ths-live.md)
+- A股：[A股交易模式](docs/delivery/cn-market.md)、[真实行情接入](docs/delivery/cn-data-source.md)、[同花顺接入与实盘](docs/delivery/ths-live.md)
 - 迭代：[docs/rounds/](docs/rounds/)（R01–R20）
 - 视觉验收截图：[docs/reviews/R17/](docs/reviews/R17/)
 

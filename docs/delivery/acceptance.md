@@ -68,7 +68,7 @@
 
 ```powershell
 cd D:\LumenQuant\backend
-..\.venv\Scripts\python.exe -m pytest -q        # 219 passed
+..\.venv\Scripts\python.exe -m pytest -q        # 240 passed
 cd ..\frontend
 npx tsc --noEmit; npx vite build                # 0 errors
 ```
@@ -125,3 +125,23 @@ npx tsc --noEmit; npx vite build                # 0 errors
 | 24 小时以上连续运行 | 加速测试不能替代真实时钟与 I/O | 长驻进程观察内存、日志、定时器漂移 |
 | 跨月/跨年边界 | 加速测试只覆盖数日 | 用真实日历推进或注入日期 |
 | 真实资金与滑点 | 模拟撮合非真实订单簿 | 仅以实盘小仓位逐步验证 |
+
+### 真实行情接入（C17–C18）
+
+| 项 | 状态 | 证据 |
+|---|---|---|
+| 可插拔数据源（synthetic/tencent） | ✅ | `app/modules/cn/sources/` |
+| 实时报价、日线、15 分钟线 | ✅ | 腾讯三接口，实测 8 标的 |
+| 启动时同步（失败不阻塞） | ✅ | `_startup_sync` |
+| 数据滞后期可查 | ✅ | `/api/cn/data/staleness`，实测 stale_days=0 |
+| 同步即替换（避免口径混合） | ✅ | `test_sync_replaces_synthetic_history` |
+| 退避重试（4xx 不重试） | ✅ | 3 项重试用例 |
+| 复权口径统一为不复权 | ✅ | `test_daily_endpoint_uses_unadjusted_series` |
+| 报价与日线同尺度 | ✅ | `test_quote_and_daily_share_the_same_price_scale` |
+
+**真实数据下的策略表现（平安银行 120 日线，50 万资金）**：
+收益区间 -9.44% ~ +11.15%，有正有负；对比修复前的虚假 +70% 区间，
+说明数据口径已正确。
+
+**新增交付文档**：`docs/delivery/cn-data-source.md`（模式、配置、接口、
+数据语义、已知限制）。
