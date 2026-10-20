@@ -21,6 +21,7 @@ def metrics(request: Request):
     caches = {
         "market": getattr(request.app.state, "market_cache", None),
         "candles": getattr(request.app.state, "candle_cache", None),
+        "stats": getattr(request.app.state, "stats_cache", None),
     }
     return {
         "requests": collector.snapshot() if collector else {},

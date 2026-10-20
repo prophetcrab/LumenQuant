@@ -103,6 +103,11 @@ class Database:
                 for name, ddl in columns.items():
                     if name not in existing:
                         connection.execute(text(f"ALTER TABLE {table} ADD COLUMN {name} {ddl}"))
+        # create_all() never adds indexes to tables that already exist, so any
+        # index declared after the first release must be created explicitly.
+        for table in Base.metadata.tables.values():
+            for index in table.indexes:
+                index.create(self.engine, checkfirst=True)
 
     def dispose(self) -> None:
         self.engine.dispose()
