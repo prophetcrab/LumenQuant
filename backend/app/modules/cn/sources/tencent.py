@@ -15,6 +15,8 @@ Quotes are GBK encoded; decoding as UTF-8 raises, so the encoding is explicit.
 
 from __future__ import annotations
 
+import logging
+import random
 import time
 from datetime import datetime, timezone
 
@@ -30,6 +32,8 @@ from app.modules.cn.sources.base import (
     split_code,
 )
 from app.modules.market.service_types import CandlePoint
+
+logger = logging.getLogger(__name__)
 
 QUOTE_URL = "https://qt.gtimg.cn/q={ticker}"
 DAILY_URL = (
@@ -48,9 +52,15 @@ class TencentSource:
         *,
         timeout: float = 10.0,
         transport: httpx.BaseTransport | None = None,
+        retries: int = 3,
+        backoff_seconds: float = 0.4,
     ) -> None:
         self.timeout = timeout
         self._transport = transport
+        # Public endpoints throttle aggressively under burst load; a short
+        # exponential backoff turns transient resets into a slow success.
+        self.retries = max(1, retries)
+        self.backoff_seconds = max(0.0, backoff_seconds)
 
     # ------------------------------------------------------------- internals
     def _client(self) -> httpx.Client:
@@ -65,14 +75,27 @@ class TencentSource:
         )
 
     def _get(self, url: str) -> httpx.Response:
-        try:
-            with self._client() as client:
-                response = client.get(url)
-        except httpx.HTTPError as exc:
-            raise SourceUnavailable(f"腾讯行情不可达：{exc}") from exc
-        if response.status_code >= 400:
-            raise SourceUnavailable(f"腾讯行情返回 {response.status_code}")
-        return response
+        last_error: Exception | None = None
+        for attempt in range(self.retries):
+            try:
+                with self._client() as client:
+                    response = client.get(url)
+            except httpx.HTTPError as exc:
+                last_error = exc
+            else:
+                # 4xx is a permanent client error; retrying cannot help.
+                if response.status_code < 400:
+                    return response
+                if 400 <= response.status_code < 500:
+                    raise SourceUnavailable(f"腾讯行情返回 {response.status_code}")
+                last_error = SourceUnavailable(f"腾讯行情返回 {response.status_code}")
+            if attempt + 1 < self.retries:
+                delay = self.backoff_seconds * (2**attempt)
+                # Jitter keeps parallel syncs from retrying in lockstep.
+                delay *= 0.75 + random.random() * 0.5
+                logger.debug("retrying %s in %.2fs (attempt %s)", url[:60], delay, attempt + 1)
+                time.sleep(delay)
+        raise SourceUnavailable(f"腾讯行情不可达：{last_error}") from last_error
 
     @staticmethod
     def _ticker(code: str) -> str:
