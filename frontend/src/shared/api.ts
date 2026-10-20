@@ -363,6 +363,7 @@ export type RiskState = {
   breaker_reason: string;
   updated_at: string;
   day_key: string;
+  halt_kind: "" | "daily" | "drawdown";
 };
 
 export type BrokerStatus = {

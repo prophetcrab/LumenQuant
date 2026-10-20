@@ -41,7 +41,13 @@ export function RiskPanel() {
               <span className="muted" style={{ fontSize: 12.5 }}>
                 交易闸门
               </span>
-              <Badge tone={tripped ? "red" : "green"}>{tripped ? "已熔断" : "正常"}</Badge>
+              <Badge tone={tripped ? "red" : "green"}>
+                {tripped
+                  ? state.data.halt_kind === "drawdown"
+                    ? "回撤熔断（需人工重置）"
+                    : "日内熔断"
+                  : "正常"}
+              </Badge>
             </div>
             <div className="row" style={{ justifyContent: "space-between", fontSize: 12.5 }}>
               <span className="muted">

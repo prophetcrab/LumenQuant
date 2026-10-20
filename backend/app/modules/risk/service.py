@@ -25,6 +25,7 @@ class RiskStateView:
     breaker_reason: str
     updated_at: str
     day_key: str = ""
+    halt_kind: str = ""
 
 
 class RiskService:
@@ -51,8 +52,11 @@ class RiskService:
         row.day_start_equity = equity
         if equity > row.peak_equity:
             row.peak_equity = equity
-        if row.breaker_reason:
-            row.breaker_reason = ""  # a new session gets a fresh budget
+        # A new session gets a fresh daily-loss budget, but a drawdown halt is a
+        # structural risk decision and must survive the roll.
+        row.daily_reason = ""
+        if not row.drawdown_reason:
+            row.breaker_reason = ""
         return True
 
     def _row(self, account_id: str, *, create: bool) -> RiskState | None:
@@ -69,14 +73,18 @@ class RiskService:
         row = self._row(account_id, create=False)
         if row is None:
             return RiskStateView(account_id, 0.0, 0.0, False, "", "")
+        reason = row.drawdown_reason or row.daily_reason or row.breaker_reason
         return RiskStateView(
             account_id=account_id,
             day_start_equity=row.day_start_equity,
             peak_equity=row.peak_equity,
-            breaker_active=bool(row.breaker_reason),
-            breaker_reason=row.breaker_reason,
+            breaker_active=bool(reason),
+            breaker_reason=reason,
             updated_at=iso(row.updated_at),
             day_key=row.day_key,
+            halt_kind=(
+                "drawdown" if row.drawdown_reason else ("daily" if row.daily_reason else "")
+            ),
         )
 
     def ensure_baseline(self, account_id: str, equity: float) -> RiskStateView:
@@ -126,6 +134,10 @@ class RiskService:
         row = self._row(account_id, create=True)
         assert row is not None
         row.breaker_reason = reason[:240]
+        if "drawdown" in reason.lower():
+            row.drawdown_reason = reason[:240]
+        else:
+            row.daily_reason = reason[:240]
         record_audit(
             self.session,
             action="risk.breaker_tripped",
@@ -140,6 +152,8 @@ class RiskService:
         row = self._row(account_id, create=True)
         assert row is not None
         row.breaker_reason = ""
+        row.daily_reason = ""
+        row.drawdown_reason = ""
         row.day_start_equity = 0.0
         row.peak_equity = 0.0
         row.day_key = ""

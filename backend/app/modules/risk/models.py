@@ -21,6 +21,10 @@ class RiskState(Base):
     # never resets, so one bad day would keep the account halted forever.
     day_key: Mapped[str] = mapped_column(String(10), default="")
     breaker_reason: Mapped[str] = mapped_column(String(240), default="")
+    # Distinct reasons so a new trading day can clear the daily-loss halt
+    # without silently clearing a structural drawdown halt.
+    daily_reason: Mapped[str] = mapped_column(String(240), default="")
+    drawdown_reason: Mapped[str] = mapped_column(String(240), default="")
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=utcnow, onupdate=utcnow
     )

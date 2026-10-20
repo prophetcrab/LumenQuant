@@ -168,3 +168,65 @@ def test_cn_risk_day_uses_beijing_date():
     ts = int(datetime(2026, 10, 20, 23, 30, tzinfo=timezone.utc).timestamp() * 1000)
     assert risk_day_key("crypto", ts) == "2026-10-20"
     assert risk_day_key("cn_stock", ts) == "2026-10-21"
+
+
+def test_drawdown_halt_survives_daily_rollover(database, monkeypatch):
+    """A structural drawdown halt must not be released by a new trading day.
+
+    Only the daily-loss budget resets; the drawdown breaker keeps its reason until
+    an explicit reset, otherwise a single -30% month would silently un-halt.
+    """
+    from app.modules.accounts.service import AccountService
+    from app.modules.risk.service import RiskService
+
+    with database.session() as session:
+        accounts = AccountService(session)
+        account = accounts.create(name="回撤账户", initial_balance=100_000, market="crypto")
+        service = RiskService(session)
+
+        monkeypatch.setattr(
+            "app.modules.risk.service.risk_day_key",
+            lambda market, ts_ms=None: "2026-10-20",
+        )
+        service.observe(account.id, 100_000)
+        tripped = service.trip(account.id, "drawdown circuit breaker (30.00% >= 25.00%)")
+        assert tripped.halt_kind == "drawdown"
+
+        monkeypatch.setattr(
+            "app.modules.risk.service.risk_day_key",
+            lambda market, ts_ms=None: "2026-10-21",
+        )
+        rolled = service.observe(account.id, 70_000)
+        assert rolled.breaker_active is True
+        assert rolled.halt_kind == "drawdown"
+        assert "drawdown" in rolled.breaker_reason
+
+        # Explicit reset is the only way out.
+        cleared = service.reset(account.id)
+        assert cleared.breaker_active is False
+
+
+def test_daily_halt_releases_while_drawdown_persists(database, monkeypatch):
+    from app.modules.accounts.service import AccountService
+    from app.modules.risk.service import RiskService
+
+    with database.session() as session:
+        accounts = AccountService(session)
+        account = accounts.create(name="混合账户", initial_balance=100_000, market="crypto")
+        service = RiskService(session)
+        monkeypatch.setattr(
+            "app.modules.risk.service.risk_day_key",
+            lambda market, ts_ms=None: "2026-10-20",
+        )
+        service.observe(account.id, 100_000)
+        service.trip(account.id, "drawdown circuit breaker (26.00% >= 25.00%)")
+        service.trip(account.id, "daily loss limit hit (-5.20% <= -5.00%)")
+
+        monkeypatch.setattr(
+            "app.modules.risk.service.risk_day_key",
+            lambda market, ts_ms=None: "2026-10-21",
+        )
+        after = service.observe(account.id, 74_000)
+        # Drawdown reason wins and is still present.
+        assert after.breaker_active is True
+        assert after.halt_kind == "drawdown"
