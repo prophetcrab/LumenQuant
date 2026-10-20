@@ -43,6 +43,10 @@ class Settings(BaseSettings):
     runtime_enabled: bool = True
     engine_interval_seconds: float = 2.0
 
+    # Execution costs for paper fills.
+    fee_bps: float = 10.0
+    slippage_bps: float = 3.0
+
     # Safety switches.
     live_trading_enabled: bool = False
     auth_enabled: bool = False

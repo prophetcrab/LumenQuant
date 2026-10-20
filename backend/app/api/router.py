@@ -4,16 +4,18 @@ from fastapi import APIRouter
 
 from app.modules.accounts.router import router as accounts_router
 from app.modules.market.router import router as market_router
+from app.modules.trading.router import router as trading_router
 
 
 api_router = APIRouter()
 api_router.include_router(accounts_router)
 api_router.include_router(market_router)
+api_router.include_router(trading_router)
 
 
 @api_router.get("/meta")
 def meta():
     return {
-        "modules": ["accounts", "market"],
+        "modules": ["accounts", "market", "trading"],
         "capabilities": {"paper_trading": True, "live_trading": False, "backtest": False},
     }

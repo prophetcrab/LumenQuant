@@ -260,6 +260,29 @@ class AccountService:
         self.session.refresh(account)
         return self.view(account)
 
+    def post_cash(
+        self,
+        account_id: str,
+        *,
+        amount: float,
+        kind: str,
+        ref: str = "",
+        note: str = "",
+    ) -> float:
+        """Book a cash movement inside the caller's transaction (no commit).
+
+        Trading uses this to keep order, position and ledger updates atomic.
+        """
+        account = self.require(account_id)
+        if account.status != "active":
+            raise ConflictError("account is not active")
+        cash = self._cash(account_id)
+        entry = self._append_ledger(
+            account_id, amount=amount, kind=kind, ref=ref, note=note, current_cash=cash
+        )
+        self.session.flush()
+        return entry.balance_after
+
     def _append_ledger(
         self,
         account_id: str,
