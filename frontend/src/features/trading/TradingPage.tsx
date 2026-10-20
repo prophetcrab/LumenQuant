@@ -91,7 +91,17 @@ export function TradingPage() {
     <div className="stack" style={{ gap: 16 }}>
       <div className="grid grid-4">
         <Stat label="账户权益" value={data ? cash(data.equity, account.base_currency) : "—"} meta={<span className="muted">{account.name}</span>} />
-        <Stat label="可用现金" value={data ? cash(data.cash, account.base_currency) : "—"} meta={<span className="muted">可用于新开仓</span>} />
+        <Stat
+          label="可用现金"
+          value={data ? cash(data.available_cash, account.base_currency) : "—"}
+          meta={
+            <span className="muted">
+              {data && data.reserved_cash > 0
+                ? `挂单冻结 ${cash(data.reserved_cash, account.base_currency)}`
+                : "可用于新开仓"}
+            </span>
+          }
+        />
         <Stat
           label="浮动盈亏"
           value={data ? cashSigned(data.unrealized_pnl, account.base_currency) : "—"}

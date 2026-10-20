@@ -427,6 +427,8 @@ export type Overview = {
   initial_balance: number;
   net_contributions: number;
   cash: number;
+  available_cash: number;
+  reserved_cash: number;
   positions_value: number;
   equity: number;
   total_return_pct: number;

@@ -170,11 +170,15 @@ class TradingService:
         price = self._safe_price(position.symbol)
         market_value = round_money(position.quantity * price)
         unrealized = round_money((price - position.avg_price) * position.quantity)
+        # Pending sells lock shares; report what the user can actually commit.
+        sellable = round_qty(
+            max(0.0, position.available_quantity - self.reserved_quantity(position.account_id, position.symbol))
+        )
         return PositionView(
             account_id=position.account_id,
             symbol=position.symbol,
             quantity=position.quantity,
-            available_quantity=position.available_quantity,
+            available_quantity=sellable,
             avg_price=position.avg_price,
             realized_pnl=round_money(position.realized_pnl),
             market_price=price,
@@ -182,6 +186,39 @@ class TradingService:
             unrealized_pnl=unrealized,
             updated_at=iso(position.updated_at),
         )
+
+    def reserved_cash(self, account_id: str, *, exclude_order_id: str | None = None) -> float:
+        """Cash committed by resting buy orders.
+
+        A resting limit buy must reserve its notional (plus fee), otherwise the
+        same balance can back unlimited pending orders and the account goes
+        negative when several fill at once. Sells reserve shares instead, which is
+        handled by `available_quantity`.
+        """
+        orders = self.session.scalars(
+            select(Order).where(
+                Order.account_id == account_id,
+                Order.side == "buy",
+                Order.status.in_(OPEN_STATUSES),
+            )
+        ).all()
+        reserved = 0.0
+        for order in orders:
+            if exclude_order_id and order.id == exclude_order_id:
+                continue
+            remaining = round_qty(order.quantity - order.filled_quantity)
+            if remaining <= 0:
+                continue
+            price = order.limit_price or self._safe_price(order.symbol)
+            if price <= 0:
+                continue
+            notional = round_money(remaining * price)
+            reserved += notional + self._fee(self._account_market(account_id), "buy", notional)
+        return round_money(reserved)
+
+    def available_cash(self, account_id: str) -> float:
+        """Book cash minus cash reserved by pending orders."""
+        return round_money(self.cash.cash(account_id) - self.reserved_cash(account_id))
 
     def _safe_price(self, symbol: str) -> float:
         try:
@@ -215,6 +252,20 @@ class TradingService:
             .order_by(Position.symbol.asc())
         ).all()
         return [self._position_view(p) for p in rows]
+
+    def reserved_quantity(self, account_id: str, symbol: str) -> float:
+        """Shares locked by pending sell orders."""
+        orders = self.session.scalars(
+            select(Order).where(
+                Order.account_id == account_id,
+                Order.symbol == symbol.upper(),
+                Order.side == "sell",
+                Order.status.in_(OPEN_STATUSES),
+            )
+        ).all()
+        return round_qty(
+            sum(max(0.0, order.quantity - order.filled_quantity) for order in orders)
+        )
 
     def fills(self, account_id: str, *, limit: int = 100) -> list[FillView]:
         rows = self.session.scalars(
@@ -308,11 +359,19 @@ class TradingService:
 
         if market == "cn_stock":
             self._assert_session(market, live=account_kind == "live")
+            sellable = (
+                round_qty(
+                    position.available_quantity
+                    - self.reserved_quantity(account_id, symbol)
+                )
+                if position
+                else 0.0
+            )
             validate_quantity(
                 side,
                 quantity,
                 position_quantity=position.quantity if position else 0.0,
-                available_quantity=position.available_quantity if position else 0.0,
+                available_quantity=sellable,
             )
             band = self._band(symbol_view, market)
             if limit_price is not None:
@@ -334,19 +393,27 @@ class TradingService:
                 Order.account_id == account_id, Order.created_at >= cutoff
             )
         )
+        position_commit = (
+            round_qty(
+                (position.available_quantity if market == "cn_stock" else position.quantity)
+                - self.reserved_quantity(account_id, symbol)
+            )
+            if position
+            else 0.0
+        )
         ctx = RiskContext(
-            cash=self.cash.cash(account_id),
-            position_qty=(
-                position.available_quantity if market == "cn_stock" and position else
-                (position.quantity if position else 0.0)
-            ),
+            cash=self.available_cash(account_id),
+            position_qty=max(0.0, position_commit),
             position_avg_price=position.avg_price if position else 0.0,
             orders_last_minute=int(recent or 0),
         )
         if self.risk is not None:
             # Account-level kill switch runs before per-order limits.
             state = self.risk.state(account_id)
-            equity = self._equity(account_id, ctx.cash)
+            # ctx.cash is *available* cash (reservations deducted). Equity must use
+            # book cash, otherwise pending orders look like realised losses and
+            # immediately trip the daily-loss breaker.
+            equity = self._equity(account_id, self.cash.cash(account_id))
             if state.day_start_equity <= 0 or state.peak_equity <= 0:
                 # First order of the session: seed the baseline from current
                 # equity so the breaker is armed from the start.
@@ -605,7 +672,12 @@ class TradingService:
 
         if order.side == "buy":
             total_cost = round_money(notional + fee)
-            available = self.cash.cash(order.account_id)
+            # Exclude this order's own reservation: at fill time the reservation
+            # is about to be consumed by this very trade.
+            available = round_money(
+                self.cash.cash(order.account_id)
+                - self.reserved_cash(order.account_id, exclude_order_id=order.id)
+            )
             if total_cost > available + 1e-9:
                 raise ConflictError("insufficient cash at execution time")
             new_qty = round_qty(position.quantity + quantity)

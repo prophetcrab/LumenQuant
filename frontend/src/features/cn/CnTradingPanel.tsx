@@ -5,6 +5,7 @@ import type { CnSymbol } from "../../shared/api";
 import { useAccount } from "../../shared/account-context";
 import { useToast } from "../../shared/toast";
 import {
+  cash,
   cashSigned,
   dateTimeLabel,
   money,
@@ -31,6 +32,12 @@ export function CnTradingPanel() {
   const rules = useQuery({ queryKey: ["cn-rules"], queryFn: api.cnRules, staleTime: 120_000 });
   const session = useQuery({ queryKey: ["cn-session"], queryFn: api.cnSession, refetchInterval: 10_000 });
   const symbols = useQuery({ queryKey: ["cn-symbols"], queryFn: api.cnSymbols, refetchInterval: 8_000 });
+  const overview = useQuery({
+    queryKey: ["overview", accountId],
+    queryFn: () => api.portfolioOverview(accountId),
+    enabled: Boolean(accountId),
+    refetchInterval: 5_000,
+  });
   const positions = useQuery({
     queryKey: ["positions", accountId],
     queryFn: () => api.positions(accountId as string),
@@ -126,9 +133,15 @@ export function CnTradingPanel() {
         />
         <Stat label="A股标的" value={String(list.length)} meta={<span className="muted">含主板/创业板/科创板</span>} />
         <Stat
-          label="买入单位"
-          value={`${rules.data?.lot_size ?? 100} 股`}
-          meta={<span className="muted">T+1：当日买入次日可卖</span>}
+          label="可用资金"
+          value={overview.data ? cash(overview.data.available_cash, account.base_currency) : "—"}
+          meta={
+            <span className="muted">
+              {overview.data && overview.data.reserved_cash > 0
+                ? `挂单冻结 ${cash(overview.data.reserved_cash, account.base_currency)}`
+                : `含 T+1：当日买入次日可卖`}
+            </span>
+          }
         />
         <Stat
           label="同花顺网关"

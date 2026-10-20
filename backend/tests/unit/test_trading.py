@@ -165,3 +165,120 @@ def test_close_position(env):
     assert service.positions(account.id) == []
     # (105 - 100.1) * 3 - 0.315 sell fee = 14.385
     assert accounts.cash(account.id) == pytest.approx(10_014.385, abs=1e-6)
+
+
+def test_resting_buy_reserves_cash(env):
+    """A resting limit buy must lock its notional.
+
+    Without reservation the same balance could back unlimited pending orders and
+    the account would go negative when several filled together.
+    """
+    service, accounts, account, _ = env
+    service.place_order(
+        account_id=account.id, symbol="BTCUSDT", side="buy",
+        order_type="limit", quantity=50, limit_price=90.0,
+    )
+    reserved = service.reserved_cash(account.id)
+    # Reservation includes the fee the fill would charge (fee_bps = 10).
+    expected = 50 * 90.0 * (1 + 10 / 10_000)
+    assert reserved == pytest.approx(expected)
+    assert service.available_cash(account.id) == pytest.approx(10_000 - expected)
+
+    # A second order exceeding the remaining budget is refused.
+    with pytest.raises(ConflictError):
+        service.place_order(
+            account_id=account.id, symbol="BTCUSDT", side="buy",
+            order_type="limit", quantity=70, limit_price=90.0,
+        )
+
+
+def test_cancelled_order_releases_cash(env):
+    service, _, account, _ = env
+    order = service.place_order(
+        account_id=account.id, symbol="BTCUSDT", side="buy",
+        order_type="limit", quantity=50, limit_price=90.0,
+    )
+    assert service.available_cash(account.id) < 10_000
+    service.cancel_order(order.id)
+    assert service.available_cash(account.id) == pytest.approx(10_000)
+
+
+def test_filled_resting_order_consumes_reservation(env):
+    service, accounts, account, prices = env
+    service.place_order(
+        account_id=account.id, symbol="BTCUSDT", side="buy",
+        order_type="limit", quantity=20, limit_price=95.0,
+    )
+    before = service.available_cash(account.id)
+    prices.current = 94.0
+    assert service.match_open_orders() == 1
+    positions = service.positions(account.id)
+    assert positions[0].quantity == 20
+    # Cash actually spent; nothing remains reserved.
+    assert service.reserved_cash(account.id) == 0
+    expected_cash = 10_000 - 20 * 94.0 * (1 + 10 / 10_000)
+    assert accounts.cash(account.id) == pytest.approx(expected_cash, abs=1e-6)
+    assert service.available_cash(account.id) == pytest.approx(accounts.cash(account.id))
+    # Filled below the limit price, so the released reservation exceeds the actual
+    # spend and available cash can rise: price improvement is real, not a bug.
+    assert service.available_cash(account.id) == pytest.approx(before + (95.0 - 94.0) * 20, abs=0.5)
+
+
+def test_resting_sell_locks_shares(env):
+    service, accounts, account, prices = env
+    service.place_order(
+        account_id=account.id, symbol="BTCUSDT", side="buy",
+        order_type="market", quantity=10,
+    )
+    assert service.positions(account.id)[0].available_quantity == pytest.approx(10)
+    service.place_order(
+        account_id=account.id, symbol="BTCUSDT", side="sell",
+        order_type="limit", quantity=6, limit_price=200.0,
+    )
+    view = service.positions(account.id)[0]
+    assert view.available_quantity == pytest.approx(4)  # 6 shares locked
+    with pytest.raises(ConflictError):
+        service.place_order(
+            account_id=account.id, symbol="BTCUSDT", side="sell",
+            order_type="limit", quantity=5, limit_price=200.0,
+        )
+
+
+def test_resting_orders_do_not_trip_breaker(database):
+    from app.modules.risk.policy import RiskLimits, RiskPolicy
+    from app.modules.risk.service import RiskService
+
+    prices = FakePrices()
+    with database.session() as session:
+        accounts = AccountService(session)
+        account = accounts.create(name="挂单熔断", initial_balance=100_000)
+        service = TradingService(
+            session,
+            cash=AccountCashAdapter(accounts),
+            prices=prices,
+            policy=RiskPolicy(
+                RiskLimits(
+                    max_order_notional=1_000_000,
+                    max_position_notional=1_000_000,
+                    max_daily_loss_pct=0.05,
+                )
+            ),
+            risk=RiskService(session),
+            fee_bps=0,
+            slippage_bps=0,
+        )
+        # Rest a buy for 60% of equity: if reservations counted as losses this
+        # would read as a -60% day and halt the account.
+        service.place_order(
+            account_id=account.id, symbol="BTCUSDT", side="buy",
+            order_type="limit", quantity=600, limit_price=100.0,
+        )
+        state = RiskService(session).state(account.id)
+        assert state.breaker_active is False
+
+        # A further small order must still be accepted.
+        order = service.place_order(
+            account_id=account.id, symbol="BTCUSDT", side="buy",
+            order_type="market", quantity=1,
+        )
+        assert order.status == "filled"

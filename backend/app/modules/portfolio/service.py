@@ -34,6 +34,8 @@ class PortfolioOverview:
     initial_balance: float
     net_contributions: float
     cash: float
+    available_cash: float
+    reserved_cash: float
     positions_value: float
     equity: float
     total_return_pct: float
@@ -65,6 +67,8 @@ class PortfolioService:
         account_id = self._resolve(account_id)
         account = self.accounts.get(account_id)
         cash = round_money(account.cash_balance)
+        reserved = self.trading.reserved_cash(account_id)
+        available_cash = round_money(cash - reserved)
         positions: list[PositionView] = self.trading.positions(account_id)
         positions_value = round_money(sum(p.market_value for p in positions))
         unrealized = round_money(sum(p.unrealized_pnl for p in positions))
@@ -102,6 +106,8 @@ class PortfolioService:
             initial_balance=account.initial_balance,
             net_contributions=net_contributions,
             cash=cash,
+            available_cash=available_cash,
+            reserved_cash=reserved,
             positions_value=positions_value,
             equity=equity,
             # Deposits move equity but are not profit; measure against net capital.
