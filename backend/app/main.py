@@ -23,13 +23,24 @@ def create_app(settings: Settings | None = None, database: Database | None = Non
     )
     db = database or Database(settings.database_url)
     bus = EventBus()
+    market_engine = None
+    if settings.seed_market:
+        from app.modules.market.engine import MarketEngine
+
+        market_engine = MarketEngine(db, settings)
 
     @asynccontextmanager
     async def lifespan(app: FastAPI):
         settings.data_dir.mkdir(parents=True, exist_ok=True)
         db.create_schema()
-        yield
-        db.dispose()
+        if market_engine is not None:
+            await market_engine.start()
+        try:
+            yield
+        finally:
+            if market_engine is not None:
+                await market_engine.stop()
+            db.dispose()
 
     app = FastAPI(
         title=settings.app_name,
@@ -41,6 +52,7 @@ def create_app(settings: Settings | None = None, database: Database | None = Non
     app.state.settings = settings
     app.state.db = db
     app.state.bus = bus
+    app.state.market_engine = market_engine
 
     app.add_middleware(
         CORSMiddleware,
