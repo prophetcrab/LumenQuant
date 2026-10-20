@@ -5,7 +5,9 @@ from sqlalchemy.orm import Session
 
 from app.api.deps import get_session
 from app.api.wiring import build_backtests
-from app.modules.backtest.schemas import BacktestRequest
+from app.core.errors import ValidationError
+from app.modules.backtest.optimiser import OptimiserService, parse_space
+from app.modules.backtest.schemas import BacktestRequest, OptimiseRequest
 from app.modules.backtest.service import BacktestService
 
 
@@ -37,6 +39,72 @@ def list_backtests(
     session: Session = Depends(get_session),
 ):
     return build_service(request, session).list(limit=limit)
+
+
+@router.post("/optimise")
+def optimise(
+    payload: OptimiseRequest, request: Request, session: Session = Depends(get_session)
+):
+    """Grid search with in/out-of-sample validation.
+
+    Returns the best parameter sets plus overfitting warnings; it does not persist
+    a backtest run, so repeated searches do not pollute the history list.
+    """
+    from app.api.wiring import build_market
+    from app.modules.backtest.engine import BacktestConfig
+    from app.modules.cn.fees import CnFeeSchedule
+    from app.modules.market.service import SUPPORTED_TIMEFRAMES
+    from app.modules.strategies.registry import get
+
+    settings = request.app.state.settings
+    if payload.timeframe not in SUPPORTED_TIMEFRAMES:
+        raise ValidationError(f"unsupported timeframe {payload.timeframe}")
+
+    strategy = get(payload.strategy)
+    market = build_market(request, session, live=False)
+    symbol_view = market.require_symbol(payload.symbol)
+    candles = market.candles(payload.symbol, timeframe=payload.timeframe, limit=payload.bars)
+    if not candles:
+        raise ValidationError(f"{payload.symbol} 没有可用的 K 线数据")
+
+    raw_config = dict(payload.config or {})
+    raw_config.setdefault("fee_bps", settings.fee_bps)
+    raw_config.setdefault("slippage_bps", settings.slippage_bps)
+    raw_config["market"] = symbol_view.market
+    raw_config["tick_size"] = symbol_view.tick_size
+    if symbol_view.market == "cn_stock":
+        raw_config["limit_pct"] = symbol_view.limit_pct
+        raw_config["lot_size"] = 100.0
+        raw_config["t_plus_one"] = True
+    cfg = BacktestConfig.from_dict(raw_config)
+
+    service = OptimiserService(
+        cn_fees=CnFeeSchedule(
+            commission_bps=settings.cn_commission_bps,
+            min_commission=settings.cn_min_commission,
+            stamp_duty_bps=settings.cn_stamp_duty_bps,
+            transfer_fee_bps=settings.cn_transfer_fee_bps,
+        )
+    )
+    report = service.optimise(
+        strategy,
+        candles,
+        space=parse_space(payload.space),
+        base_params=payload.base_params,
+        symbol=payload.symbol,
+        timeframe=payload.timeframe,
+        objective=payload.objective,
+        config=cfg,
+        top_n=payload.top_n,
+        # Synthetic data produces unrealistically smooth trends; the optimiser
+        # must say so instead of letting the numbers speak for themselves.
+        data_source=(
+            "synthetic"
+            if symbol_view.market == "crypto" or settings.cn_data_source == "synthetic"
+            else "real"
+        ),
+    )
+    return report.as_dict()
 
 
 @router.get("/{run_id}")

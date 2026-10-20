@@ -7,6 +7,8 @@ import { backtestEquityOption } from "../../shared/charts";
 import { cash, pct, price, timeLabel } from "../../shared/format";
 import { Badge, Card, EmptyState, Field, Loader, Stat } from "../../components/ui";
 import { ButtonField } from "../../components/form";
+import { OptimisePanel } from "./OptimisePanel";
+import { Segmented } from "../../components/ui";
 import { buildParams, initialParams, type ParamValue } from "../../shared/strategy-params";
 
 const TIMEFRAMES = ["15m", "30m", "1h", "4h", "1d"] as const;
@@ -26,6 +28,7 @@ export function BacktestPage() {
   const [takeProfit, setTakeProfit] = useState("0");
   const [params, setParams] = useState<Record<string, ParamValue>>({});
   const [selectedRun, setSelectedRun] = useState<BacktestRun | null>(null);
+  const [tab, setTab] = useState<"run" | "optimise">("run");
 
   const meta = catalog.data?.find((item) => item.key === strategy) ?? null;
 
@@ -81,8 +84,24 @@ export function BacktestPage() {
 
   return (
     <div className="stack" style={{ gap: 16 }}>
-      <Card title="回测配置" subtitle="收盘出信号，下一根开盘成交 · 含手续费与滑点">
-        <div className="grid" style={{ gridTemplateColumns: "repeat(auto-fit, minmax(140px, 1fr))" }}>
+      <div className="row" style={{ justifyContent: "space-between" }}>
+        <Segmented
+          value={tab}
+          options={[
+            { value: "run", label: "单次回测" },
+            { value: "optimise", label: "参数优化" },
+          ]}
+          onChange={(value) => setTab(value)}
+        />
+        <span className="helper">
+          {tab === "run"
+            ? "验证一组参数的表现"
+            : "枚举参数空间，用样本外数据检验过拟合"}
+        </span>
+      </div>
+
+      <Card title="目标" subtitle="策略、标的与周期对单次回测和参数优化都生效">
+        <div className="grid" style={{ gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))" }}>
           <Field label="策略">
             <select className="select" value={strategy} onChange={(event) => setStrategy(event.target.value)}>
               {(catalog.data ?? []).map((item) => (
@@ -114,6 +133,22 @@ export function BacktestPage() {
               ))}
             </select>
           </Field>
+        </div>
+      </Card>
+
+      {tab === "optimise" ? (
+        <OptimisePanel
+          strategy={strategy}
+          symbol={symbol}
+          timeframe={timeframe}
+          meta={meta}
+        />
+      ) : null}
+
+      {tab === "run" ? (
+      <>
+      <Card title="回测配置" subtitle="收盘出信号，下一根开盘成交 · 含手续费与滑点">
+        <div className="grid" style={{ gridTemplateColumns: "repeat(auto-fit, minmax(140px, 1fr))" }}>
           <Field label="K 线数量" hint="50 – 20000">
             <input className="input num" type="number" value={bars} onChange={(event) => setBars(event.target.value)} />
           </Field>
@@ -310,6 +345,10 @@ export function BacktestPage() {
         </Card>
       )}
 
+      </>
+      ) : null}
+
+      {tab === "run" ? (
       <Card title="回测历史" subtitle="点击载入结果" padded={false}>
         {history.isLoading ? (
           <Loader />
@@ -364,6 +403,7 @@ export function BacktestPage() {
           <EmptyState title="还没有回测记录" />
         )}
       </Card>
+      ) : null}
     </div>
   );
 }

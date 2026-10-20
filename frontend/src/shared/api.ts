@@ -420,6 +420,49 @@ export type AuditEntry = {
   created_at: string;
 };
 
+export type OptimisationCandidate = {
+  params: Record<string, number | boolean | string>;
+  total_return_pct: number;
+  max_drawdown_pct: number;
+  sharpe: number;
+  trade_count: number;
+  win_rate_pct: number;
+  profit_factor: number | null;
+  final_equity: number;
+  score: number;
+  in_sample_return_pct: number;
+  out_of_sample_return_pct: number;
+  rejected: boolean;
+  reject_reason: string;
+};
+
+export type OptimisationReport = {
+  strategy: string;
+  symbol: string;
+  timeframe: string;
+  objective: string;
+  bars: number;
+  tested: number;
+  valid: number;
+  rejected: number;
+  elapsed_ms: number;
+  best: OptimisationCandidate | null;
+  top: OptimisationCandidate[];
+  robust_alternatives: OptimisationCandidate[];
+  distribution: {
+    profitable_count?: number;
+    profitable_pct?: number;
+    median_return_pct?: number;
+    best_return_pct?: number;
+    worst_return_pct?: number;
+    spread_pct?: number;
+  };
+  warnings: string[];
+  data_source: string;
+  in_sample_bars: number;
+  out_of_sample_bars: number;
+};
+
 export type Overview = {
   account_id: string;
   account_name: string;
@@ -610,6 +653,17 @@ export const api = {
     config: Record<string, unknown>;
   }) => request<BacktestRun>("/backtests", { method: "POST", body: JSON.stringify(body) }),
   deleteBacktest: (id: string) => request<void>(`/backtests/${id}`, { method: "DELETE" }),
+  optimiseBacktest: (body: {
+    strategy: string;
+    symbol: string;
+    timeframe: string;
+    bars: number;
+    space: Record<string, (number | boolean)[]>;
+    base_params?: Record<string, unknown>;
+    objective: string;
+    config?: Record<string, unknown>;
+    top_n?: number;
+  }) => request<OptimisationReport>("/backtests/optimise", { method: "POST", body: JSON.stringify(body) }),
 
   portfolioOverview: (accountId?: string) =>
     request<Overview>(`/portfolio/overview${qs({ account_id: accountId })}`),

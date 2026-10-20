@@ -103,3 +103,73 @@ def test_backtest_validation(backtest_client):
         "/api/backtests", json={"strategy": "wizard", "bars": 300}
     )
     assert unknown_strategy.status_code == 404
+
+
+def test_optimise_endpoint(backtest_client):
+    response = backtest_client.post(
+        "/api/backtests/optimise",
+        json={
+            "strategy": "sma_cross",
+            "symbol": "BTCUSDT",
+            "timeframe": "1h",
+            "bars": 800,
+            "space": {"fast": [5, 10], "slow": [20, 30]},
+            "objective": "risk_adjusted",
+        },
+    )
+    assert response.status_code == 200, response.text
+    body = response.json()
+    assert body["tested"] == 4
+    assert body["valid"] >= 1
+    assert body["best"] is not None
+    assert "params" in body["best"]
+    assert body["in_sample_bars"] + body["out_of_sample_bars"] == body["bars"]
+    assert isinstance(body["warnings"], list)
+    assert body["distribution"]["best_return_pct"] >= body["distribution"]["worst_return_pct"]
+
+
+def test_optimise_validation(backtest_client):
+    empty_space = backtest_client.post(
+        "/api/backtests/optimise",
+        json={"strategy": "sma_cross", "bars": 800, "space": {}},
+    )
+    assert empty_space.status_code == 422
+
+    bad_objective = backtest_client.post(
+        "/api/backtests/optimise",
+        json={
+            "strategy": "sma_cross",
+            "bars": 800,
+            "space": {"fast": [5]},
+            "objective": "magic",
+        },
+    )
+    assert bad_objective.status_code == 422
+
+    too_few_bars = backtest_client.post(
+        "/api/backtests/optimise",
+        json={"strategy": "sma_cross", "bars": 100, "space": {"fast": [5]}},
+    )
+    assert too_few_bars.status_code == 422
+
+    unknown = backtest_client.post(
+        "/api/backtests/optimise",
+        json={"strategy": "grail", "bars": 800, "space": {"fast": [5]}},
+    )
+    assert unknown.status_code == 404
+
+
+def test_optimise_does_not_pollute_backtest_history(backtest_client):
+    before = backtest_client.get("/api/backtests").json()
+    backtest_client.post(
+        "/api/backtests/optimise",
+        json={
+            "strategy": "sma_cross",
+            "symbol": "BTCUSDT",
+            "timeframe": "1h",
+            "bars": 600,
+            "space": {"fast": [5, 10], "slow": [20]},
+        },
+    )
+    after = backtest_client.get("/api/backtests").json()
+    assert len(after) == len(before)
