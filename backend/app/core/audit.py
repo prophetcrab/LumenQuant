@@ -5,7 +5,7 @@ from __future__ import annotations
 import uuid
 from datetime import datetime
 
-from sqlalchemy import DateTime, String, Text
+from sqlalchemy import DateTime, Index, String, Text
 from sqlalchemy.orm import Mapped, mapped_column, Session
 
 from app.core.db import Base
@@ -14,6 +14,7 @@ from app.core.timeutil import utcnow
 
 class AuditLog(Base):
     __tablename__ = "audit_logs"
+    __table_args__ = (Index("ix_audit_action_time", "action", "created_at"),)
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True)
     actor: Mapped[str] = mapped_column(String(64), default="system")

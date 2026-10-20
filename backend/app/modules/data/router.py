@@ -18,17 +18,27 @@ MAX_UPLOAD_BYTES = 20 * 1024 * 1024
 
 
 @router.get("/coverage")
-def coverage(session: Session = Depends(get_session)):
-    return DataService(session).coverage()
+def coverage(request: Request, session: Session = Depends(get_session)):
+    cache = getattr(request.app.state, "stats_cache", None)
+    if cache is None:
+        return DataService(session).coverage()
+    # Full-table aggregate over every symbol; 30s is fresh enough for a coverage
+    # view and keeps dashboards from paying the scan on every poll.
+    return cache.get_or_load("coverage", lambda: DataService(session).coverage())
 
 
 @router.get("/quality")
 def quality(
+    request: Request,
     symbol: str,
     timeframe: str = BASE_TIMEFRAME,
     session: Session = Depends(get_session),
 ):
-    return asdict(DataService(session).quality(symbol, timeframe=timeframe))
+    cache = getattr(request.app.state, "stats_cache", None)
+    loader = lambda: asdict(DataService(session).quality(symbol, timeframe=timeframe))
+    if cache is None:
+        return loader()
+    return cache.get_or_load(f"quality:{symbol.upper()}:{timeframe}", loader)
 
 
 @router.get("/export", response_class=PlainTextResponse)

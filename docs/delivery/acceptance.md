@@ -68,9 +68,40 @@
 
 ```powershell
 cd D:\LumenQuant\backend
-..\.venv\Scripts\python.exe -m pytest -q        # 164 passed
+..\.venv\Scripts\python.exe -m pytest -q        # 211 passed
 cd ..\frontend
 npx tsc --noEmit; npx vite build                # 0 errors
 ```
 
 浏览器验收：启动后访问 <http://127.0.0.1:5173>，按 `quickstart.md` 走一遍。
+
+
+## 持续迭代审计（C1–C11）
+
+在完成 20 轮交付后继续以"实际使用 → 发现问题 → 修复 → 测试 → 文档"的方式迭代，
+每轮均留下代码、测试与文档三件证据。
+
+| 轮次 | 发现的问题 | 证据 |
+|---|---|---|
+| C1 | 加密引擎写入 A 股标的（19:00 幽灵 K 线）；日线与分钟线矛盾；聚合跨午休；`next_open` 语义错；金额一律 `$` | `test_market_integrity.py` |
+| C2 | 资金不足一手导致回测 0 交易且无提示；`ema_trend` 真实数据永不入场；`buy_and_hold` 自动运行永不触发 | `test_cn_backtest.py`、`test_strategies.py` |
+| C3 | 策略契约无测试保障；日线在播种后不再更新 | `test_strategy_contract.py`（18 项） |
+| C4 | 创建标的时 `market` 字段被静默丢弃 | `test_cn_api.py::test_symbol_creation_honours_market` |
+| C5 | 请求体接受未知字段，掩盖契约错误 | `test_request_contracts.py` |
+| C6 | 风控日内基准为 0，熔断器形同虚设 | `test_risk.py::test_ensure_baseline_arms_breaker_without_background_tick` |
+| C7 | 日内基准永不重置，熔断永久生效 | `test_daily_baseline_rolls_over_on_new_day` |
+| C8 | 回撤熔断被跨日自动解除 | `test_drawdown_halt_survives_daily_rollover` |
+| C9 | 名义上限不足被误报为"资金不足" | `test_sizing_explains_notional_cap_not_cash` |
+| C10 | 挂单不冻结资金（可无限超支）；冻结又被误算为亏损触发熔断 | `test_resting_buy_reserves_cash` 等 5 项 |
+| C11 | 全量接口与页面巡检 | 28 端点 + 12 页面，0 失败 |
+
+当前状态：**211 项后端测试全绿**，前端类型检查 0 错误，构建通过。
+
+### 交付后新增能力
+
+- 挂单资金/股份冻结（`reserved_cash`、`reserved_quantity`、`available_cash`）；
+- 跨交易日的日内风控额度重置，回撤熔断需人工重置；
+- 回测输出 `warnings` 与 `blocked_orders` 计数（含 `insufficient_capital`）；
+- 请求体 `extra="forbid"`；
+- A 股原生支持 `1d` CSV 导入；
+- 统计类接口 30 秒缓存、审计表复合索引。

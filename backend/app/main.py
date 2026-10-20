@@ -126,6 +126,7 @@ def create_app(settings: Settings | None = None, database: Database | None = Non
     app.state.bus = bus
     app.state.market_cache = TTLCache(ttl_seconds=1.5, max_entries=32)
     app.state.candle_cache = TTLCache(ttl_seconds=2.0, max_entries=256)
+    app.state.stats_cache = TTLCache(ttl_seconds=30.0, max_entries=32)
     app.state.metrics = Metrics()
     app.state.market_engine = market_engine
     app.state.cn_market_engine = cn_market_engine
