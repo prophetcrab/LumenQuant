@@ -74,16 +74,29 @@ class EmaTrend(Strategy):
         ema_period: int = Field(default=50, ge=5, le=300, title="EMA 周期")
         adx_period: int = Field(default=14, ge=5, le=50, title="ADX 周期")
         adx_threshold: float = Field(default=20.0, ge=5, le=50, title="ADX 阈值")
+        regime_period: int = Field(
+            default=200, ge=20, le=400, title="牛熊过滤均线"
+        )
+        require_regime: bool = Field(
+            default=True,
+            title="只在长期均线上方做多",
+            description="关闭后策略会在下跌市持续开多，回测胜率通常极低",
+        )
 
     def prepare(self, candles: list[CandlePoint], params: Params) -> StrategyState:
         closes = ta.closes(candles)
         state = StrategyState(candles=candles, params=params)
         state.series["ema"] = ta.ema(closes, params.ema_period)
         state.series["adx"] = ta.adx(candles, params.adx_period)["adx"]
+        # Long-term reference: a trend-following long strategy needs the market
+        # itself to be in an uptrend. Without it the strategy keeps buying
+        # pullbacks inside a bear market (4% win rate on real 茅台 data).
+        state.series["regime"] = ta.sma(closes, params.regime_period)
         return state
 
     def warmup(self, params: Params) -> int:
-        return max(params.ema_period, params.adx_period * 2) + 2
+        base = max(params.ema_period, params.adx_period * 2) + 2
+        return max(base, params.regime_period + 2) if params.require_regime else base
 
     def evaluate(self, state: StrategyState, index: int) -> Signal:
         closes = [c.close for c in state.candles]
@@ -108,12 +121,22 @@ class EmaTrend(Strategy):
             prev_adx is not None
             and prev_adx < state.params.adx_threshold <= adx_value
         )
-        if (crossed_up and adx_value >= state.params.adx_threshold) or (
-            above and adx_rising_through
+        # ADX measures trend *strength*, not direction: a strong downtrend also
+        # pushes it above the threshold. Requiring the EMA itself to be rising
+        # keeps this a trend-following long entry instead of a falling-knife
+        # buyer (real-data win rate was 4% without this check).
+        ema_rising = prev_ema is not None and ema_value > prev_ema
+        regime_ok = True
+        if state.params.require_regime:
+            regime = state.series["regime"][index]
+            regime_ok = regime is not None and closes[index] > regime
+        if regime_ok and (
+            (crossed_up and adx_value >= state.params.adx_threshold)
+            or (above and adx_rising_through and ema_rising)
         ):
             return Signal(
                 "buy",
-                f"价格位于 EMA{state.params.ema_period} 上方，ADX={adx_value:.1f}",
+                f"价格位于上升 EMA{state.params.ema_period} 上方，ADX={adx_value:.1f}",
             )
         if closes[index - 1] >= prev_ema > closes[index]:
             return Signal("sell", "价格跌破 EMA")

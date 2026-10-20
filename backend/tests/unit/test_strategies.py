@@ -127,3 +127,45 @@ def test_ema_trend_enters_when_adx_confirms_after_cross():
     buys = [s for s in signals if s.action == "buy"]
     assert buys, "ema_trend produced no entry on a trending series"
     assert any("ADX" in s.reason for s in buys)
+
+
+def test_ema_trend_regime_filter_avoids_bear_market_entries():
+    """A long-only trend strategy must not buy inside a downtrend.
+
+    Real 茅台 data (800 bars, -19.7% buy-and-hold) produced 24 trades and a 4%
+    win rate before the regime filter; ADX measures strength, not direction.
+    """
+    strategy = get("ema_trend")
+    candles = trending_candles(600)
+    with_filter = strategy.validate_params({"require_regime": True})
+    without = strategy.validate_params({"require_regime": False})
+
+    def count_buys(params) -> int:
+        state = strategy.prepare(candles, params)
+        return sum(
+            1
+            for i in range(strategy.warmup(params), len(candles))
+            if strategy.evaluate(state, i).action == "buy"
+        )
+
+    filtered = count_buys(with_filter)
+    unfiltered = count_buys(without)
+    assert filtered <= unfiltered, "regime filter must not increase entries"
+    # The series starts with a downtrend, so the filter must suppress entries there.
+    state = strategy.prepare(candles, with_filter)
+    regime = state.series["regime"]
+    early_buys = [
+        i
+        for i in range(strategy.warmup(with_filter), 200)
+        if strategy.evaluate(state, i).action == "buy"
+    ]
+    assert all(
+        regime[i] is not None and candles[i].close > regime[i] for i in early_buys
+    )
+
+
+def test_ema_trend_regime_is_configurable():
+    strategy = get("ema_trend")
+    defaults = strategy.Params()
+    assert defaults.require_regime is True
+    assert defaults.regime_period == 200
