@@ -71,10 +71,24 @@ class BacktestService:
         cfg = BacktestConfig.from_dict(raw_config)
 
         candles = self.market.candles(symbol, timeframe=timeframe, limit=bars)
-        if len(candles) < strategy.warmup(parsed) + 3:
+        required = strategy.warmup(parsed) + 3
+        if len(candles) < required:
+            # Explain *why* so the user knows which knob to turn. Strategies with a
+            # long-term regime filter need a year of data just to warm up.
+            hints = []
+            params_dump = parsed.model_dump()
+            if params_dump.get("require_regime"):
+                period = params_dump.get("regime_period")
+                hints.append(
+                    f"该策略启用了牛熊过滤（{period} 日均线），可增大 K 线数量、"
+                    f"或设置 require_regime=false 关闭过滤"
+                )
+            if params_dump.get("slow"):
+                hints.append(f"慢线周期 {params_dump['slow']}")
+            suffix = "；".join(hints)
             raise ValidationError(
-                f"not enough data: {len(candles)} bars available, "
-                f"{strategy.warmup(parsed) + 3} required"
+                f"数据不足：仅有 {len(candles)} 根 K 线，需要至少 {required} 根。"
+                + (f"（{suffix}）" if suffix else "")
             )
         started = time.perf_counter()
         try:

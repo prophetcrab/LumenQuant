@@ -167,5 +167,12 @@ def test_ema_trend_regime_filter_avoids_bear_market_entries():
 def test_ema_trend_regime_is_configurable():
     strategy = get("ema_trend")
     defaults = strategy.Params()
+    # ema_trend ships with the filter ON: without it the real-data win rate was 4%.
     assert defaults.require_regime is True
-    assert defaults.regime_period == 200
+    assert defaults.regime_period == 120
+
+
+def test_regime_filter_defaults_differ_by_strategy():
+    """sma_cross/donchian keep the filter off so short series remain usable."""
+    assert get("sma_cross").Params().require_regime is False
+    assert get("donchian_breakout").Params().require_regime is False

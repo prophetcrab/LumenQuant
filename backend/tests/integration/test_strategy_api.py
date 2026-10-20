@@ -32,7 +32,9 @@ def test_catalog_and_detail(strategy_client):
     catalog = response.json()
     assert len(catalog) == 9
     sma = next(item for item in catalog if item["key"] == "sma_cross")
-    assert sma["defaults"] == {"fast": 10, "slow": 30}
+    assert sma["defaults"]["fast"] == 10
+    assert sma["defaults"]["slow"] == 30
+    assert sma["defaults"]["require_regime"] is False
 
     detail = strategy_client.get("/api/strategies/macd_momentum")
     assert detail.status_code == 200
@@ -46,7 +48,8 @@ def test_signal_preview(strategy_client):
     )
     assert response.status_code == 200, response.text
     body = response.json()
-    assert body["params"] == {"fast": 8, "slow": 24}
+    assert body["params"]["fast"] == 8
+    assert body["params"]["slow"] == 24
     assert len(body["overlays"]["fast"]) == len(body["overlays"]["slow"]) == 100
     for signal in body["signals"]:
         assert signal["action"] in {"buy", "sell"}

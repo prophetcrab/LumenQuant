@@ -47,7 +47,8 @@ def test_instance_lifecycle(runtime_client):
     instance = created.json()
     assert instance["running"] is False
     assert instance["strategy_name"] == "双均线交叉"
-    assert instance["params"] == {"fast": 10, "slow": 30}
+    assert instance["params"]["fast"] == 10
+    assert instance["params"]["slow"] == 30
 
     started = runtime_client.post(
         f"/api/runtime/instances/{instance['id']}/toggle", json={"running": True}
@@ -67,7 +68,8 @@ def test_instance_lifecycle(runtime_client):
         json={"params": {"fast": 5, "slow": 20}, "position_pct": 0.1},
     )
     assert updated.status_code == 200
-    assert updated.json()["params"] == {"fast": 5, "slow": 20}
+    assert updated.json()["params"]["fast"] == 5
+    assert updated.json()["params"]["slow"] == 20
 
     blocked = runtime_client.delete(f"/api/runtime/instances/{instance['id']}")
     assert blocked.status_code == 409

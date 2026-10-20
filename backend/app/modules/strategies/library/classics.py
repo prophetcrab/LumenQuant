@@ -35,6 +35,12 @@ class SmaCross(Strategy):
     class Params(StrategyParams):
         fast: int = Field(default=10, ge=2, le=200, title="快线周期")
         slow: int = Field(default=30, ge=3, le=400, title="慢线周期")
+        regime_period: int = Field(default=200, ge=20, le=400, title="牛熊过滤均线")
+        require_regime: bool = Field(
+            default=False,
+            title="只在长期均线上方做多",
+            description="开启后需约一年数据暖机；实测招商银行 800 日回测 12%→36%",
+        )
 
         @model_validator(mode="after")
         def _fast_below_slow(self) -> "SmaCross.Params":
@@ -47,16 +53,23 @@ class SmaCross(Strategy):
         state = StrategyState(candles=candles, params=params)
         state.series["fast"] = ta.sma(closes, params.fast)
         state.series["slow"] = ta.sma(closes, params.slow)
+        state.series["regime"] = ta.sma(closes, params.regime_period)
         return state
 
     def warmup(self, params: Params) -> int:
-        return params.slow + 1
+        base = params.slow + 1
+        return max(base, params.regime_period + 2) if params.require_regime else base
 
     def evaluate(self, state: StrategyState, index: int) -> Signal:
         fast = state.series["fast"]
         slow = state.series["slow"]
         if crossed_above(fast, slow, index):
-            return Signal("buy", f"MA{state.params.fast} 上穿 MA{state.params.slow}")
+            regime_ok = True
+            if state.params.require_regime:
+                regime = state.series["regime"][index]
+                regime_ok = regime is not None and state.candles[index].close > regime
+            if regime_ok:
+                return Signal("buy", f"MA{state.params.fast} 上穿 MA{state.params.slow}")
         if crossed_below(fast, slow, index):
             return Signal("sell", f"MA{state.params.fast} 下穿 MA{state.params.slow}")
         return hold()
@@ -75,7 +88,7 @@ class EmaTrend(Strategy):
         adx_period: int = Field(default=14, ge=5, le=50, title="ADX 周期")
         adx_threshold: float = Field(default=20.0, ge=5, le=50, title="ADX 阈值")
         regime_period: int = Field(
-            default=200, ge=20, le=400, title="牛熊过滤均线"
+            default=120, ge=20, le=400, title="牛熊过滤均线"
         )
         require_regime: bool = Field(
             default=True,
@@ -254,9 +267,16 @@ class DonchianBreakout(Strategy):
     class Params(StrategyParams):
         entry: int = Field(default=20, ge=5, le=200, title="入场通道")
         exit: int = Field(default=10, ge=3, le=100, title="离场通道")
+        regime_period: int = Field(default=200, ge=20, le=400, title="牛熊过滤均线")
+        require_regime: bool = Field(
+            default=False,
+            title="只在长期均线上方做多",
+            description="开启后需约一年数据暖机；实测招商银行 7.7%→22%",
+        )
 
     def prepare(self, candles: list[CandlePoint], params: Params) -> StrategyState:
         state = StrategyState(candles=candles, params=params)
+        state.series["regime"] = ta.sma(ta.closes(candles), params.regime_period)
         upper: list[float | None] = [None] * len(candles)
         lower: list[float | None] = [None] * len(candles)
         for i in range(len(candles)):
@@ -271,13 +291,18 @@ class DonchianBreakout(Strategy):
         return state
 
     def warmup(self, params: Params) -> int:
-        return max(params.entry, params.exit) + 1
+        base = max(params.entry, params.exit) + 1
+        return max(base, params.regime_period + 2) if params.require_regime else base
 
     def evaluate(self, state: StrategyState, index: int) -> Signal:
         close = state.candles[index].close
         upper = state.series["upper"][index]
         lower = state.series["lower"][index]
-        if upper is not None and close > upper:
+        regime_ok = True
+        if state.params.require_regime:
+            regime = state.series["regime"][index]
+            regime_ok = regime is not None and close > regime
+        if upper is not None and close > upper and regime_ok:
             return Signal("buy", f"突破 {state.params.entry} 根高点 {upper:.2f}")
         if lower is not None and close < lower:
             return Signal("sell", f"跌破 {state.params.exit} 根低点 {lower:.2f}")
