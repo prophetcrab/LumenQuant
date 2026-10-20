@@ -300,3 +300,41 @@ def test_runtime_instance_accepts_cn_symbol_on_cn_account(cn_client):
     # One evaluation pass must not error.
     tick = cn_client.post("/api/runtime/tick").json()
     assert tick["evaluated"][instance["id"]] in {"hold", "executed", "no_new_bar", "insufficient_data"}
+
+
+def test_symbol_creation_honours_market(cn_client):
+    """Creating an A-share symbol must not silently fall back to crypto.
+
+    The first version dropped `market` from the request schema, so A-share
+    symbols were created as crypto with USDT quote and 0.0001 lot size, which
+    then broke daily CSV import and limit calculation.
+    """
+    created = cn_client.post(
+        "/api/market/symbols",
+        json={
+            "code": "601988.SH",
+            "name": "中国银行",
+            "initial_price": 4.8,
+            "market": "cn_stock",
+            "board": "main",
+        },
+    )
+    assert created.status_code == 201, created.text
+    body = created.json()
+    assert body["market"] == "cn_stock"
+    assert body["quote"] == "CNY"
+    assert body["lot_size"] == 100.0
+    assert body["exchange"] == "SH"
+    assert body["limit_pct"] == 0.10
+
+
+def test_crypto_symbol_defaults_unchanged(cn_client):
+    created = cn_client.post(
+        "/api/market/symbols",
+        json={"code": "DOGEUSDT", "name": "Dogecoin", "initial_price": 0.12},
+    )
+    assert created.status_code == 201, created.text
+    body = created.json()
+    assert body["market"] == "crypto"
+    assert body["quote"] == "USDT"
+    assert body["lot_size"] == 0.0001

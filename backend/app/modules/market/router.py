@@ -89,6 +89,12 @@ def create_symbol(payload: SymbolCreate, request: Request, session: Session = De
         quote=payload.quote,
         tick_size=payload.tick_size,
         lot_size=payload.lot_size,
+        market=payload.market,
+        exchange=payload.exchange,
+        board=payload.board,
+        prev_close=payload.prev_close,
+        limit_pct_value=payload.limit_pct,
+        is_st=payload.is_st,
     )
 
 
