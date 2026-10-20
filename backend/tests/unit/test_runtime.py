@@ -161,3 +161,23 @@ def test_delete_requires_stop(env):
     service.set_running(view.id, False)
     service.delete(view.id)
     assert service.list(account_id=account.id) == []
+
+
+def test_sizing_explains_notional_cap_not_cash(env):
+    """A notional cap below one board lot must not be reported as missing cash."""
+    service, accounts, trading, account, _ = env
+    accounts.deposit(account.id, 900_000)  # plenty of cash
+    view = service.create(
+        account_id=account.id, strategy_key="test_buy_now", symbol="BTCUSDT",
+        timeframe="1h", params={}, position_pct=1.0,
+        max_order_notional=50, start=True,  # one lot (100 x 100) = 10,000
+    )
+    row = service._require(view.id)
+    assert service.evaluate_instance(row) == "executed"
+    logs = service.logs(view.id)
+    skipped = [log for log in logs if log.event == "skipped"]
+    assert skipped, "expected a skip log"
+    message = skipped[0].message
+    assert "max_order_notional" in message or "单笔上限" in message
+    assert "可用资金" not in message.split("；")[0] or "超过单笔上限" in message
+    assert trading.positions(account.id) == []

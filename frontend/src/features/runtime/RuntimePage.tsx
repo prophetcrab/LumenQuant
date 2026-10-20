@@ -25,6 +25,12 @@ export function RuntimePage() {
 
   const catalog = useQuery({ queryKey: ["strategies"], queryFn: api.strategies });
   const symbols = useQuery({ queryKey: ["symbols", "all"], queryFn: () => api.symbols() });
+  const cnSymbols = useQuery({
+    queryKey: ["cn-symbols"],
+    queryFn: api.cnSymbols,
+    enabled: account?.market === "cn_stock",
+    refetchInterval: 15_000,
+  });
   const instances = useQuery({
     queryKey: ["runtime-instances", accountId],
     queryFn: () => api.runtimeInstances(accountId),
@@ -123,6 +129,15 @@ export function RuntimePage() {
   }, [instances.data]);
 
   const selected = instances.data?.find((item) => item.id === selectedId) ?? null;
+  // A-share sizing guard: warn before the user creates an instance whose notional
+  // cap cannot cover a single board lot for the chosen symbol.
+  const cnLotCost = useMemo(() => {
+    if (account?.market !== "cn_stock") return 0;
+    const row = cnSymbols.data?.find((item) => item.code === symbol);
+    return row ? row.price * 100 : 0;
+  }, [account?.market, cnSymbols.data, symbol]);
+  const capTooSmall =
+    cnLotCost > 0 && Number(maxNotional) > 0 && Number(maxNotional) < cnLotCost;
 
   if (!account) {
     return <EmptyState title="请先创建账户" text="自动运行需要一个模拟账户来接收订单。" />;
@@ -288,7 +303,11 @@ export function RuntimePage() {
             <button className="button" onClick={() => setCreateOpen(false)}>
               取消
             </button>
-            <button className="button primary" disabled={create.isPending} onClick={() => create.mutate()}>
+            <button
+              className="button primary"
+              disabled={create.isPending || capTooSmall}
+              onClick={() => create.mutate()}
+            >
               {create.isPending ? "创建中…" : "创建并启动"}
             </button>
           </>
@@ -329,7 +348,15 @@ export function RuntimePage() {
           <Field label="单次仓位 %" hint="按可用现金比例开仓">
             <input className="input num" type="number" value={positionPct} onChange={(event) => setPositionPct(event.target.value)} />
           </Field>
-          <Field label="单笔名义上限" hint="风控硬上限">
+          <Field
+            label="单笔名义上限"
+            hint="风控硬上限"
+            error={
+              capTooSmall
+                ? `低于一手成本 ${cnLotCost.toFixed(2)} 元，实例将无法建仓`
+                : undefined
+            }
+          >
             <input className="input num" type="number" value={maxNotional} onChange={(event) => setMaxNotional(event.target.value)} />
           </Field>
           {Object.entries(meta?.params_schema.properties ?? {}).map(([key, schema]) => (

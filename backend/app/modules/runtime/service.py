@@ -306,14 +306,34 @@ class RuntimeService:
     def _place_entry(self, row: StrategyInstance, price: float) -> None:
         account = self.accounts.get(row.account_id)
         symbol = self.market.require_symbol(row.symbol)
-        budget = min(account.cash_balance * row.position_pct, row.max_order_notional)
+        cash_budget = account.cash_balance * row.position_pct
+        budget = min(cash_budget, row.max_order_notional)
         raw = budget / price if price else 0.0
         # Orders must respect the exchange lot step, so floor to a whole step.
         lot = symbol.lot_size or 0.0001
         quantity = math.floor(raw / lot) * lot
         quantity = round(quantity, 8)
         if quantity <= 0 or quantity * price < 10:
-            self._log(row.id, "warn", "skipped", "可用资金不足最小下单量，跳过买入", bar_time=row.last_bar_time)
+            # Say *which* limit bound the size. Reporting "cash insufficient" when
+            # the notional cap is the binding constraint sends users hunting for
+            # the wrong problem (a 1M account can still be blocked by a 200k cap
+            # when one board lot costs 257k).
+            lot_cost = lot * price
+            if lot_cost > row.max_order_notional and lot_cost > cash_budget:
+                reason = (
+                    f"一手 {lot:g} 股约需 {lot_cost:,.2f}，"
+                    f"超过可用资金 {cash_budget:,.2f} 且超过单笔上限 {row.max_order_notional:,.2f}"
+                )
+            elif lot_cost > row.max_order_notional:
+                reason = (
+                    f"一手 {lot:g} 股约需 {lot_cost:,.2f}，超过单笔上限 "
+                    f"{row.max_order_notional:,.2f}；请调高 max_order_notional"
+                )
+            else:
+                reason = (
+                    f"可用资金 {cash_budget:,.2f} 不足以买入一手（约需 {lot_cost:,.2f}）"
+                )
+            self._log(row.id, "warn", "skipped", reason, bar_time=row.last_bar_time)
             return
         order = self.trading.place_order(
             account_id=row.account_id,
