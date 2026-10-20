@@ -19,7 +19,8 @@ def cn_client(tmp_path):
         cn_seed_days=120,
         market_seed_bars=300,
         market_tick_seconds=3600,
-        runtime_enabled=False,
+        runtime_enabled=True,
+        engine_interval_seconds=3600,
         cn_session_enforced=False,
         cn_live_session_gate=False,  # rehearsal: tests run outside market hours
         live_trading_enabled=True,
@@ -338,3 +339,102 @@ def test_crypto_symbol_defaults_unchanged(cn_client):
     assert body["market"] == "crypto"
     assert body["quote"] == "USDT"
     assert body["lot_size"] == 0.0001
+
+
+def test_gateway_is_a_process_singleton(cn_client):
+    """All requests must share one gateway instance.
+
+    Previously `app.state.cn_gateway` was never set, so every request built a fresh
+    MockThsGateway: the order was accepted by one object and the reconciler polled
+    another, losing the order entirely.
+    """
+    app = cn_client.app
+    assert getattr(app.state, "cn_gateway", None) is not None
+    first = app.state.cn_gateway
+    second = app.state.cn_gateway
+    assert first is second
+
+
+def test_live_order_is_visible_to_the_gateway(cn_client):
+    account = cn_client.post(
+        "/api/accounts",
+        json={"name": "网关可见性", "kind": "live", "market": "cn_stock", "initial_balance": 500_000},
+    ).json()
+    symbols = cn_client.get("/api/cn/symbols").json()
+    target = next(
+        s for s in symbols if s["limit_down"] * 1.02 < s["price"] < s["limit_up"] * 0.98
+    )
+    placed = cn_client.post(
+        "/api/trading/orders",
+        json={
+            "account_id": account["id"],
+            "symbol": target["code"],
+            "side": "buy",
+            "order_type": "limit",
+            "quantity": 100,
+            "limit_price": round(target["limit_down"], 2),
+        },
+        headers={"X-Live-Confirm": "true"},
+    )
+    assert placed.status_code == 201, placed.text
+    broker_id = placed.json()["broker_order_id"]
+    assert broker_id
+
+    # The same gateway instance must know the order we just submitted.
+    gateway = cn_client.app.state.cn_gateway
+    status = gateway.order_status(broker_id)
+    assert status.broker_order_id == broker_id
+    assert status.status in {"open", "filled", "partially_filled"}
+
+
+def test_reconciler_sees_gateway_fills(cn_client):
+    """A fill reported by the gateway must reach local positions via reconcile."""
+    app = cn_client.app
+    account = cn_client.post(
+        "/api/accounts",
+        json={"name": "回报验证", "kind": "live", "market": "cn_stock", "initial_balance": 500_000},
+    ).json()
+    symbols = cn_client.get("/api/cn/symbols").json()
+    target = next(
+        s for s in symbols if s["limit_down"] * 1.02 < s["price"] < s["limit_up"] * 0.98
+    )
+    placed = cn_client.post(
+        "/api/trading/orders",
+        json={
+            "account_id": account["id"],
+            "symbol": target["code"],
+            "side": "buy",
+            "order_type": "limit",
+            "quantity": 200,
+            "limit_price": round(target["limit_down"], 2),
+        },
+        headers={"X-Live-Confirm": "true"},
+    ).json()
+    gateway = app.state.cn_gateway
+    gateway.fill_order(placed["broker_order_id"], 200, round(target["price"], 2))
+
+    reconciler = app.state.reconcile_engine
+    assert reconciler is not None
+    result = reconciler.tick()
+    assert result["filled"] >= 1
+
+    positions = cn_client.get(
+        "/api/trading/positions", params={"account_id": account["id"]}
+    ).json()
+    assert positions[0]["quantity"] == 200
+    assert positions[0]["available_quantity"] == 0  # T+1
+
+    orders = cn_client.get(
+        "/api/trading/orders", params={"account_id": account["id"]}
+    ).json()
+    assert orders[0]["status"] == "filled"
+
+    # Second poll must not double-book.
+    before = cn_client.get(
+        "/api/trading/positions", params={"account_id": account["id"]}
+    ).json()[0]["quantity"]
+    reconciler.tick()
+    after = cn_client.get(
+        "/api/trading/positions", params={"account_id": account["id"]}
+    ).json()[0]["quantity"]
+    assert before == after

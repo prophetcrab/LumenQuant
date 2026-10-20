@@ -51,6 +51,7 @@ def create_app(settings: Settings | None = None, database: Database | None = Non
     runtime_engine = None
     portfolio_engine = None
     reconcile_engine = None
+    cn_gateway = None
     if settings.seed_market:
         from app.modules.market.engine import MarketEngine
 
@@ -62,6 +63,12 @@ def create_app(settings: Settings | None = None, database: Database | None = Non
     from app.modules.cn.provider import CompositeLiveProvider
 
     live_provider = CompositeLiveProvider(crypto=market_engine, cn=cn_market_engine)
+    # One gateway instance per process: the reconciler polls the same object that
+    # accepted the order, so in-memory gateway state (mock or session-bound HTTP
+    # adapter) is not recreated on every request.
+    from app.modules.brokers.ths import build_ths_gateway
+
+    cn_gateway = build_ths_gateway(settings)
     if settings.runtime_enabled and (market_engine is not None or cn_market_engine is not None):
         from app.modules.runtime.engine import StrategyRuntimeEngine
         from app.modules.trading.engine import TradingEngine
@@ -77,7 +84,7 @@ def create_app(settings: Settings | None = None, database: Database | None = Non
         portfolio_engine = PortfolioEngine(db, settings, market_engine=live_provider)
         from app.modules.brokers.reconciler import LiveReconciler
 
-        reconcile_engine = LiveReconciler(db, settings)
+        reconcile_engine = LiveReconciler(db, settings, gateway=cn_gateway)
 
     @asynccontextmanager
     async def lifespan(app: FastAPI):
@@ -135,6 +142,7 @@ def create_app(settings: Settings | None = None, database: Database | None = Non
     app.state.runtime_engine = runtime_engine
     app.state.portfolio_engine = portfolio_engine
     app.state.reconcile_engine = reconcile_engine
+    app.state.cn_gateway = cn_gateway
 
     app.add_middleware(RequestContextMiddleware, metrics=app.state.metrics)
     app.add_middleware(
