@@ -55,7 +55,7 @@ export function MarketsPage() {
 
   return (
     <div className="stack" style={{ gap: 16 }}>
-      <div className="grid" style={{ gridTemplateColumns: "minmax(0, 1fr) 300px", alignItems: "start" }}>
+      <div className="analysis-grid" style={{ alignItems: "start" }}>
         <Card
           padded={false}
           title={
@@ -90,9 +90,9 @@ export function MarketsPage() {
         >
           <div style={{ padding: "6px 8px 4px" }}>
             {candles.isLoading ? (
-              <div className="skeleton" style={{ height: 520, margin: 10 }} />
+              <div className="skeleton" style={{ height: 656, margin: 10 }} />
             ) : option ? (
-              <Chart option={option} height={528} notMerge lazyUpdate />
+              <Chart option={option} height={656} notMerge lazyUpdate />
             ) : (
               <EmptyState title="暂无行情数据" text="行情引擎启动后会自动合成历史 K 线。" />
             )}

@@ -182,7 +182,7 @@ export function BacktestPage() {
             />
           </div>
 
-          <div className="grid" style={{ gridTemplateColumns: "minmax(0, 2fr) 320px" }}>
+          <div className="analysis-grid">
             <Card
               title="权益曲线"
               subtitle={`${selectedRun.strategy} · ${selectedRun.symbol} · ${selectedRun.timeframe} · ${selectedRun.bars} 根`}

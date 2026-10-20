@@ -22,6 +22,8 @@ class EquitySnapshot(Base):
     cash: Mapped[float] = mapped_column(Float)
     positions_value: Mapped[float] = mapped_column(Float)
     realized_pnl: Mapped[float] = mapped_column(Float, default=0.0)
+    # Capital in the account at this instant; lets returns exclude deposits.
+    net_contributions: Mapped[float] = mapped_column(Float, default=0.0)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=utcnow, index=True
     )

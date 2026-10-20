@@ -737,6 +737,44 @@ a {
   background: var(--negative-soft);
 }
 
+.page-stack {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+/* On wide screens keep analysis sidebars from sprawling; on narrower ones stack. */
+.analysis-grid {
+  display: grid;
+  gap: 16px;
+  grid-template-columns: minmax(0, 2fr) minmax(300px, 360px);
+}
+
+.list-detail-grid {
+  display: grid;
+  gap: 16px;
+  grid-template-columns: 400px minmax(0, 1fr);
+}
+
+.buy-sell-grid {
+  display: grid;
+  gap: 16px;
+  grid-template-columns: 360px minmax(0, 1fr);
+}
+
+@media (max-width: 1500px) {
+  .analysis-grid,
+  .list-detail-grid {
+  display: grid;
+  gap: 16px;
+  grid-template-columns: 400px minmax(0, 1fr);
+}
+
+.buy-sell-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
 @media (max-width: 1500px) {
   .grid-4 {
     grid-template-columns: repeat(2, minmax(0, 1fr));

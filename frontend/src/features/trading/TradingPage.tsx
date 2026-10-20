@@ -101,7 +101,7 @@ export function TradingPage() {
         />
       </div>
 
-      <div className="grid" style={{ gridTemplateColumns: "340px minmax(0, 1fr)" }}>
+      <div className="buy-sell-grid">
         <Card title="下单" subtitle="模拟撮合 · 含手续费与滑点">
           <div className="stack" style={{ gap: 14 }}>
             <div className="row" style={{ justifyContent: "space-between" }}>

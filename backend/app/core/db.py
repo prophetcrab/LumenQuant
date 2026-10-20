@@ -63,6 +63,28 @@ class Database:
         from app.core import schema  # noqa: F401  (imports every module model)
 
         Base.metadata.create_all(self.engine)
+        self._apply_light_migrations()
+
+    def _apply_light_migrations(self) -> None:
+        """Additive columns introduced after the first release.
+
+        create_all() never alters existing tables, and this project deliberately
+        avoids a migration framework. Each entry is idempotent and additive only.
+        """
+        from sqlalchemy import inspect, text
+
+        additions = {
+            "equity_snapshots": {"net_contributions": "FLOAT NOT NULL DEFAULT 0"},
+        }
+        inspector = inspect(self.engine)
+        with self.engine.begin() as connection:
+            for table, columns in additions.items():
+                if table not in inspector.get_table_names():
+                    continue
+                existing = {col["name"] for col in inspector.get_columns(table)}
+                for name, ddl in columns.items():
+                    if name not in existing:
+                        connection.execute(text(f"ALTER TABLE {table} ADD COLUMN {name} {ddl}"))
 
     def dispose(self) -> None:
         self.engine.dispose()

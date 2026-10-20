@@ -4,7 +4,9 @@ from fastapi import APIRouter, Depends, Query, Request
 from sqlalchemy.orm import Session
 
 from app.api.deps import get_session
+from app.core.errors import ForbiddenError
 from app.modules.accounts.service import AccountService
+from app.modules.brokers.binance import build_broker
 from app.modules.market.service import MarketService
 from app.modules.risk.policy import RiskLimits, RiskPolicy
 from app.modules.risk.service import RiskService
@@ -42,11 +44,27 @@ def build_service(request: Request, session: Session) -> TradingService:
         fee_bps=settings.fee_bps,
         slippage_bps=settings.slippage_bps,
         risk=RiskService(session),
+        broker=build_broker(settings),
     )
+
+
+def _assert_live_confirmation(request: Request, session: Session, account_id: str) -> None:
+    """Live orders need an explicit opt-in header in addition to the server switch."""
+    settings = request.app.state.settings
+    account = AccountService(
+        session, live_trading_enabled=settings.live_trading_enabled
+    ).require(account_id)
+    if account.kind != "live":
+        return
+    if not settings.live_trading_enabled:
+        raise ForbiddenError("live trading is disabled by server configuration")
+    if request.headers.get("X-Live-Confirm", "").lower() != "true":
+        raise ForbiddenError("live order requires header X-Live-Confirm: true")
 
 
 @router.post("/orders", status_code=201)
 def place_order(payload: OrderCreate, request: Request, session: Session = Depends(get_session)):
+    _assert_live_confirmation(request, session, payload.account_id)
     service = build_service(request, session)
     return service.place_order(
         account_id=payload.account_id,

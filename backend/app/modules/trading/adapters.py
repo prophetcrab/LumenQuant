@@ -11,6 +11,9 @@ class AccountCashAdapter:
     def __init__(self, accounts: AccountService) -> None:
         self.accounts = accounts
 
+    def kind(self, account_id: str) -> str:
+        return self.accounts.require(account_id).kind
+
     def cash(self, account_id: str) -> float:
         return self.accounts.cash(account_id)
 

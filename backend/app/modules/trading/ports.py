@@ -8,6 +8,8 @@ from app.modules.market.service_types import SymbolView
 
 
 class CashPort(Protocol):
+    def kind(self, account_id: str) -> str: ...
+
     def cash(self, account_id: str) -> float: ...
 
     def post_cash(

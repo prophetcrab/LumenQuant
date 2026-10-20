@@ -57,9 +57,16 @@ export function PortfolioPage() {
     yAxis: {
       type: "value",
       max: 0,
+      min: (extent: { min: number }) => (extent.min === 0 ? -1 : extent.min * 1.4),
       axisLine: { show: false },
       axisTick: { show: false },
-      axisLabel: { color: "#8a94a6", fontSize: 11, formatter: "{value}%" },
+      // Percentage with fixed precision: sub-0.1% drawdowns collapsed into
+      // duplicate "-0.0%" tick labels on the default formatter.
+      axisLabel: {
+        color: "#8a94a6",
+        fontSize: 11,
+        formatter: (value: number) => `${value.toFixed(2)}%`,
+      },
       splitLine: { lineStyle: { color: "#f0f2f6" } },
     },
     series: [
@@ -92,7 +99,7 @@ export function PortfolioPage() {
         <Stat label="现金占比" value={data ? `${(100 - data.exposure_pct).toFixed(1)}%` : "—"} meta={<span className="muted">持仓 ${money(data?.positions_value)}</span>} />
       </div>
 
-      <div className="grid" style={{ gridTemplateColumns: "minmax(0, 2fr) minmax(300px, 1fr)" }}>
+      <div className="analysis-grid">
         <Card
           title="权益与回撤"
           subtitle="快照每 10 秒最多记录一次"
@@ -154,7 +161,7 @@ export function PortfolioPage() {
 
       <RiskPanel />
 
-      <div className="grid" style={{ gridTemplateColumns: "minmax(0, 1.6fr) minmax(0, 1fr)" }}>
+      <div className="analysis-grid">
         <Card title="持仓明细" subtitle="按市值排序" padded={false}>
           {positions.data && positions.data.length > 0 ? (
             <div className="table-wrap">

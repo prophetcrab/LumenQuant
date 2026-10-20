@@ -84,7 +84,7 @@ export function DashboardPage() {
         />
       </div>
 
-      <div className="grid" style={{ gridTemplateColumns: "minmax(0, 2.1fr) minmax(300px, 1fr)" }}>
+      <div className="analysis-grid">
         <Card
           title="权益曲线"
           subtitle={`${account.name} · ${data ? dateTimeLabel(data.updated_at) : ""} 更新`}
@@ -159,7 +159,7 @@ export function DashboardPage() {
         </Card>
       </div>
 
-      <div className="grid" style={{ gridTemplateColumns: "minmax(0, 2.1fr) minmax(300px, 1fr)" }}>
+      <div className="analysis-grid">
         <Card
           title="最近订单"
           subtitle="同步自模拟撮合引擎"

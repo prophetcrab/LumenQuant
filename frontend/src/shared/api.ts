@@ -338,6 +338,7 @@ export type EquityPoint = {
   equity: number;
   cash: number;
   positions_value: number;
+  net_contributions: number;
 };
 
 export class ApiError extends Error {

@@ -91,7 +91,9 @@ class PortfolioService:
             change_pct = (equity / previous.equity - 1.0) * 100.0
 
         if record:
-            self._record(account_id, equity, cash, positions_value, realized)
+            self._record(
+                account_id, equity, cash, positions_value, realized, net_contributions
+            )
 
         return PortfolioOverview(
             account_id=account_id,
@@ -115,7 +117,15 @@ class PortfolioService:
             updated_at=iso(utcnow()),
         )
 
-    def _record(self, account_id: str, equity: float, cash: float, positions_value: float, realized: float) -> None:
+    def _record(
+        self,
+        account_id: str,
+        equity: float,
+        cash: float,
+        positions_value: float,
+        realized: float,
+        net_contributions: float,
+    ) -> None:
         last = self.session.scalars(
             select(EquitySnapshot)
             .where(EquitySnapshot.account_id == account_id)
@@ -132,6 +142,7 @@ class PortfolioService:
                 cash=cash,
                 positions_value=positions_value,
                 realized_pnl=realized,
+                net_contributions=net_contributions,
                 created_at=now,
             )
         )
@@ -147,10 +158,16 @@ class PortfolioService:
             .limit(max(2, min(limit, 5000)))
         ).all()
         equities = [row.equity for row in rows]
+        # Time-weighted return: compare capital-at-work, not raw equity, so a
+        # deposit is not mistaken for performance.
+        capital = [
+            row.equity - row.net_contributions if row.net_contributions else row.equity
+            for row in rows
+        ]
         returns: list[float] = []
         for i in range(1, len(equities)):
-            if equities[i - 1] > 0:
-                returns.append(equities[i] / equities[i - 1] - 1.0)
+            if capital[i - 1] > 0:
+                returns.append((equities[i] - equities[i - 1]) / capital[i - 1])
 
         peak = equities[0] if equities else 0.0
         max_drawdown = 0.0
@@ -201,8 +218,13 @@ class PortfolioService:
             "samples": len(equities),
             "start_equity": equities[0] if equities else 0.0,
             "current_equity": equities[-1] if equities else 0.0,
-            "total_return_pct": round(safe_div(equities[-1] - equities[0], equities[0]) * 100, 4)
-            if equities
+            # Consistent with the overview: profit against capital contributed.
+            "total_return_pct": round(
+                safe_div(equities[-1] - rows[-1].net_contributions, rows[-1].net_contributions)
+                * 100,
+                4,
+            )
+            if rows and rows[-1].net_contributions
             else 0.0,
             "max_drawdown_pct": round(max_drawdown * 100, 4),
             "max_drawdown_samples": max_streak,
@@ -233,6 +255,7 @@ class PortfolioService:
                 "equity": row.equity,
                 "cash": row.cash,
                 "positions_value": row.positions_value,
+                "net_contributions": row.net_contributions,
             }
             for row in rows
         ]

@@ -15,11 +15,12 @@ from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from app.core.audit import record_audit
-from app.core.errors import ConflictError, NotFoundError, ValidationError
+from app.core.errors import ConflictError, ForbiddenError, NotFoundError, ValidationError
 from app.core.events import EventBus, OrderFilled
 from app.core.money import round_money, round_price, round_qty
 from app.core.timeutil import iso, utcnow
 from app.modules.risk.policy import OrderIntent, RiskContext, RiskPolicy
+from app.modules.brokers.base import BrokerOrderRequest, BrokerPort
 from app.modules.risk.service import RiskService
 from app.modules.trading.models import Fill, Order, Position, new_id
 from app.modules.trading.ports import CashPort, PricePort
@@ -86,6 +87,7 @@ class TradingService:
         fee_bps: float = 10.0,
         slippage_bps: float = 3.0,
         risk: RiskService | None = None,
+        broker: BrokerPort | None = None,
     ) -> None:
         self.session = session
         self.cash = cash
@@ -95,6 +97,7 @@ class TradingService:
         self.fee_bps = fee_bps
         self.slippage_bps = slippage_bps
         self.risk = risk
+        self.broker = broker
 
     # ---------------------------------------------------------------- views
     def _order_view(self, order: Order) -> OrderView:
@@ -281,6 +284,20 @@ class TradingService:
             symbol_view,
         )
 
+        account_kind = self.cash.kind(account_id)
+        if account_kind == "live":
+            return self._place_live_order(
+                account_id=account_id,
+                symbol=symbol,
+                side=side,
+                order_type=order_type,
+                quantity=quantity,
+                limit_price=limit_price,
+                source=source,
+                client_order_id=client_order_id,
+                market_price=market_price,
+            )
+
         order = Order(
             id=new_id(),
             account_id=account_id,
@@ -317,6 +334,134 @@ class TradingService:
                     "type": order_type,
                     "quantity": quantity,
                     "status": order.status,
+                }
+            ),
+        )
+        self.session.commit()
+        self.session.refresh(order)
+        return self._order_view(order)
+
+    def _place_live_order(
+        self,
+        *,
+        account_id: str,
+        symbol: str,
+        side: str,
+        order_type: str,
+        quantity: float,
+        limit_price: float | None,
+        source: str,
+        client_order_id: str | None,
+        market_price: float,
+    ) -> OrderView:
+        """Route to the exchange, then mirror the result locally.
+
+        The exchange is the source of truth for the fill. Local position and cash
+        ledgers are updated from the *actual* fill so equity math stays consistent;
+        a live account's cash must be reconciled against the exchange balance
+        (see /api/brokers/binance/verify) before relying on it for sizing.
+        """
+        if self.broker is None:
+            raise ForbiddenError(
+                "live account requires broker credentials; set LQ_BINANCE_API_KEY/SECRET "
+                "and enable live trading"
+            )
+        result = self.broker.place_order(
+            BrokerOrderRequest(
+                symbol=symbol,
+                side=side,
+                order_type=order_type,
+                quantity=quantity,
+                limit_price=limit_price,
+                client_order_id=client_order_id,
+            )
+        )
+        order = Order(
+            id=new_id(),
+            account_id=account_id,
+            symbol=symbol,
+            side=side,
+            order_type=order_type,
+            quantity=quantity,
+            limit_price=limit_price,
+            status=result.status,
+            source=f"live:{source}",
+            client_order_id=client_order_id,
+            filled_quantity=result.filled_quantity,
+            avg_fill_price=result.avg_price,
+        )
+        self.session.add(order)
+        self.session.flush()
+
+        fill_price = result.avg_price or market_price
+        if result.filled_quantity > 0 and fill_price > 0:
+            notional = round_money(result.filled_quantity * fill_price)
+            fee = round_money(notional * self.fee_bps / 10_000.0)
+            order.fee = fee
+            position = self._position(account_id, symbol)
+            if position is None:
+                position = Position(
+                    id=new_id(),
+                    account_id=account_id,
+                    symbol=symbol,
+                    quantity=0.0,
+                    avg_price=0.0,
+                    realized_pnl=0.0,
+                )
+                self.session.add(position)
+                self.session.flush()
+            if side == "buy":
+                new_qty = round_qty(position.quantity + result.filled_quantity)
+                weighted = position.quantity * position.avg_price + notional + fee
+                position.avg_price = round_price(weighted / new_qty) if new_qty else 0.0
+                position.quantity = new_qty
+                self.cash.post_cash(
+                    account_id,
+                    amount=-round_money(notional + fee),
+                    kind="trade",
+                    ref=order.id,
+                    note=f"live buy {result.filled_quantity} {symbol} @ {fill_price}",
+                )
+            else:
+                realized = round_money((fill_price - position.avg_price) * result.filled_quantity - fee)
+                position.realized_pnl = round_money(position.realized_pnl + realized)
+                position.quantity = round_qty(position.quantity - result.filled_quantity)
+                if position.quantity <= 1e-9:
+                    position.quantity = 0.0
+                    position.avg_price = 0.0
+                self.cash.post_cash(
+                    account_id,
+                    amount=round_money(notional - fee),
+                    kind="trade",
+                    ref=order.id,
+                    note=f"live sell {result.filled_quantity} {symbol} @ {fill_price}",
+                )
+            self.session.add(
+                Fill(
+                    id=new_id(),
+                    order_id=order.id,
+                    account_id=account_id,
+                    symbol=symbol,
+                    side=side,
+                    quantity=result.filled_quantity,
+                    price=fill_price,
+                    fee=fee,
+                )
+            )
+            self.session.flush()
+
+        record_audit(
+            self.session,
+            action="order.placed_live",
+            entity="order",
+            entity_id=order.id,
+            detail=json.dumps(
+                {
+                    "broker_order_id": result.broker_order_id,
+                    "status": result.raw_status,
+                    "symbol": symbol,
+                    "side": side,
+                    "quantity": quantity,
                 }
             ),
         )

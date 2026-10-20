@@ -69,3 +69,19 @@ def test_overview_and_history(portfolio_client):
     assert payload["attribution"][0]["symbol"] == "BTCUSDT"
     assert payload["max_drawdown_pct"] >= 0
     assert set(payload) >= {"sharpe_per_sample", "profit_factor", "best_sample_pct"}
+
+
+def test_deposit_is_not_counted_as_return(portfolio_client):
+    account = portfolio_client.post(
+        "/api/accounts", json={"name": "Funded", "initial_balance": 10_000}
+    ).json()
+    portfolio_client.get("/api/portfolio/overview", params={"account_id": account["id"]})
+    portfolio_client.post(f"/api/accounts/{account['id']}/deposit", json={"amount": 10_000})
+    # Force a distinct snapshot after the deposit.
+    fresh = portfolio_client.get(
+        "/api/portfolio/overview",
+        params={"account_id": account["id"], "record": False},
+    ).json()
+    assert fresh["net_contributions"] == 20_000
+    # Pure cash deposit with no trading: return must stay near zero.
+    assert abs(fresh["total_return_pct"]) < 1e-6

@@ -16,6 +16,20 @@ export const palette = {
   teal: "#0f9b8e",
 };
 
+
+/** Round an axis bound outward to a readable step, then pad it. */
+function niceBounds(min: number, max: number): { min: number; max: number } {
+  const span = max - min;
+  const pad = span > 0 ? span * 0.08 : Math.max(Math.abs(max) * 0.002, 1);
+  const lo = min - pad;
+  const hi = max + pad;
+  const rough = (hi - lo) / 5;
+  if (rough <= 0) return { min: lo, max: hi };
+  const magnitude = 10 ** Math.floor(Math.log10(rough));
+  const step = [1, 2, 2.5, 5, 10].map((m) => m * magnitude).find((s) => s >= rough) ?? rough;
+  return { min: Math.floor(lo / step) * step, max: Math.ceil(hi / step) * step };
+}
+
 export function baseTooltip(): EChartsOption["tooltip"] {
   return {
     trigger: "axis",
@@ -53,6 +67,10 @@ export function equityOption(points: { time: string; equity: number }[], baselin
     yAxis: {
       type: "value",
       scale: true,
+      // Padded and rounded outward, so the curve never hugs the border and the
+      // tick labels stay short.
+      min: (extent: { min: number; max: number }) => niceBounds(extent.min, extent.max).min,
+      max: (extent: { min: number; max: number }) => niceBounds(extent.min, extent.max).max,
       axisLine: { show: false },
       axisTick: { show: false },
       axisLabel: { color: LABEL_COLOR, fontSize: 11 },
@@ -85,7 +103,7 @@ export function equityOption(points: { time: string; equity: number }[], baselin
               silent: true,
               symbol: "none",
               lineStyle: { color: "#c7cdd8", type: "dashed", width: 1 },
-              label: { formatter: "初始资金", color: LABEL_COLOR, fontSize: 10, position: "insideEndTop" },
+              label: { formatter: "净投入", color: LABEL_COLOR, fontSize: 10, position: "insideEndTop" },
               data: [{ yAxis: baseline }],
             }
           : undefined,
@@ -100,7 +118,9 @@ export function allocationOption(items: { symbol: string; market_value: number }
     ...(cash > 0.01 ? [{ name: "现金", value: Number(cash.toFixed(2)) }] : []),
   ];
   return {
-    animationDuration: 400,
+    // Polling re-renders this chart every few seconds; a restarting animation
+    // would leave the ring half-drawn in screenshots and feel jittery live.
+    animation: false,
     tooltip: {
       ...baseTooltip(),
       trigger: "item",
@@ -239,6 +259,10 @@ export function backtestEquityOption(points: { time: number; equity: number }[])
     yAxis: {
       type: "value",
       scale: true,
+      // Padded and rounded outward, so the curve never hugs the border and the
+      // tick labels stay short.
+      min: (extent: { min: number; max: number }) => niceBounds(extent.min, extent.max).min,
+      max: (extent: { min: number; max: number }) => niceBounds(extent.min, extent.max).max,
       axisLine: { show: false },
       axisTick: { show: false },
       axisLabel: { color: LABEL_COLOR, fontSize: 11 },

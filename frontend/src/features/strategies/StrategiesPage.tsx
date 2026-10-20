@@ -44,7 +44,7 @@ export function StrategiesPage() {
   });
 
   return (
-    <div className="grid" style={{ gridTemplateColumns: "400px minmax(0, 1fr)", alignItems: "start" }}>
+    <div className="list-detail-grid" style={{ alignItems: "start" }}>
       <div className="stack" style={{ gap: 12 }}>
         <Card title="策略库" subtitle={`${catalog.data?.length ?? 0} 个内置模板 · 点击查看`} padded={false}>
           {catalog.isLoading ? (
