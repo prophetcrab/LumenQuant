@@ -390,15 +390,77 @@ class CnMarketEngine:
                         )
                     self._update_lock_state(row, self._live.get(row.code), prev_close)
                 if closed:
-                    self._insert_closed(session, closed)
+                    fresh = self._insert_closed(session, closed)
+                    if fresh:
+                        self.upsert_daily_bars(session, fresh)
                     session.commit()
 
-    def _insert_closed(self, session, rows: list[dict]) -> None:
+    def upsert_daily_bars(self, session, closed_rows: list[dict]) -> int:
+        """Maintain the native daily bar from intraday closes.
+
+        Seeding wrote daily bars once; without this the daily series froze at the
+        seed date while intraday bars kept advancing, so daily strategies traded on
+        stale prices. Each closed intraday bar updates the current session's daily
+        O/H/L/C/volume in place.
+        """
+        if not closed_rows:
+            return 0
+        touched: dict[tuple[str, int], list[dict]] = {}
+        for row in closed_rows:
+            day_open = int(
+                datetime.combine(
+                    day_key(row["open_time"]), datetime.min.time(), tzinfo=CN_TZ
+                ).timestamp()
+                * 1000
+            )
+            touched.setdefault((row["symbol"], day_open), []).append(row)
+
+        updated = 0
+        for (symbol, day_open), bars in touched.items():
+            existing = session.scalar(
+                select(Candle).where(
+                    Candle.symbol == symbol,
+                    Candle.timeframe == "1d",
+                    Candle.open_time == day_open,
+                )
+            )
+            bars.sort(key=lambda item: item["open_time"])
+            first_open = bars[0]["open"]
+            day_high = max(bar["high"] for bar in bars)
+            day_low = min(bar["low"] for bar in bars)
+            last_close = bars[-1]["close"]
+            added_volume = sum(bar["volume"] for bar in bars)
+            if existing is None:
+                session.add(
+                    Candle(
+                        symbol=symbol,
+                        timeframe="1d",
+                        open_time=day_open,
+                        open=first_open,
+                        high=day_high,
+                        low=day_low,
+                        close=last_close,
+                        volume=round(added_volume, 2),
+                    )
+                )
+                updated += 1
+                continue
+            # Only widen the range with genuinely new bars; re-presented bars at a
+            # restart boundary must not double-count volume.
+            existing.high = max(existing.high, day_high)
+            existing.low = min(existing.low, day_low)
+            existing.close = last_close
+            existing.volume = round(existing.volume + added_volume, 2)
+            updated += 1
+        return updated
+
+    def _insert_closed(self, session, rows: list[dict]) -> list[dict]:
         """Insert closed bars, skipping any that already exist.
 
         The live bar is rebuilt from the last stored bar on restart, so a bar can
         be re-presented at the boundary. Ignoring duplicates keeps the unique
-        index as a safety net instead of a crash source.
+        index as a safety net instead of a crash source. Returns the rows that
+        were actually written, so callers never double-count volume.
         """
         existing = {
             ts
@@ -413,6 +475,7 @@ class CnMarketEngine:
         fresh = [row for row in rows if row["open_time"] not in existing]
         if fresh:
             session.execute(insert(Candle), fresh)
+        return fresh
 
     def _bar_row(self, code: str, bar: CandlePoint) -> dict:
         return {

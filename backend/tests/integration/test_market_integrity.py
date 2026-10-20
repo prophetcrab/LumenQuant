@@ -137,3 +137,43 @@ def test_crypto_still_supports_4h(dual_client):
     # is honoured rather than a specific count that depends on seed size.
     assert 0 < len(candles) <= 50
     assert all(c["time"] % (4 * 3_600_000) == 0 for c in candles)
+
+
+def test_daily_bar_advances_with_intraday(dual_client):
+    """The daily series must not freeze at the seed date.
+
+    It previously only existed for seeded history, so every daily strategy traded
+    on stale prices while intraday kept moving.
+    """
+    import time
+    from datetime import datetime, timedelta, timezone
+
+    cst = timezone(timedelta(hours=8))
+
+    def latest_daily():
+        return dual_client.get(
+            "/api/market/candles",
+            params={"symbol": "000001.SZ", "timeframe": "1d", "limit": 1},
+        ).json()["candles"][-1]
+
+    before = latest_daily()
+    # Let the live simulator close at least one 15m bar.
+    for _ in range(14):
+        time.sleep(1.05)
+        if latest_daily()["close"] != before["close"]:
+            break
+    after = latest_daily()
+    intraday = dual_client.get(
+        "/api/market/candles",
+        params={"symbol": "000001.SZ", "timeframe": "15m", "limit": 60},
+    ).json()["candles"]
+    day = datetime.fromtimestamp(after["time"] / 1000, cst).date()
+    same_day = [
+        bar for bar in intraday
+        if datetime.fromtimestamp(bar["time"] / 1000, cst).date() == day
+    ]
+    assert same_day, "no intraday bars for the latest daily bar"
+    assert after["open"] == pytest.approx(same_day[0]["open"], abs=0.02)
+    assert after["close"] == pytest.approx(same_day[-1]["close"], abs=0.02)
+    assert after["high"] == pytest.approx(max(b["high"] for b in same_day), abs=0.02)
+    assert after["low"] == pytest.approx(min(b["low"] for b in same_day), abs=0.02)
