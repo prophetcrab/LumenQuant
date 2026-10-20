@@ -57,6 +57,12 @@ class Settings(BaseSettings):
     # Only disable for rehearsal environments; never for real money.
     cn_live_session_gate: bool = True
     cn_extra_holidays: list[str] = []
+    # synthetic | tencent — real data is opt-in because it needs network access.
+    cn_data_source: str = "synthetic"
+    cn_sync_on_start: bool = False
+    cn_sync_daily_limit: int = 800
+    cn_sync_intraday_limit: int = 320
+    cn_quote_poll_seconds: float = 15.0
     cn_commission_bps: float = 2.5
     cn_min_commission: float = 5.0
     cn_stamp_duty_bps: float = 5.0

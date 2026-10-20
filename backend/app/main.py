@@ -19,6 +19,27 @@ from app.core.observability import Metrics, RequestContextMiddleware
 from app.core.security import AuthMiddleware, RateLimitMiddleware
 
 
+def _startup_sync(db: Database, settings: Settings) -> None:
+    """Best-effort real-data import; never blocks startup on network failure."""
+    from app.modules.cn.sources.tencent import TencentSource
+    from app.modules.cn.sync import CnDataSyncService
+
+    try:
+        with db.session() as session:
+            source = TencentSource(timeout=settings.request_timeout_seconds)
+            report = CnDataSyncService(session, source).sync_symbols(
+                daily_limit=settings.cn_sync_daily_limit,
+                intraday_limit=settings.cn_sync_intraday_limit,
+            )
+            logging.getLogger(__name__).info(
+                "startup data sync: %s symbols, ok=%s",
+                len(report.symbols),
+                report.ok,
+            )
+    except Exception:
+        logging.getLogger(__name__).exception("startup data sync failed; keeping local data")
+
+
 def _register_live_symbols(db: Database, provider) -> None:
     """Tell the composite provider which market owns each symbol."""
     from sqlalchemy import select as sa_select
@@ -96,6 +117,8 @@ def create_app(settings: Settings | None = None, database: Database | None = Non
             await cn_market_engine.start()
         if live_provider is not None:
             await asyncio.to_thread(_register_live_symbols, db, live_provider)
+        if settings.cn_sync_on_start and settings.cn_data_source != "synthetic":
+            await asyncio.to_thread(_startup_sync, db, settings)
         if trading_engine is not None:
             await trading_engine.start()
         if runtime_engine is not None:

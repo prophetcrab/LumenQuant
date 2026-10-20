@@ -1,4 +1,6 @@
-import { useQuery } from "@tanstack/react-query";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { useToast } from "../../shared/toast";
+import { ButtonField } from "../../components/form";
 import { api } from "../../shared/api";
 import { pct, price, timeLabel } from "../../shared/format";
 import { Badge, Card, Loader, Stat } from "../../components/ui";
@@ -9,6 +11,24 @@ export function CnMarketPage() {
   const calendar = useQuery({ queryKey: ["cn-calendar"], queryFn: () => api.cnCalendar(10), staleTime: 3600_000 });
   const symbols = useQuery({ queryKey: ["cn-symbols"], queryFn: api.cnSymbols, refetchInterval: 8_000 });
   const channels = useQuery({ queryKey: ["broker-channels"], queryFn: api.brokerChannels, staleTime: 60_000 });
+  const toast = useToast();
+  const queryClient = useQueryClient();
+  const dataSource = useQuery({ queryKey: ["cn-data-source"], queryFn: api.cnDataSource, refetchInterval: 30_000 });
+  const staleness = useQuery({ queryKey: ["cn-staleness"], queryFn: api.cnStaleness, refetchInterval: 60_000 });
+  const sync = useMutation({
+    mutationFn: () => api.cnSync(),
+    onSuccess: (report) => {
+      const total = report.symbols.reduce((sum, s) => sum + s.daily_bars + s.intraday_bars, 0);
+      toast.push(
+        report.ok
+          ? `同步完成：${report.symbols.length} 个标的，导入 ${total} 根 K 线（${report.elapsed_ms.toFixed(0)}ms）`
+          : `同步部分失败，请查看明细`,
+      );
+      queryClient.invalidateQueries();
+    },
+    onError: (error: Error) => toast.push(error.message, "error"),
+  });
+  const staleCount = (staleness.data ?? []).filter((row) => row.stale_days > 3).length;
 
   const ths = channels.data?.channels.ths;
 
@@ -34,6 +54,18 @@ export function CnMarketPage() {
           meta={<span className="muted">T+1 当日买入次日可卖</span>}
         />
         <Stat
+          label="行情数据源"
+          value={dataSource.data?.configured === "tencent" ? "腾讯实时" : "本地合成"}
+          accent={dataSource.data?.available ? "positive" : "neutral"}
+          meta={
+            <span className="muted">
+              {dataSource.data?.available
+                ? `${dataSource.data.latency_ms.toFixed(0)}ms · ${staleCount > 0 ? `${staleCount} 个标的滞后` : "数据最新"}`
+                : dataSource.data?.detail ?? "离线可用"}
+            </span>
+          }
+        />
+        <Stat
           label="同花顺通道"
           value={ths?.ready ? "就绪" : "未就绪"}
           accent={ths?.ready ? "positive" : "neutral"}
@@ -44,6 +76,14 @@ export function CnMarketPage() {
           }
         />
       </div>
+
+      {dataSource.data?.configured === "tencent" ? (
+        <div className="row" style={{ justifyContent: "flex-end" }}>
+          <ButtonField size="small" variant="default" onClick={() => sync.mutate()} disabled={sync.isPending}>
+            {sync.isPending ? "同步中…" : "从腾讯同步实时数据"}
+          </ButtonField>
+        </div>
+      ) : null}
 
       <div className="grid" style={{ gridTemplateColumns: "minmax(0, 1.6fr) minmax(320px, 1fr)" }}>
         <Card title="A股标的" subtitle="实时价、涨跌停与板块" padded={false}>

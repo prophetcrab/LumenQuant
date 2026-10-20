@@ -6,6 +6,7 @@ from app.modules.accounts.router import router as accounts_router
 from app.modules.assistant.router import router as assistant_router
 from app.modules.backtest.router import router as backtest_router
 from app.modules.brokers.router import router as brokers_router
+from app.modules.cn.data_router import router as cn_data_router
 from app.modules.cn.router import router as cn_router
 from app.modules.data.router import router as data_router
 from app.modules.market.router import router as market_router
@@ -31,6 +32,7 @@ api_router.include_router(risk_router)
 api_router.include_router(system_router)
 api_router.include_router(data_router)
 api_router.include_router(cn_router)
+api_router.include_router(cn_data_router)
 
 
 @api_router.get("/meta")

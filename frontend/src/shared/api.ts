@@ -672,6 +672,28 @@ export const api = {
   suspendSymbol: (code: string, suspended: boolean) =>
     request<SymbolInfo>(`/cn/symbols/${code}/suspend${qs({ suspended })}`, { method: "POST" }),
   settleT1: () => request<{ unlocked: number }>("/trading/settle", { method: "POST" }),
+  cnDataSource: () =>
+    request<{ configured: string; available: boolean; detail: string; latency_ms: number }>(
+      "/cn/data/source",
+    ),
+  cnSync: (codes?: string) =>
+    request<{
+      source: string;
+      ok: boolean;
+      elapsed_ms: number;
+      symbols: {
+        code: string;
+        daily_bars: number;
+        intraday_bars: number;
+        quote_price: number;
+        prev_close: number;
+        error: string;
+      }[];
+    }>(`/cn/data/sync${qs({ codes })}`, { method: "POST" }),
+  cnStaleness: () =>
+    request<{ code: string; name: string; latest_daily: number; stale_days: number }[]>(
+      "/cn/data/staleness",
+    ),
   brokerChannels: () => request<BrokerChannels>("/brokers/status"),
   thsHealth: () => request<ThsHealth>("/brokers/ths/health"),
   thsPositions: () => request<ThsPosition[]>("/brokers/ths/positions"),
