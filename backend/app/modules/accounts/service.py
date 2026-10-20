@@ -1,0 +1,291 @@
+"""Account lifecycle and cash ledger.
+
+This module knows nothing about orders or positions. Other modules consume it
+through the read-only protocols defined at the bottom of this file.
+"""
+
+from __future__ import annotations
+
+import json
+from dataclasses import asdict, dataclass
+from datetime import datetime
+from typing import Protocol
+
+from sqlalchemy import func, select
+from sqlalchemy.exc import IntegrityError
+from sqlalchemy.orm import Session
+
+from app.core.audit import record_audit
+from app.core.errors import ConflictError, ForbiddenError, NotFoundError, ValidationError
+from app.core.money import round_money
+from app.core.timeutil import iso
+from app.modules.accounts.models import Account, LedgerEntry
+
+
+@dataclass(frozen=True)
+class AccountView:
+    id: str
+    name: str
+    kind: str
+    broker: str
+    base_currency: str
+    initial_balance: float
+    leverage: float
+    status: str
+    cash_balance: float
+    created_at: str
+    updated_at: str
+
+
+@dataclass(frozen=True)
+class LedgerView:
+    id: str
+    account_id: str
+    kind: str
+    amount: float
+    balance_after: float
+    ref: str
+    note: str
+    created_at: str
+
+
+class AccountService:
+    def __init__(self, session: Session, *, live_trading_enabled: bool = False) -> None:
+        self.session = session
+        self.live_trading_enabled = live_trading_enabled
+
+    # ------------------------------------------------------------------ reads
+    def require(self, account_id: str) -> Account:
+        account = self.session.get(Account, account_id)
+        if account is None:
+            raise NotFoundError(f"account {account_id} not found")
+        return account
+
+    def cash(self, account_id: str) -> float:
+        self.require(account_id)
+        return self._cash(account_id)
+
+    def _cash(self, account_id: str) -> float:
+        total = self.session.scalar(
+            select(func.coalesce(func.sum(LedgerEntry.amount), 0.0)).where(
+                LedgerEntry.account_id == account_id
+            )
+        )
+        return round_money(float(total or 0.0))
+
+    def view(self, account: Account) -> AccountView:
+        return AccountView(
+            id=account.id,
+            name=account.name,
+            kind=account.kind,
+            broker=account.broker,
+            base_currency=account.base_currency,
+            initial_balance=round_money(account.initial_balance),
+            leverage=account.leverage,
+            status=account.status,
+            cash_balance=self._cash(account.id),
+            created_at=iso(account.created_at),
+            updated_at=iso(account.updated_at),
+        )
+
+    def list(self, *, include_archived: bool = True) -> list[AccountView]:
+        stmt = select(Account).order_by(Account.created_at.asc())
+        if not include_archived:
+            stmt = stmt.where(Account.status == "active")
+        return [self.view(a) for a in self.session.scalars(stmt).all()]
+
+    def get(self, account_id: str) -> AccountView:
+        return self.view(self.require(account_id))
+
+    def ledger(self, account_id: str, *, limit: int = 100) -> list[LedgerView]:
+        self.require(account_id)
+        rows = self.session.scalars(
+            select(LedgerEntry)
+            .where(LedgerEntry.account_id == account_id)
+            .order_by(LedgerEntry.created_at.desc())
+            .limit(limit)
+        ).all()
+        return [
+            LedgerView(
+                id=e.id,
+                account_id=e.account_id,
+                kind=e.kind,
+                amount=e.amount,
+                balance_after=e.balance_after,
+                ref=e.ref,
+                note=e.note,
+                created_at=iso(e.created_at),
+            )
+            for e in rows
+        ]
+
+    # ----------------------------------------------------------------- writes
+    def create(
+        self,
+        *,
+        name: str,
+        kind: str = "paper",
+        initial_balance: float = 100_000.0,
+        base_currency: str = "USDT",
+        broker: str | None = None,
+        leverage: float = 1.0,
+    ) -> AccountView:
+        name = name.strip()
+        if not name:
+            raise ValidationError("account name must not be empty")
+        if kind not in {"paper", "live"}:
+            raise ValidationError("account kind must be paper or live")
+        if kind == "live" and not self.live_trading_enabled:
+            raise ForbiddenError("live trading is disabled by server configuration")
+        if initial_balance <= 0:
+            raise ValidationError("initial balance must be positive")
+        if leverage < 1 or leverage > 10:
+            raise ValidationError("leverage must be between 1 and 10")
+        broker = broker or ("paper" if kind == "paper" else "binance")
+        if self.session.scalar(select(Account.id).where(Account.name == name)) is not None:
+            raise ConflictError(f"account name '{name}' already exists")
+
+        account = Account(
+            name=name,
+            kind=kind,
+            broker=broker,
+            base_currency=base_currency.upper(),
+            initial_balance=round_money(initial_balance),
+            leverage=float(leverage),
+        )
+        try:
+            self.session.add(account)
+            self.session.flush()
+            self._append_ledger(
+                account.id,
+                amount=account.initial_balance,
+                kind="initial",
+                note="initial funding",
+                current_cash=0.0,
+            )
+            record_audit(
+                self.session,
+                action="account.created",
+                entity="account",
+                entity_id=account.id,
+                detail=json.dumps({"name": name, "kind": kind}),
+            )
+            self.session.commit()
+        except IntegrityError as exc:
+            self.session.rollback()
+            raise ConflictError(f"account name '{name}' already exists") from exc
+        self.session.refresh(account)
+        return self.view(account)
+
+    def update(
+        self,
+        account_id: str,
+        *,
+        name: str | None = None,
+        status: str | None = None,
+        leverage: float | None = None,
+    ) -> AccountView:
+        account = self.require(account_id)
+        if name is not None:
+            name = name.strip()
+            if not name:
+                raise ValidationError("account name must not be empty")
+            account.name = name
+        if status is not None:
+            if status not in {"active", "archived"}:
+                raise ValidationError("status must be active or archived")
+            account.status = status
+        if leverage is not None:
+            if leverage < 1 or leverage > 10:
+                raise ValidationError("leverage must be between 1 and 10")
+            account.leverage = float(leverage)
+        record_audit(
+            self.session,
+            action="account.updated",
+            entity="account",
+            entity_id=account.id,
+            detail=json.dumps({"status": account.status, "leverage": account.leverage}),
+        )
+        try:
+            self.session.commit()
+        except IntegrityError as exc:
+            self.session.rollback()
+            raise ConflictError(f"account name '{name}' already exists") from exc
+        self.session.refresh(account)
+        return self.view(account)
+
+    def deposit(self, account_id: str, amount: float, *, note: str = "") -> AccountView:
+        if amount <= 0:
+            raise ValidationError("deposit amount must be positive")
+        account = self.require(account_id)
+        if account.status != "active":
+            raise ConflictError("cannot fund an archived account")
+        cash = self._cash(account.id)
+        self._append_ledger(account.id, amount=round_money(amount), kind="deposit", note=note, current_cash=cash)
+        record_audit(
+            self.session,
+            action="account.deposited",
+            entity="account",
+            entity_id=account.id,
+            detail=json.dumps({"amount": round_money(amount)}),
+        )
+        self.session.commit()
+        self.session.refresh(account)
+        return self.view(account)
+
+    def withdraw(self, account_id: str, amount: float, *, note: str = "") -> AccountView:
+        if amount <= 0:
+            raise ValidationError("withdraw amount must be positive")
+        account = self.require(account_id)
+        if account.kind != "paper":
+            raise ForbiddenError("withdrawals are only supported on paper accounts")
+        cash = self._cash(account.id)
+        if amount > cash:
+            raise ConflictError("insufficient cash balance")
+        self._append_ledger(
+            account.id,
+            amount=-round_money(amount),
+            kind="withdraw",
+            note=note,
+            current_cash=cash,
+        )
+        record_audit(
+            self.session,
+            action="account.withdrawn",
+            entity="account",
+            entity_id=account.id,
+            detail=json.dumps({"amount": round_money(amount)}),
+        )
+        self.session.commit()
+        self.session.refresh(account)
+        return self.view(account)
+
+    def _append_ledger(
+        self,
+        account_id: str,
+        *,
+        amount: float,
+        kind: str,
+        note: str = "",
+        ref: str = "",
+        current_cash: float | None = None,
+    ) -> LedgerEntry:
+        cash = self._cash(account_id) if current_cash is None else current_cash
+        entry = LedgerEntry(
+            account_id=account_id,
+            kind=kind,
+            amount=round_money(amount),
+            balance_after=round_money(cash + amount),
+            ref=ref,
+            note=note,
+        )
+        self.session.add(entry)
+        return entry
+
+
+class AccountReader(Protocol):
+    """Minimal read contract other modules depend on."""
+
+    def require(self, account_id: str) -> Account: ...
+
+    def cash(self, account_id: str) -> float: ...
