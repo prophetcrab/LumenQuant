@@ -105,3 +105,66 @@ def test_ensure_baseline_arms_breaker_without_background_tick(database):
             context(equity=45_000, day_start_equity=armed.day_start_equity)
         )
         assert not decision.allowed
+
+
+def test_daily_baseline_rolls_over_on_new_day(database, monkeypatch):
+    """A new trading day must reset the daily-loss window and release the breaker."""
+    from app.modules.accounts.service import AccountService
+    from app.modules.risk.service import RiskService
+
+    with database.session() as session:
+        accounts = AccountService(session)
+        account = accounts.create(name="跨日账户", initial_balance=100_000, market="crypto")
+        service = RiskService(session)
+
+        monkeypatch.setattr(
+            "app.modules.risk.service.risk_day_key",
+            lambda market, ts_ms=None: "2026-10-20",
+        )
+        service.observe(account.id, 100_000)
+        state = service.trip(account.id, "daily loss limit hit")
+        assert state.breaker_active is True
+        assert state.day_start_equity == pytest.approx(100_000)
+
+        monkeypatch.setattr(
+            "app.modules.risk.service.risk_day_key",
+            lambda market, ts_ms=None: "2026-10-21",
+        )
+        fresh = service.observe(account.id, 94_000)
+        assert fresh.breaker_active is False
+        assert fresh.day_start_equity == pytest.approx(94_000)
+        assert fresh.day_key == "2026-10-21"
+
+
+def test_peak_equity_survives_rollover(database, monkeypatch):
+    """Drawdown memory must not be erased by a new day."""
+    from app.modules.accounts.service import AccountService
+    from app.modules.risk.service import RiskService
+
+    with database.session() as session:
+        accounts = AccountService(session)
+        account = accounts.create(name="峰值账户", initial_balance=200_000, market="crypto")
+        service = RiskService(session)
+        monkeypatch.setattr(
+            "app.modules.risk.service.risk_day_key",
+            lambda market, ts_ms=None: "2026-10-20",
+        )
+        service.observe(account.id, 200_000)
+        monkeypatch.setattr(
+            "app.modules.risk.service.risk_day_key",
+            lambda market, ts_ms=None: "2026-10-21",
+        )
+        rolled = service.observe(account.id, 150_000)
+        assert rolled.peak_equity == pytest.approx(200_000)
+        assert rolled.day_start_equity == pytest.approx(150_000)
+
+
+def test_cn_risk_day_uses_beijing_date():
+    from datetime import datetime, timezone
+
+    from app.modules.risk.daykey import risk_day_key
+
+    # 2026-10-20 23:30 UTC is 2026-10-21 07:30 Beijing.
+    ts = int(datetime(2026, 10, 20, 23, 30, tzinfo=timezone.utc).timestamp() * 1000)
+    assert risk_day_key("crypto", ts) == "2026-10-20"
+    assert risk_day_key("cn_stock", ts) == "2026-10-21"

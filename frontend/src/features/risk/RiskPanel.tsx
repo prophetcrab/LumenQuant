@@ -44,12 +44,15 @@ export function RiskPanel() {
               <Badge tone={tripped ? "red" : "green"}>{tripped ? "已熔断" : "正常"}</Badge>
             </div>
             <div className="row" style={{ justifyContent: "space-between", fontSize: 12.5 }}>
-              <span className="muted">日内基准权益</span>
-              <span className="num">{state.data.day_start_equity ? `$${money(state.data.day_start_equity)}` : "—"}</span>
+              <span className="muted">
+                日内基准权益
+                {state.data.day_key ? <span className="helper"> · {state.data.day_key}</span> : null}
+              </span>
+              <span className="num">{state.data.day_start_equity ? money(state.data.day_start_equity) : "—"}</span>
             </div>
             <div className="row" style={{ justifyContent: "space-between", fontSize: 12.5 }}>
               <span className="muted">历史峰值权益</span>
-              <span className="num">{state.data.peak_equity ? `$${money(state.data.peak_equity)}` : "—"}</span>
+              <span className="num">{state.data.peak_equity ? money(state.data.peak_equity) : "—"}</span>
             </div>
             {tripped ? (
               <>
@@ -59,7 +62,9 @@ export function RiskPanel() {
                 </button>
               </>
             ) : (
-              <div className="helper">日损失或回撤触线后会自动禁止新开仓，已持仓不受影响。</div>
+              <div className="helper">
+                日损失或回撤触线后自动禁止新开仓；跨交易日后日内亏损额度会自动重置，回撤峰值保留。
+              </div>
             )}
           </div>
         )}
@@ -68,9 +73,9 @@ export function RiskPanel() {
       <Card title="限额" subtitle="服务端配置">
         {limits.data ? (
           <div className="stack" style={{ gap: 8 }}>
-            <Row label="单笔名义上限" value={`$${money(limits.data.max_order_notional, 0)}`} />
-            <Row label="单标的持仓上限" value={`$${money(limits.data.max_position_notional, 0)}`} />
-            <Row label="最小下单金额" value={`$${money(limits.data.min_order_notional, 0)}`} />
+            <Row label="单笔名义上限" value={money(limits.data.max_order_notional, 0)} />
+            <Row label="单标的持仓上限" value={money(limits.data.max_position_notional, 0)} />
+            <Row label="最小下单金额" value={money(limits.data.min_order_notional, 0)} />
             <Row label="每分钟订单数" value={String(limits.data.max_orders_per_minute)} />
             <Row label="日损失熔断" value={limits.data.max_daily_loss_pct ? pct(-limits.data.max_daily_loss_pct * 100) : "关闭"} />
             <Row label="回撤熔断" value={limits.data.max_drawdown_pct ? `${(limits.data.max_drawdown_pct * 100).toFixed(0)}%` : "关闭"} />

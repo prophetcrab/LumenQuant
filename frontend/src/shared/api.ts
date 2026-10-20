@@ -362,6 +362,7 @@ export type RiskState = {
   breaker_active: boolean;
   breaker_reason: string;
   updated_at: string;
+  day_key: string;
 };
 
 export type BrokerStatus = {

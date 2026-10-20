@@ -88,6 +88,7 @@ class Database:
             "accounts": {"market": "VARCHAR(16) NOT NULL DEFAULT 'crypto'"},
             "positions": {"available_quantity": "FLOAT NOT NULL DEFAULT 0"},
             "orders": {"broker_order_id": "VARCHAR(64) NOT NULL DEFAULT ''"},
+            "risk_states": {"day_key": "VARCHAR(10) NOT NULL DEFAULT ''"},
         }
         inspector = inspect(self.engine)
         with self.engine.begin() as connection:
