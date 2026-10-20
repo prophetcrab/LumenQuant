@@ -45,7 +45,7 @@ powershell -ExecutionPolicy Bypass -File .\scripts\start-all.ps1
 powershell -ExecutionPolicy Bypass -File .\scripts\run-tests.ps1
 ```
 
-当前：**119 项后端测试全绿**，前端 `tsc` 零错误、生产构建通过。
+当前：**219 项后端测试全绿**，前端 `tsc` 零错误、生产构建通过。
 
 ## 文档
 

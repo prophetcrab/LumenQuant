@@ -68,7 +68,7 @@
 
 ```powershell
 cd D:\LumenQuant\backend
-..\.venv\Scripts\python.exe -m pytest -q        # 211 passed
+..\.venv\Scripts\python.exe -m pytest -q        # 219 passed
 cd ..\frontend
 npx tsc --noEmit; npx vite build                # 0 errors
 ```
@@ -105,3 +105,23 @@ npx tsc --noEmit; npx vite build                # 0 errors
 - 请求体 `extra="forbid"`；
 - A 股原生支持 `1d` CSV 导入；
 - 统计类接口 30 秒缓存、审计表复合索引。
+
+### 连续迭代第 12–16 轮
+
+| 轮次 | 内容 | 证据 |
+|---|---|---|
+| C12 | 统计接口缓存（162ms→2ms）；补建从未生效的索引 | `test_schema_integrity.py` |
+| C13 | 实盘网关单例化：下单与回报器共享同一实例 | `test_gateway_is_a_process_singleton`、`test_reconciler_sees_gateway_fills` |
+| C14 | 策略路由改用复合行情 provider；暴露 clock | `test_cn_signal_preview_uses_live_provider` |
+| C15 | 空库双市场全流程验收 18/18 | `docs/rounds/C15-final-acceptance.md` |
+| C16 | 加速长时间运行（20000x），K 线不越界、状态不增长 | `test_long_run.py` |
+
+## 尚未验证（需外部条件，不作虚假声明）
+
+| 项 | 原因 | 如何验证 |
+|---|---|---|
+| 真实 A 股行情源 | 需数据供应商账号 | 接入 AkShare/BaoStock 后重跑策略矩阵 |
+| 真实同花顺网关 | 需券商程序化交易权限与授权网关 | 配置 `LQ_THS_GATEWAY_URL` 后跑 `/api/brokers/ths/health` 与对账 |
+| 24 小时以上连续运行 | 加速测试不能替代真实时钟与 I/O | 长驻进程观察内存、日志、定时器漂移 |
+| 跨月/跨年边界 | 加速测试只覆盖数日 | 用真实日历推进或注入日期 |
+| 真实资金与滑点 | 模拟撮合非真实订单簿 | 仅以实盘小仓位逐步验证 |
