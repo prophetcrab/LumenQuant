@@ -74,8 +74,11 @@ def test_limit_up_open_blocks_buy():
     result = BacktestEngine(cn_config(), cn_fees=CnFeeSchedule()).run(
         BuyAndHold(), BuyAndHold.Params(), candles, "1d"
     )
+    # The limit-up open is refused, but the repeating signal enters on the next
+    # tradable bar instead of silently skipping the whole series.
     assert result.metrics["blocked_orders"]["limit_up"] >= 1
-    assert result.trades == []
+    assert len(result.trades) == 1
+    assert result.trades[0].entry_price == pytest.approx(11.0)
 
 
 def test_limit_down_open_blocks_sell():
@@ -114,3 +117,43 @@ def test_cn_fees_reduce_pnl_vs_free():
     )
     assert paid.metrics["final_equity"] < free.metrics["final_equity"]
     assert paid.trades[0].fee > free.trades[0].fee
+
+
+def test_insufficient_capital_is_reported_not_silent():
+    # One board lot of a 300 yuan stock needs 30k; 10k capital cannot buy it.
+    candles = daily_candles([300.0] * 30)
+    config = cn_config(initial_capital=10_000)
+    result = BacktestEngine(config, cn_fees=CnFeeSchedule()).run(
+        BuyAndHold(), BuyAndHold.Params(), candles, "1d"
+    )
+    assert result.trades == []
+    assert result.metrics["blocked_orders"]["insufficient_capital"] >= 1
+    warning = " ".join(result.metrics["warnings"])
+    assert "资金不足" in warning and "一手" in warning
+
+
+def test_no_signal_is_reported():
+    # Flat prices produce no entry for a buy-and-hold with warmup only at index 1,
+    # but with enough capital it should trade; verify the empty-signal path with
+    # a strategy that never trades.
+    from app.modules.strategies.base import Strategy, StrategyParams, StrategyState, hold
+
+    class NeverTrades(Strategy):
+        key = "test_never"
+        name = "never"
+
+        class Params(StrategyParams):
+            pass
+
+        def prepare(self, state_candles, params):
+            return StrategyState(candles=state_candles, params=params)
+
+        def evaluate(self, state, index):
+            return hold()
+
+    candles = daily_candles([10.0] * 30)
+    result = BacktestEngine(cn_config(), cn_fees=CnFeeSchedule()).run(
+        NeverTrades(), NeverTrades.Params(), candles, "1d"
+    )
+    assert result.trades == []
+    assert "没有产生可执行交易" in " ".join(result.metrics["warnings"])

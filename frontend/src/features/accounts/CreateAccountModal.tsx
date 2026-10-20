@@ -13,6 +13,8 @@ export function CreateAccountModal({ open, onClose }: { open: boolean; onClose: 
   const [market, setMarket] = useState<"crypto" | "cn_stock">("crypto");
   const [name, setName] = useState("研究账户");
   const [balance, setBalance] = useState("100000");
+  // A-share board lots are 100 shares; 茅台 alone needs ~¥300k for one lot.
+  const suggestedBalance = market === "cn_stock" ? "500000" : "100000";
   const [leverage, setLeverage] = useState("1");
 
   const mutation = useMutation({
@@ -56,7 +58,15 @@ export function CreateAccountModal({ open, onClose }: { open: boolean; onClose: 
       }
     >
       <Field label="市场" hint="A股账户为人民币现金账户，不支持杠杆与做空">
-        <select className="select" value={market} onChange={(event) => setMarket(event.target.value as "crypto" | "cn_stock")}>
+        <select
+          className="select"
+          value={market}
+          onChange={(event) => {
+            const next = event.target.value as "crypto" | "cn_stock";
+            setMarket(next);
+            setBalance(next === "cn_stock" ? "500000" : "100000");
+          }}
+        >
           <option value="crypto">加密货币（24/7）</option>
           <option value="cn_stock">A股（沪深，T+1）</option>
         </select>
@@ -71,6 +81,7 @@ export function CreateAccountModal({ open, onClose }: { open: boolean; onClose: 
           min={1}
           value={balance}
           onChange={(event) => setBalance(event.target.value)}
+          placeholder={suggestedBalance}
         />
       </Field>
       {market === "crypto" ? (

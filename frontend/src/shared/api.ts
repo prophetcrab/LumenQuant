@@ -181,7 +181,13 @@ export type BacktestMetrics = {
   buy_hold_pct: number;
   market?: string;
   periods_per_year?: number;
-  blocked_orders?: { limit_up: number; limit_down: number; t_plus_one: number };
+  blocked_orders?: {
+    limit_up: number;
+    limit_down: number;
+    t_plus_one: number;
+    insufficient_capital?: number;
+  };
+  warnings?: string[];
 };
 
 export type BacktestTrade = {

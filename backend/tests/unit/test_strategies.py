@@ -79,10 +79,16 @@ def test_every_strategy_produces_signals_on_trending_data(key):
     assert signals, f"{key} produced no signals"
 
 
-def test_buy_and_hold_single_entry():
+def test_buy_and_hold_signals_every_bar_from_warmup():
+    """The signal is intentionally repeatable.
+
+    The runtime evaluates only the latest bar, so a "fire once at index 1"
+    signal would never reach a live instance. The backtester's single-position
+    rule prevents repeated entries.
+    """
     signals = run_strategy("buy_and_hold")
-    assert len(signals) == 1
-    assert signals[0][1].action == "buy"
+    assert len(signals) == len(trending_candles()) - 1
+    assert all(action == "buy" for _, signal in signals for action in [signal.action])
 
 
 def test_sma_cross_obeys_warmup():
@@ -101,3 +107,23 @@ def test_invalid_params_rejected():
 def test_unknown_strategy():
     with pytest.raises(NotFoundError):
         get("grail")
+
+
+def test_ema_trend_enters_when_adx_confirms_after_cross():
+    """ADX often crosses its threshold *after* price crossed the EMA.
+
+    The original rule required both on the same bar and produced zero entries on
+    real data; the second trigger must cover the trend-confirmation case.
+    """
+    from app.modules.strategies.library.classics import EmaTrend
+
+    strategy = EmaTrend()
+    params = strategy.validate_params({"ema_period": 10, "adx_period": 5, "adx_threshold": 18})
+    candles = trending_candles(300)
+    state = strategy.prepare(candles, params)
+    signals = [
+        strategy.evaluate(state, i) for i in range(strategy.warmup(params), len(candles))
+    ]
+    buys = [s for s in signals if s.action == "buy"]
+    assert buys, "ema_trend produced no entry on a trending series"
+    assert any("ADX" in s.reason for s in buys)

@@ -118,7 +118,14 @@ class BacktestEngine:
         equity_points: list[dict] = []
         equity_values: list[float] = []
         bars_in_market = 0
-        blocked = {"limit_up": 0, "limit_down": 0, "t_plus_one": 0}
+        blocked = {
+            "limit_up": 0,
+            "limit_down": 0,
+            "t_plus_one": 0,
+            "insufficient_capital": 0,
+        }
+        warnings: list[str] = []
+        min_lot_cost: float | None = None
 
         def buy_price(price: float) -> float:
             if cfg.market == "cn_stock":
@@ -151,6 +158,14 @@ class BacktestEngine:
                     quantity = (
                         round_qty(gross) if cfg.lot_size > 0 else math.floor(gross * 1e8) / 1e8
                     )
+                    if cfg.lot_size > 0:
+                        # One board lot may simply cost more than the capital.
+                        # Silence here used to yield "0 trades, 0% return" with no
+                        # explanation, which reads as a broken strategy.
+                        lot_cost = cfg.lot_size * price
+                        min_lot_cost = lot_cost if min_lot_cost is None else min(min_lot_cost, lot_cost)
+                        if quantity <= 0 and lot_cost > cash:
+                            blocked["insufficient_capital"] += 1
                     if quantity > 0:
                         fee = self._fee("buy", quantity * price)
                         cost = round_money(quantity * price + fee)
@@ -245,7 +260,16 @@ class BacktestEngine:
             bars_in_market=bars_in_market,
             market=cfg.market,
         )
+        if blocked["insufficient_capital"] and not trades:
+            warnings.append(
+                f"资金不足以买入一手：一手 {cfg.lot_size:g} 股约需 "
+                f"{min_lot_cost:,.2f}，初始资金 {cfg.initial_capital:,.2f}。"
+                "请提高初始资金或换用单价更低的标的。"
+            )
+        if not trades and not warnings:
+            warnings.append("区间内没有产生可执行交易（策略未触发或被规则拦截）。")
         metrics["blocked_orders"] = blocked
+        metrics["warnings"] = warnings
         return BacktestResult(
             equity_curve=equity_points,
             trades=trades,
@@ -253,7 +277,6 @@ class BacktestEngine:
             bars_in_market=bars_in_market,
             blocked=blocked,
         )
-
     def _close(
         self,
         position: _OpenPosition,

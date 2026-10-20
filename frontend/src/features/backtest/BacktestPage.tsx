@@ -157,6 +157,29 @@ export function BacktestPage() {
 
       {metrics && selectedRun ? (
         <>
+          {(metrics.warnings ?? []).length > 0 ? (
+            <div
+              style={{
+                display: "flex",
+                gap: 10,
+                alignItems: "flex-start",
+                padding: "12px 16px",
+                borderRadius: 12,
+                background: "var(--warning-soft)",
+                border: "1px solid #f3ddb8",
+                color: "#7a4a06",
+                fontSize: 13,
+                lineHeight: 1.6,
+              }}
+            >
+              <span style={{ fontWeight: 700 }}>提示</span>
+              <div>
+                {(metrics.warnings ?? []).map((warn) => (
+                  <div key={warn}>{warn}</div>
+                ))}
+              </div>
+            </div>
+          ) : null}
           <div className="grid grid-4">
             <Stat
               label="总收益"
@@ -208,6 +231,28 @@ export function BacktestPage() {
                 <MetricRow label="最差一笔" value={pct(metrics.worst_trade_pct, 2)} />
                 <MetricRow label="平均持仓" value={`${metrics.avg_hold_bars.toFixed(1)} 根`} />
                 <MetricRow label="市场暴露" value={`${metrics.exposure_pct.toFixed(1)}%`} />
+                {metrics.blocked_orders ? (
+                  <>
+                    <MetricRow
+                      label="涨停未成交"
+                      value={`${metrics.blocked_orders.limit_up} 次`}
+                    />
+                    <MetricRow
+                      label="跌停未成交"
+                      value={`${metrics.blocked_orders.limit_down} 次`}
+                    />
+                    <MetricRow
+                      label="T+1 拦截"
+                      value={`${metrics.blocked_orders.t_plus_one} 次`}
+                    />
+                    {metrics.blocked_orders.insufficient_capital ? (
+                      <MetricRow
+                        label="资金不足一手"
+                        value={`${metrics.blocked_orders.insufficient_capital} 次`}
+                      />
+                    ) : null}
+                  </>
+                ) : null}
               </div>
             </Card>
           </div>

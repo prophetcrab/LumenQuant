@@ -96,8 +96,25 @@ class EmaTrend(Strategy):
         prev_ema = ema_line[index - 1]
         if prev_ema is None:
             return hold()
-        if closes[index - 1] <= prev_ema < closes[index] and adx_value >= state.params.adx_threshold:
-            return Signal("buy", f"价格上穿 EMA{state.params.ema_period}，ADX={adx_value:.1f}")
+        # Entry has two acceptable triggers so a trend that strengthens *after*
+        # the crossing is not missed (the strict "cross + ADX together" rule can
+        # leave a whole backtest with zero entries on real data):
+        #   1. price crosses above EMA while ADX already confirms strength;
+        #   2. price is already above EMA and ADX crosses the threshold.
+        crossed_up = closes[index - 1] <= prev_ema < closes[index]
+        above = closes[index] > ema_value
+        prev_adx = adx_line[index - 1]
+        adx_rising_through = (
+            prev_adx is not None
+            and prev_adx < state.params.adx_threshold <= adx_value
+        )
+        if (crossed_up and adx_value >= state.params.adx_threshold) or (
+            above and adx_rising_through
+        ):
+            return Signal(
+                "buy",
+                f"价格位于 EMA{state.params.ema_period} 上方，ADX={adx_value:.1f}",
+            )
         if closes[index - 1] >= prev_ema > closes[index]:
             return Signal("sell", "价格跌破 EMA")
         return hold()
@@ -333,6 +350,10 @@ class BuyAndHold(Strategy):
         return 1
 
     def evaluate(self, state: StrategyState, index: int) -> Signal:
-        if index == 1:
+        # Emit on every bar from warmup onward rather than only at index==1:
+        # the runtime evaluates just the latest bar, so a "fire once at the start"
+        # signal would never reach a live/paper instance. Position state decides
+        # whether this actually opens anything.
+        if index >= 1:
             return Signal("buy", "基准建仓")
         return hold()
