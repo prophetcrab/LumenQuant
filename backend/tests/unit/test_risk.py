@@ -77,3 +77,31 @@ def test_validate_raises():
     policy = RiskPolicy()
     with pytest.raises(Exception):
         policy.validate(intent(quantity=0), context(), SYMBOL)
+
+
+def test_ensure_baseline_arms_breaker_without_background_tick(database):
+    """The first order must seed the daily baseline.
+
+    Otherwise day_start_equity stays 0, the daily-loss formula is skipped, and the
+    breaker is silently inert until the portfolio snapshotter happens to run.
+    """
+    from app.modules.accounts.service import AccountService
+    from app.modules.risk.service import RiskService
+
+    with database.session() as session:
+        accounts = AccountService(session)
+        account = accounts.create(name="基准账户", initial_balance=50_000, market="crypto")
+        service = RiskService(session)
+        view = service.state(account.id)
+        assert view.day_start_equity == 0.0
+
+        armed = service.ensure_baseline(account.id, 50_000)
+        assert armed.day_start_equity == 50_000
+        assert armed.peak_equity == 50_000
+
+        # Simulate a 10% loss: the breaker now has a reference to compare against.
+        policy = RiskPolicy(RiskLimits(max_daily_loss_pct=0.05))
+        decision = policy.breaker(
+            context(equity=45_000, day_start_equity=armed.day_start_equity)
+        )
+        assert not decision.allowed

@@ -52,6 +52,23 @@ class RiskService:
             updated_at=iso(row.updated_at),
         )
 
+    def ensure_baseline(self, account_id: str, equity: float) -> RiskStateView:
+        """Create baselines on first use without committing the caller's transaction.
+
+        The order path calls this so the daily-loss breaker has a reference even
+        before the background snapshotter has run for the day; leaving it at 0
+        silently disabled the breaker until the first portfolio tick.
+        """
+        row = self._row(account_id, create=True)
+        assert row is not None
+        if row.day_start_equity <= 0:
+            row.day_start_equity = equity
+        if equity > row.peak_equity:
+            row.peak_equity = equity
+        row.updated_at = utcnow()
+        self.session.flush()
+        return self.state(account_id)
+
     def observe(self, account_id: str, equity: float) -> RiskStateView:
         """Update baselines with the latest equity mark."""
         row = self._row(account_id, create=True)

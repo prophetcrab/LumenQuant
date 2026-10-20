@@ -347,6 +347,10 @@ class TradingService:
             # Account-level kill switch runs before per-order limits.
             state = self.risk.state(account_id)
             equity = self._equity(account_id, ctx.cash)
+            if state.day_start_equity <= 0 or state.peak_equity <= 0:
+                # First order of the session: seed the baseline from current
+                # equity so the breaker is armed from the start.
+                state = self.risk.ensure_baseline(account_id, equity)
             ctx = RiskContext(
                 cash=ctx.cash,
                 position_qty=ctx.position_qty,
