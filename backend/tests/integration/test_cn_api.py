@@ -438,3 +438,26 @@ def test_reconciler_sees_gateway_fills(cn_client):
         "/api/trading/positions", params={"account_id": account["id"]}
     ).json()[0]["quantity"]
     assert before == after
+
+
+def test_cn_signal_preview_uses_live_provider(cn_client):
+    """Strategy previews for A-share symbols must use the composite live provider.
+
+    The strategies router previously built its own MarketService around the crypto
+    engine only, so A-share previews silently fell back to stored bars and could
+    not see the in-progress candle.
+    """
+    symbols = cn_client.get("/api/cn/symbols").json()
+    response = cn_client.post(
+        "/api/strategies/sma_cross/signals",
+        json={
+            "symbol": symbols[0]["code"],
+            "timeframe": "1d",
+            "limit": 120,
+            "params": {"fast": 5, "slow": 20},
+        },
+    )
+    assert response.status_code == 200, response.text
+    body = response.json()
+    assert body["symbol"] == symbols[0]["code"]
+    assert len(body["overlays"]["fast"]) == len(body["overlays"]["slow"])

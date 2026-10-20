@@ -15,6 +15,20 @@ class CompositeLiveProvider:
         self.cn = cn
         self._symbol_market: dict[str, str] = {}
 
+    @property
+    def clock(self):
+        """Expose a clock so MarketService can timestamp responses.
+
+        Crypto and A-share run on separate simulated clocks; the crypto one is
+        the better default because it advances continuously. Consumers that need
+        the Beijing session clock read `cn.clock` through /api/cn/session.
+        """
+        if self.crypto is not None:
+            return getattr(self.crypto, "clock", None)
+        if self.cn is not None:
+            return getattr(self.cn, "clock", None)
+        return None
+
     def register(self, symbol: str, market: str) -> None:
         self._symbol_market[symbol.upper()] = market
 
