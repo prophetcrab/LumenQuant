@@ -28,6 +28,9 @@ const PortfolioPage = lazy(() =>
 const AccountsPage = lazy(() =>
   import("./features/accounts/AccountsPage").then((m) => ({ default: m.AccountsPage })),
 );
+const SystemPage = lazy(() =>
+  import("./features/system/SystemPage").then((m) => ({ default: m.SystemPage })),
+);
 const AssistantPage = lazy(() =>
   import("./features/assistant/AssistantPage").then((m) => ({ default: m.AssistantPage })),
 );
@@ -46,6 +49,7 @@ export default function App() {
           <Route path="/portfolio" element={<PortfolioPage />} />
           <Route path="/accounts" element={<AccountsPage />} />
           <Route path="/assistant" element={<AssistantPage />} />
+          <Route path="/system" element={<SystemPage />} />
           <Route path="*" element={<Navigate to="/" replace />} />
         </Routes>
       </Suspense>

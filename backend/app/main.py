@@ -14,6 +14,7 @@ from app.core.config import Settings, get_settings
 from app.core.db import Database
 from app.core.errors import AppError
 from app.core.events import EventBus
+from app.core.observability import Metrics, RequestContextMiddleware
 
 
 def create_app(settings: Settings | None = None, database: Database | None = None) -> FastAPI:
@@ -81,11 +82,13 @@ def create_app(settings: Settings | None = None, database: Database | None = Non
     app.state.bus = bus
     app.state.market_cache = TTLCache(ttl_seconds=1.5, max_entries=32)
     app.state.candle_cache = TTLCache(ttl_seconds=2.0, max_entries=256)
+    app.state.metrics = Metrics()
     app.state.market_engine = market_engine
     app.state.trading_engine = trading_engine
     app.state.runtime_engine = runtime_engine
     app.state.portfolio_engine = portfolio_engine
 
+    app.add_middleware(RequestContextMiddleware, metrics=app.state.metrics)
     app.add_middleware(
         CORSMiddleware,
         allow_origins=settings.cors_origins,

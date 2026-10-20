@@ -39,6 +39,7 @@ const NAV: { group: string; items: NavItem[] }[] = [
     items: [
       { to: "/accounts", label: "账户", icon: <Icon path="M4 7h16v11a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V7Zm0 0 2-3h12l2 3M8 12h3" /> },
       { to: "/assistant", label: "AI 助手", icon: <Icon path="M12 3l1.8 5.2L19 10l-5.2 1.8L12 17l-1.8-5.2L5 10l5.2-1.8L12 3Zm6 11 .9 2.1L21 17l-2.1.9L18 20l-.9-2.1L15 17l2.1-.9L18 14Z" /> },
+      { to: "/system", label: "系统", icon: <Icon path="M4 6h16M4 12h16M4 18h10M18 16v4m0 0 2-2m-2 2-2-2" /> },
     ],
   },
 ];
@@ -53,6 +54,7 @@ const TITLES: Record<string, { title: string; subtitle: string }> = {
   "/portfolio": { title: "组合", subtitle: "权益曲线、回撤与风险敞口" },
   "/accounts": { title: "账户", subtitle: "资金、账本与账户设置" },
   "/assistant": { title: "AI 助手", subtitle: "用自然语言查询账户与策略" },
+  "/system": { title: "系统", subtitle: "运行指标、后台引擎与审计日志" },
 };
 
 export function Layout({ children }: { children: ReactNode }) {

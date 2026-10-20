@@ -286,6 +286,29 @@ export type Analytics = {
   }[];
 };
 
+export type SystemMetrics = {
+  requests: {
+    uptime_seconds: number;
+    requests: number;
+    server_errors: number;
+    error_rate: number;
+    status_codes: Record<string, number>;
+    slowest_routes: [string, { count: number; errors: number; avg_ms: number; max_ms: number }][];
+  };
+  caches: Record<string, { entries: number; hits: number; misses: number; hit_rate: number }>;
+  engines: Record<string, boolean>;
+};
+
+export type AuditEntry = {
+  id: string;
+  actor: string;
+  action: string;
+  entity: string;
+  entity_id: string;
+  detail: Record<string, unknown>;
+  created_at: string;
+};
+
 export type Overview = {
   account_id: string;
   account_name: string;
@@ -484,6 +507,11 @@ export const api = {
   resetRisk: (accountId: string) =>
     request<RiskState>(`/risk/reset${qs({ account_id: accountId })}`, { method: "POST" }),
   brokerStatus: () => request<BrokerStatus>("/brokers/status"),
+
+  systemMetrics: () => request<SystemMetrics>("/system/metrics"),
+  audit: (limit = 100, action?: string) =>
+    request<AuditEntry[]>(`/system/audit${qs({ limit, action })}`),
+  auditSummary: () => request<{ action: string; count: number }[]>("/system/audit/summary"),
 
   assistantStatus: () =>
     request<{ mode: "local" | "llm"; model: string }>("/assistant/status"),
