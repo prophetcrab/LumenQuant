@@ -20,6 +20,7 @@ from app.core.events import EventBus, OrderFilled
 from app.core.money import round_money, round_price, round_qty
 from app.core.timeutil import iso, utcnow
 from app.modules.risk.policy import OrderIntent, RiskContext, RiskPolicy
+from app.modules.risk.service import RiskService
 from app.modules.trading.models import Fill, Order, Position, new_id
 from app.modules.trading.ports import CashPort, PricePort
 
@@ -84,6 +85,7 @@ class TradingService:
         bus: EventBus | None = None,
         fee_bps: float = 10.0,
         slippage_bps: float = 3.0,
+        risk: RiskService | None = None,
     ) -> None:
         self.session = session
         self.cash = cash
@@ -92,6 +94,7 @@ class TradingService:
         self.bus = bus
         self.fee_bps = fee_bps
         self.slippage_bps = slippage_bps
+        self.risk = risk
 
     # ---------------------------------------------------------------- views
     def _order_view(self, order: Order) -> OrderView:
@@ -248,6 +251,25 @@ class TradingService:
             position_avg_price=position.avg_price if position else 0.0,
             orders_last_minute=int(recent or 0),
         )
+        if self.risk is not None:
+            # Account-level kill switch runs before per-order limits.
+            state = self.risk.state(account_id)
+            equity = self._equity(account_id, ctx.cash)
+            ctx = RiskContext(
+                cash=ctx.cash,
+                position_qty=ctx.position_qty,
+                position_avg_price=ctx.position_avg_price,
+                orders_last_minute=ctx.orders_last_minute,
+                equity=equity,
+                day_start_equity=state.day_start_equity,
+                peak_equity=state.peak_equity,
+            )
+            if state.breaker_active:
+                raise ConflictError(f"trading halted: {state.breaker_reason}")
+            breaker = self.policy.breaker(ctx)
+            if not breaker.allowed:
+                self.risk.trip(account_id, breaker.reason)
+                raise ConflictError(f"trading halted: {breaker.reason}")
         self.policy.validate(
             OrderIntent(
                 side=side,
@@ -301,6 +323,10 @@ class TradingService:
         self.session.commit()
         self.session.refresh(order)
         return self._order_view(order)
+
+    def _equity(self, account_id: str, cash: float) -> float:
+        positions_value = sum(p.market_value for p in self.positions(account_id))
+        return round_money(cash + positions_value)
 
     def _market_fill_price(self, side: str, price: float) -> float:
         adjustment = self.slippage_bps / 10_000.0

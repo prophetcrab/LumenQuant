@@ -6,6 +6,8 @@ from sqlalchemy.orm import Session
 from app.api.deps import get_session
 from app.modules.accounts.service import AccountService
 from app.modules.market.service import MarketService
+from app.modules.risk.policy import RiskLimits, RiskPolicy
+from app.modules.risk.service import RiskService
 from app.modules.trading.adapters import AccountCashAdapter, MarketPriceAdapter
 from app.modules.trading.schemas import ClosePositionRequest, OrderCreate
 from app.modules.trading.service import TradingService
@@ -23,13 +25,23 @@ def build_service(request: Request, session: Session) -> TradingService:
     market = MarketService(
         session, clock=getattr(engine, "clock", None), live=engine if engine else None
     )
+    limits = RiskLimits(
+        max_order_notional=settings.risk_max_order_notional,
+        max_position_notional=settings.risk_max_position_notional,
+        min_order_notional=settings.risk_min_order_notional,
+        max_orders_per_minute=settings.risk_max_orders_per_minute,
+        max_daily_loss_pct=settings.risk_max_daily_loss_pct,
+        max_drawdown_pct=settings.risk_max_drawdown_pct,
+    )
     return TradingService(
         session,
         cash=AccountCashAdapter(accounts),
         prices=MarketPriceAdapter(market),
+        policy=RiskPolicy(limits),
         bus=request.app.state.bus,
         fee_bps=settings.fee_bps,
         slippage_bps=settings.slippage_bps,
+        risk=RiskService(session),
     )
 
 

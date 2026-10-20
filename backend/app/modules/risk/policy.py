@@ -1,15 +1,17 @@
-"""Pre-trade risk policy.
+"""Pre-trade risk policy and account-level circuit breakers.
 
-Pure functions and dataclasses only: the trading module owns enforcement, this
-module owns the rules. R12 extends this with daily-loss and drawdown breakers.
+Pure functions plus a small quota object: the trading module owns enforcement,
+this module owns the rules. No database or network access here, which keeps the
+rules trivially testable and reusable by backtests.
 """
 
 from __future__ import annotations
 
 from dataclasses import dataclass
+from datetime import datetime, timedelta
 
 from app.core.errors import ConflictError, ValidationError
-from app.core.money import round_money
+from app.core.money import round_money, safe_div
 from app.modules.market.service_types import SymbolView
 
 
@@ -19,6 +21,8 @@ class RiskLimits:
     max_position_notional: float = 5_000_000.0
     min_order_notional: float = 10.0
     max_orders_per_minute: int = 120
+    max_daily_loss_pct: float = 0.0  # 0 disables
+    max_drawdown_pct: float = 0.0  # 0 disables
 
 
 @dataclass(frozen=True)
@@ -35,11 +39,47 @@ class RiskContext:
     position_qty: float
     position_avg_price: float
     orders_last_minute: int
+    equity: float = 0.0
+    day_start_equity: float = 0.0
+    peak_equity: float = 0.0
+
+
+@dataclass(frozen=True)
+class RiskDecision:
+    allowed: bool
+    reason: str = ""
 
 
 class RiskPolicy:
     def __init__(self, limits: RiskLimits | None = None) -> None:
         self.limits = limits or RiskLimits()
+
+    def check(self, intent: OrderIntent, ctx: RiskContext, symbol: SymbolView) -> RiskDecision:
+        """Non-raising evaluation used by preflight and the UI."""
+        try:
+            self.validate(intent, ctx, symbol)
+        except (ValidationError, ConflictError) as exc:
+            return RiskDecision(False, exc.message)
+        return RiskDecision(True)
+
+    def breaker(self, ctx: RiskContext) -> RiskDecision:
+        """Account-level kill switch: daily loss and peak drawdown."""
+        limits = self.limits
+        if limits.max_daily_loss_pct and ctx.day_start_equity > 0:
+            change = safe_div(ctx.equity - ctx.day_start_equity, ctx.day_start_equity)
+            if change <= -limits.max_daily_loss_pct:
+                return RiskDecision(
+                    False,
+                    f"daily loss limit hit ({change * 100:.2f}% <= -{limits.max_daily_loss_pct * 100:.2f}%)",
+                )
+        if limits.max_drawdown_pct and ctx.peak_equity > 0:
+            drawdown = safe_div(ctx.peak_equity - ctx.equity, ctx.peak_equity)
+            if drawdown >= limits.max_drawdown_pct:
+                return RiskDecision(
+                    False,
+                    f"drawdown circuit breaker ({drawdown * 100:.2f}% >= {limits.max_drawdown_pct * 100:.2f}%)",
+                )
+        return RiskDecision(True)
 
     def validate(self, intent: OrderIntent, ctx: RiskContext, symbol: SymbolView) -> None:
         if intent.quantity <= 0:

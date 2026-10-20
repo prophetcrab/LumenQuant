@@ -237,6 +237,31 @@ export type AssistantReply = {
   tool_calls: { tool: string; arguments: Record<string, unknown>; result: unknown }[];
 };
 
+export type RiskLimits = {
+  max_order_notional: number;
+  max_position_notional: number;
+  min_order_notional: number;
+  max_orders_per_minute: number;
+  max_daily_loss_pct: number;
+  max_drawdown_pct: number;
+};
+
+export type RiskState = {
+  account_id: string;
+  day_start_equity: number;
+  peak_equity: number;
+  breaker_active: boolean;
+  breaker_reason: string;
+  updated_at: string;
+};
+
+export type BrokerStatus = {
+  live_trading_enabled: boolean;
+  broker: string;
+  credentials_configured: boolean;
+  ready: boolean;
+};
+
 export type Overview = {
   account_id: string;
   account_name: string;
@@ -426,6 +451,13 @@ export const api = {
     request<Overview>(`/portfolio/overview${qs({ account_id: accountId })}`),
   portfolioHistory: (accountId?: string, limit = 500) =>
     request<EquityPoint[]>(`/portfolio/history${qs({ account_id: accountId, limit })}`),
+
+  riskLimits: () => request<RiskLimits>("/risk/limits"),
+  riskState: (accountId: string) =>
+    request<RiskState>(`/risk/state${qs({ account_id: accountId })}`),
+  resetRisk: (accountId: string) =>
+    request<RiskState>(`/risk/reset${qs({ account_id: accountId })}`, { method: "POST" }),
+  brokerStatus: () => request<BrokerStatus>("/brokers/status"),
 
   assistantStatus: () =>
     request<{ mode: "local" | "llm"; model: string }>("/assistant/status"),

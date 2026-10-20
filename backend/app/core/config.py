@@ -47,6 +47,14 @@ class Settings(BaseSettings):
     fee_bps: float = 10.0
     slippage_bps: float = 3.0
 
+    # Risk limits. Percent fields are fractions (0.05 == 5%); 0 disables a breaker.
+    risk_max_order_notional: float = 1_000_000.0
+    risk_max_position_notional: float = 5_000_000.0
+    risk_min_order_notional: float = 10.0
+    risk_max_orders_per_minute: int = 120
+    risk_max_daily_loss_pct: float = 0.05
+    risk_max_drawdown_pct: float = 0.25
+
     # Safety switches.
     live_trading_enabled: bool = False
     auth_enabled: bool = False

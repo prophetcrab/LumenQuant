@@ -7,6 +7,7 @@ import { useBookOverview, useEquityHistory, usePositions } from "../../shared/ho
 import { allocationOption, equityOption } from "../../shared/charts";
 import { dateTimeLabel, money, pct, price, qty, signed } from "../../shared/format";
 import { Card, EmptyState, Loader, Stat } from "../../components/ui";
+import { RiskPanel } from "../risk/RiskPanel";
 
 export function PortfolioPage() {
   const { accountId } = useAccount();
@@ -121,6 +122,8 @@ export function PortfolioPage() {
           </div>
         </Card>
       </div>
+
+      <RiskPanel />
 
       <div className="grid" style={{ gridTemplateColumns: "minmax(0, 1.6fr) minmax(0, 1fr)" }}>
         <Card title="持仓明细" subtitle="按市值排序" padded={false}>
