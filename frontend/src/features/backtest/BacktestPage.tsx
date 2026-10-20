@@ -8,6 +8,7 @@ import { cash, pct, price, timeLabel } from "../../shared/format";
 import { Badge, Card, EmptyState, Field, Loader, Stat } from "../../components/ui";
 import { ButtonField } from "../../components/form";
 import { OptimisePanel } from "./OptimisePanel";
+import { WalkForwardPanel } from "./WalkForwardPanel";
 import { Segmented } from "../../components/ui";
 import { buildParams, initialParams, type ParamValue } from "../../shared/strategy-params";
 
@@ -28,7 +29,7 @@ export function BacktestPage() {
   const [takeProfit, setTakeProfit] = useState("0");
   const [params, setParams] = useState<Record<string, ParamValue>>({});
   const [selectedRun, setSelectedRun] = useState<BacktestRun | null>(null);
-  const [tab, setTab] = useState<"run" | "optimise">("run");
+  const [tab, setTab] = useState<"run" | "optimise" | "walkforward">("run");
 
   const meta = catalog.data?.find((item) => item.key === strategy) ?? null;
 
@@ -90,13 +91,16 @@ export function BacktestPage() {
           options={[
             { value: "run", label: "单次回测" },
             { value: "optimise", label: "参数优化" },
+            { value: "walkforward", label: "滚动验证" },
           ]}
           onChange={(value) => setTab(value)}
         />
         <span className="helper">
           {tab === "run"
             ? "验证一组参数的表现"
-            : "枚举参数空间，用样本外数据检验过拟合"}
+            : tab === "optimise"
+              ? "枚举参数空间，用样本外数据检验过拟合"
+              : "多窗口滚动：每段独立选参，再看紧接着的样本外表现"}
         </span>
       </div>
 
@@ -135,6 +139,15 @@ export function BacktestPage() {
           </Field>
         </div>
       </Card>
+
+      {tab === "walkforward" ? (
+        <WalkForwardPanel
+          strategy={strategy}
+          symbol={symbol}
+          timeframe={timeframe}
+          meta={meta}
+        />
+      ) : null}
 
       {tab === "optimise" ? (
         <OptimisePanel

@@ -463,6 +463,49 @@ export type OptimisationReport = {
   out_of_sample_bars: number;
 };
 
+export type WalkForwardWindow = {
+  index: number;
+  train_start: number;
+  train_end: number;
+  test_start: number;
+  test_end: number;
+  params: Record<string, number | boolean | string>;
+  train_return_pct: number;
+  test_return_pct: number;
+  test_drawdown_pct: number;
+  test_trades: number;
+  test_sharpe: number;
+  degradation_pct: number;
+};
+
+export type WalkForwardReport = {
+  strategy: string;
+  symbol: string;
+  timeframe: string;
+  objective: string;
+  total_bars: number;
+  windows: WalkForwardWindow[];
+  aggregate: {
+    windows_completed?: number;
+    requested_windows?: number;
+    skipped_windows?: number;
+    positive_windows?: number;
+    positive_pct?: number;
+    mean_test_return_pct?: number;
+    median_test_return_pct?: number;
+    worst_test_return_pct?: number;
+    best_test_return_pct?: number;
+    std_test_return_pct?: number;
+    compounded_test_return_pct?: number;
+    mean_degradation_pct?: number;
+    mean_test_trades?: number;
+    mean_test_drawdown_pct?: number;
+  };
+  warnings: string[];
+  elapsed_ms: number;
+  data_source: string;
+};
+
 export type Overview = {
   account_id: string;
   account_name: string;
@@ -653,6 +696,17 @@ export const api = {
     config: Record<string, unknown>;
   }) => request<BacktestRun>("/backtests", { method: "POST", body: JSON.stringify(body) }),
   deleteBacktest: (id: string) => request<void>(`/backtests/${id}`, { method: "DELETE" }),
+  walkForwardBacktest: (body: {
+    strategy: string;
+    symbol: string;
+    timeframe: string;
+    bars: number;
+    space: Record<string, (number | boolean)[]>;
+    base_params?: Record<string, unknown>;
+    objective: string;
+    config?: Record<string, unknown>;
+    windows: number;
+  }) => request<WalkForwardReport>("/backtests/walk-forward", { method: "POST", body: JSON.stringify(body) }),
   optimiseBacktest: (body: {
     strategy: string;
     symbol: string;

@@ -173,3 +173,47 @@ def test_optimise_does_not_pollute_backtest_history(backtest_client):
     )
     after = backtest_client.get("/api/backtests").json()
     assert len(after) == len(before)
+
+
+def test_walk_forward_endpoint(backtest_client):
+    response = backtest_client.post(
+        "/api/backtests/walk-forward",
+        json={
+            "strategy": "sma_cross",
+            "symbol": "BTCUSDT",
+            "timeframe": "1h",
+            "bars": 1200,
+            "space": {"fast": [5, 10], "slow": [20, 30]},
+            "objective": "risk_adjusted",
+            "windows": 3,
+        },
+    )
+    assert response.status_code == 200, response.text
+    body = response.json()
+    assert body["windows"]
+    assert body["aggregate"]["windows_completed"] == len(body["windows"])
+    for window in body["windows"]:
+        assert window["params"]
+        assert window["train_end"] == window["test_start"]
+    assert isinstance(body["warnings"], list)
+    assert body["data_source"] in {"synthetic", "real"}
+
+
+def test_walk_forward_validation(backtest_client):
+    too_few = backtest_client.post(
+        "/api/backtests/walk-forward",
+        json={"strategy": "sma_cross", "bars": 300, "space": {"fast": [5]}, "windows": 3},
+    )
+    assert too_few.status_code == 422
+
+    bad_windows = backtest_client.post(
+        "/api/backtests/walk-forward",
+        json={"strategy": "sma_cross", "bars": 1200, "space": {"fast": [5]}, "windows": 1},
+    )
+    assert bad_windows.status_code == 422
+
+    empty = backtest_client.post(
+        "/api/backtests/walk-forward",
+        json={"strategy": "sma_cross", "bars": 1200, "space": {}, "windows": 3},
+    )
+    assert empty.status_code == 422
