@@ -6,6 +6,7 @@ from app.modules.accounts.router import router as accounts_router
 from app.modules.assistant.router import router as assistant_router
 from app.modules.backtest.router import router as backtest_router
 from app.modules.brokers.router import router as brokers_router
+from app.modules.data.router import router as data_router
 from app.modules.market.router import router as market_router
 from app.modules.portfolio.router import router as portfolio_router
 from app.modules.risk.router import router as risk_router
@@ -27,6 +28,7 @@ api_router.include_router(assistant_router)
 api_router.include_router(brokers_router)
 api_router.include_router(risk_router)
 api_router.include_router(system_router)
+api_router.include_router(data_router)
 
 
 @api_router.get("/meta")
@@ -44,6 +46,7 @@ def meta():
             "brokers",
             "risk",
             "system",
+            "data",
         ],
         "capabilities": {
             "paper_trading": True,

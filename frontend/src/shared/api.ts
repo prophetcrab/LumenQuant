@@ -508,6 +508,41 @@ export const api = {
     request<RiskState>(`/risk/reset${qs({ account_id: accountId })}`, { method: "POST" }),
   brokerStatus: () => request<BrokerStatus>("/brokers/status"),
 
+  dataCoverage: () =>
+    request<{ symbol: string; timeframe: string; bars: number; first_time: number; last_time: number }[]>(
+      "/data/coverage",
+    ),
+  dataQuality: (symbol: string) =>
+    request<{
+      symbol: string;
+      timeframe: string;
+      bars: number;
+      first_time: number;
+      last_time: number;
+      duplicate_times: number;
+      non_monotonic: number;
+      invalid_ohlc: number;
+      gaps: number;
+      expected_step: number;
+    }>(`/data/quality${qs({ symbol })}`),
+  importCsv: async (symbol: string, file: File, replace: boolean) => {
+    const form = new FormData();
+    form.set("symbol", symbol);
+    form.set("timeframe", "15m");
+    form.set("replace", String(replace));
+    form.set("file", file);
+    const response = await fetch("/api/data/import", { method: "POST", body: form });
+    const payload = await response.json();
+    if (!response.ok) {
+      throw new ApiError(
+        response.status,
+        payload?.error?.code ?? "import_failed",
+        payload?.error?.message ?? "导入失败",
+      );
+    }
+    return payload as { symbol: string; timeframe: string; imported: number; skipped: number; errors: string[] };
+  },
+
   systemMetrics: () => request<SystemMetrics>("/system/metrics"),
   audit: (limit = 100, action?: string) =>
     request<AuditEntry[]>(`/system/audit${qs({ limit, action })}`),
