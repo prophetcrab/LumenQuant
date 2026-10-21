@@ -883,8 +883,18 @@ export const api = {
     config: Record<string, unknown>;
   }) => request<BacktestRun>("/backtests", { method: "POST", body: JSON.stringify(body) }),
   deleteBacktest: (id: string) => request<void>(`/backtests/${id}`, { method: "DELETE" }),
-  alerts: (params: { account_id?: string; unacknowledged_only?: boolean; level?: string; limit?: number } = {}) =>
-    request<Alert[]>(`/alerts${qs(params)}`),
+  // Positional parameters like every other list endpoint (`orders`, `fills`,
+  // `backtests`). An options object here was the odd one out and made both the
+  // call sites and their mocks harder to read.
+  alerts: (accountId?: string, unacknowledgedOnly = false, limit = 100, level?: string) =>
+    request<Alert[]>(
+      `/alerts${qs({
+        account_id: accountId,
+        unacknowledged_only: unacknowledgedOnly,
+        level,
+        limit,
+      })}`,
+    ),
   alertSummary: (accountId?: string) =>
     request<AlertSummary>(`/alerts/summary${qs({ account_id: accountId })}`),
   ackAlert: (id: string) => request<Alert>(`/alerts/${id}/ack`, { method: "POST" }),

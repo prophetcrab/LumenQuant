@@ -39,11 +39,7 @@ export function AlertsPage() {
   const alerts = useQuery({
     queryKey: ["alerts", accountId, filter],
     queryFn: () =>
-      api.alerts({
-        account_id: accountId,
-        unacknowledged_only: filter === "open",
-        limit: 200,
-      }),
+      api.alerts(accountId, filter === "open", 200),
     enabled: Boolean(accountId),
     refetchInterval: 10_000,
   });
