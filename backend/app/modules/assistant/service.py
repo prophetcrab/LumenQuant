@@ -51,6 +51,9 @@ INTENTS: list[tuple[re.Pattern, str, dict]] = [
 ]
 
 SYMBOL_RE = re.compile(r"\b(BTC|ETH|SOL|BNB|XRP|ADA)(USDT)?\b", re.I)
+# A-share codes are spoken as "600036" or written fully as "600036.SH"; both forms
+# must resolve, otherwise asking about a stock silently falls back to Bitcoin.
+CN_SYMBOL_RE = re.compile(r"\b(\d{6})(?:\.(SH|SZ|BJ))?\b", re.I)
 TIMEFRAME_RE = re.compile(r"\b(15m|30m|1h|4h|1d)\b", re.I)
 STRATEGY_ALIASES = {
     "双均线": "sma_cross",
@@ -88,10 +91,13 @@ class AssistantService:
     # ---------------------------------------------------------------- local
     def _local_reply(self, message: str, account_id: str | None) -> AssistantReply:
         calls: list[dict] = []
-        symbol_match = SYMBOL_RE.search(message)
-        symbol = f"{symbol_match.group(1).upper()}USDT" if symbol_match else None
+        symbol = self._symbol_from(message)
+        # With no symbol named, answer within the account's own market. Defaulting
+        # to BTCUSDT meant an A-share user asking "双均线信号" was shown Bitcoin
+        # analysis — a market their account cannot trade at all.
+        default_symbol = symbol or self._default_symbol(account_id)
         timeframe_match = TIMEFRAME_RE.search(message)
-        timeframe = timeframe_match.group(1) if timeframe_match else "1h"
+        timeframe = timeframe_match.group(1) if timeframe_match else self._default_timeframe(default_symbol)
 
         if re.search(r"(回测|backtest)", message, re.I):
             key = self._match_strategy(message)
@@ -105,7 +111,7 @@ class AssistantService:
                 "run_backtest",
                 {
                     "strategy_key": key,
-                    "symbol": symbol or "BTCUSDT",
+                    "symbol": default_symbol,
                     "timeframe": timeframe,
                     "bars": 800,
                 },
@@ -127,7 +133,7 @@ class AssistantService:
             key = self._match_strategy(message) or "sma_cross"
             result = self.toolbox.call(
                 "strategy_signals",
-                {"strategy_key": key, "symbol": symbol or "BTCUSDT", "timeframe": timeframe},
+                {"strategy_key": key, "symbol": default_symbol, "timeframe": timeframe},
             )
             calls.append({"tool": "strategy_signals", "arguments": {"strategy": key}, "result": result})
             action_map = {"buy": "买入", "sell": "卖出", "hold": "观望"}
@@ -190,6 +196,55 @@ class AssistantService:
             mode="local",
             tool_calls=[],
         )
+
+    @staticmethod
+    def _symbol_from(message: str) -> str | None:
+        """Extract a tradeable symbol from free text, crypto or A-share."""
+        crypto = SYMBOL_RE.search(message)
+        if crypto:
+            return f"{crypto.group(1).upper()}USDT"
+        stock = CN_SYMBOL_RE.search(message)
+        if stock:
+            code, exchange = stock.group(1), (stock.group(2) or "").upper()
+            if exchange:
+                return f"{code}.{exchange}"
+            # Guess the exchange from the code prefix, which is deterministic:
+            # 6/9 -> Shanghai, 0/2/3 -> Shenzhen, 4/8 -> Beijing.
+            if code[0] in {"6", "9"}:
+                return f"{code}.SH"
+            if code[0] in {"4", "8"}:
+                return f"{code}.BJ"
+            return f"{code}.SZ"
+        return None
+
+    def _default_symbol(self, account_id: str | None) -> str:
+        """A sensible default instrument for the account's market.
+
+        "First enabled symbol" is alphabetical, which picked ADAUSDT — a
+        technically-valid but surprising answer for "双均线信号". Prefer the
+        market's conventional benchmark when it is listed, otherwise fall back to
+        the first enabled symbol.
+        """
+        crypto_default, cn_default = "BTCUSDT", "600036.SH"
+        market = "crypto"
+        if account_id:
+            try:
+                market = self.toolbox.accounts.require(account_id).market
+            except Exception:
+                market = "crypto"
+        preferred = cn_default if market == "cn_stock" else crypto_default
+        symbols = self.toolbox.market.list_symbols(market=market)
+        codes = [item.code for item in symbols]
+        if preferred in codes:
+            return preferred
+        if codes:
+            return codes[0]
+        return crypto_default
+
+    @staticmethod
+    def _default_timeframe(symbol: str) -> str:
+        """A-share intraday data is thinner, and daily is the honest default."""
+        return "1d" if symbol.endswith((".SH", ".SZ", ".BJ")) else "1h"
 
     @staticmethod
     def _explain(error: Exception) -> str:

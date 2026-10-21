@@ -152,3 +152,87 @@ def test_unknown_symbol_is_explained(assistant_client):
     # No symbol regex match -> falls back to the market snapshot of everything,
     # which must still succeed rather than 500.
     assert reply.status_code == 200, reply.text
+
+
+def _two_market_client(tmp_path):
+    from fastapi.testclient import TestClient as _Client
+
+    settings = Settings(
+        database_url=f"sqlite:///{(tmp_path / 'assistant_two.db').as_posix()}",
+        seed_market=True,
+        cn_symbols_enabled=True,
+        cn_seed_days=60,
+        market_seed_bars=400,
+        market_tick_seconds=3600,
+        runtime_enabled=False,
+        cn_session_enforced=False,
+        cn_live_session_gate=False,
+    )
+    db = Database(settings.database_url)
+    db.create_schema()
+    app = create_app(settings, db)
+    return _Client(app), db
+
+
+def test_assistant_stays_inside_the_account_market(tmp_path):
+    """An unspecified symbol must not default to Bitcoin for an A-share account.
+
+    Regression: "双均线信号" with an A-share account answered about BTCUSDT — a
+    symbol the account cannot trade, presented as if it were the user's market.
+    """
+    client, db = _two_market_client(tmp_path)
+    with client as assistant_client:
+        _assert_market_stays(client)
+    db.dispose()
+
+
+def _assert_market_stays(assistant_client):
+    cn_account = assistant_client.post(
+        "/api/accounts",
+        json={"name": "A股助手", "initial_balance": 500_000, "market": "cn_stock"},
+    ).json()
+    reply = assistant_client.post(
+        "/api/assistant/chat",
+        json={"message": "双均线信号", "account_id": cn_account["id"]},
+    ).json()
+    assert "USDT" not in reply["answer"]
+    assert "600036.SH" in reply["answer"]
+    assert "1d" in reply["answer"]
+
+    crypto_account = assistant_client.post(
+        "/api/accounts",
+        json={"name": "加密助手", "initial_balance": 100_000, "market": "crypto"},
+    ).json()
+    reply = assistant_client.post(
+        "/api/assistant/chat",
+        json={"message": "双均线信号", "account_id": crypto_account["id"]},
+    ).json()
+    assert "BTCUSDT" in reply["answer"]
+
+
+def test_assistant_understands_a_share_codes(tmp_path):
+    """ "600036" and "600036.SH" must both resolve to the Shanghai listing."""
+    client, db = _two_market_client(tmp_path)
+    with client as assistant_client:
+        _assert_cn_codes(client)
+    db.dispose()
+
+
+def _assert_cn_codes(assistant_client):
+    account = assistant_client.post(
+        "/api/accounts",
+        json={"name": "代码助手", "initial_balance": 500_000, "market": "cn_stock"},
+    ).json()
+    for message in ("600036 双均线信号", "600036.SH 双均线信号", "000001 双均线信号"):
+        reply = assistant_client.post(
+            "/api/assistant/chat", json={"message": message, "account_id": account["id"]}
+        ).json()
+        assert "BTCUSDT" not in reply["answer"], message
+    assert "600036.SH" in assistant_client.post(
+        "/api/assistant/chat",
+        json={"message": "600036 双均线信号", "account_id": account["id"]},
+    ).json()["answer"]
+    assert "000001.SZ" in assistant_client.post(
+        "/api/assistant/chat",
+        json={"message": "000001 双均线信号", "account_id": account["id"]},
+    ).json()["answer"]
