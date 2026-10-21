@@ -15,10 +15,27 @@
 
 ```bash
 cd frontend
-npm test          # vitest run，37 项
+npm test          # vitest run，48 项
 npx tsc --noEmit  # 含测试文件
 npx vite build
 ```
 
-覆盖：策略参数类型转换、交接解析、金额/百分比格式化、回测页在 StrictMode 下的
-参数预填与重置行为。图表与真实渲染仍由人工截图核对。
+覆盖：策略参数类型转换、交接解析、金额/百分比格式化与币种、回测页在 StrictMode 下的
+参数预填与重置行为、实盘/模拟开户的风险提示、归档确认流程。
+图表渲染本身与真实网络仍由人工截图与后端集成测试覆盖。
+
+## 当前规模
+
+| 层级 | 数量 |
+|---|---|
+| 后端单元 | 235 |
+| 后端集成 | 124 |
+| 后端系统（端到端） | 3 |
+| 前端组件/单元 | 48 |
+
+完整回归：
+
+```bash
+cd backend && ../.venv/Scripts/python.exe -m pytest -q   # 362 passed
+cd frontend && npm test && npx tsc --noEmit && npx vite build
+```

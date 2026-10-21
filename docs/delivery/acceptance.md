@@ -6,15 +6,15 @@
 |---|---|---|---|
 | 1 | 至少二十轮迭代 | R01–R20 共 20 份轮次报告 | `docs/rounds/`、git tag `R01`…`R20` |
 | 2 | 需求设计 | 每轮报告首节“需求设计” | 各轮文档 |
-| 3 | 代码编写 | 后端 7,468 行 / 前端 4,824 行 | `backend/app`、`frontend/src` |
+| 3 | 代码编写 | 后端 13,802 行 / 前端 8,199 行（不含测试） | `backend/app`、`frontend/src` |
 | 4 | 代码 review | 每轮“代码审查”记录缺陷与修复 | 各轮文档 + `code-report.md` 缺陷表 |
 | 5 | 代码优化 | 连接池、单飞缓存、索引、代码分割、ECharts 按需 | `docs/rounds/R14.md` |
-| 6 | 模块测试 | 45 个单元用例 | `pytest tests/unit` |
-| 7 | 系统测试 | 30 个集成 + 2 个端到端 | `pytest tests/integration tests/system` |
-| 8 | 压力测试 | 3 个压测脚本与数据表 | `backend/tests/stress/`、`R18-R19.md` |
+| 6 | 模块测试 | 235 个单元用例 | `pytest tests/unit` |
+| 7 | 系统测试 | 124 个集成 + 3 个端到端 | `pytest tests/integration tests/system` |
+| 8 | 压力测试 | 5 个脚本（HTTP 压测、策略吞吐、跨年 soak、日历校验） | `backend/tests/stress/`、`C34.md` |
 | 9 | bug 修复 | 24 项缺陷清单 | `code-report.md` |
 | 10 | 代码报告 | 规模/质量/债务/安全清单 | `docs/delivery/code-report.md` |
-| 11 | 文档简洁清晰 | 思路 2 篇 + 交付 4 篇 + 20 轮记录 | `docs/` |
+| 11 | 文档简洁清晰 | 思路 2 篇 + 交付 9 篇 + 20 轮记录 + 46 份迭代记录 | `docs/` |
 | 12 | 思路文档 | `thinking/architecture.md`、`thinking/roadmap.md` | — |
 | 13 | 交付文档 | `delivery/quickstart.md`、`architecture.md`、`api.md`、`code-report.md` | — |
 | 14 | 2K 27 寸前端 | 2560×1440 实拍 11 页 | `docs/reviews/R17/*.png` |
@@ -31,7 +31,7 @@
 | 25 | 数据可视化 | K 线+指标、权益、回撤、配置、归因 | `MarketsPage`、`PortfolioPage` |
 | 26 | 策略指定 | 参数动态表单、标的/周期选择 | `StrategiesPage` |
 | 27 | 策略回测 | 18 项绩效指标、逐笔交易、历史 | `test_backtest_engine.py`、`BacktestPage` |
-| 28 | AI 助手 | 9 个只读工具 + 本地/LLM 双模式 | `test_assistant.py`、`AssistantPage` |
+| 28 | AI 助手 | 10 个只读工具 + 本地/LLM 双模式 + 市场感知 | `test_assistant_api.py`、`AssistantPage` |
 | 29 | 一批经典策略 | 9 个（均线/EMA+ADX/RSI/布林/MACD/唐奇安/ATR/KDJ/持有） | `strategies/library/classics.py` |
 | 30 | 策略配置动态调整 | 实例参数 PATCH、回测参数即时生效 | `PATCH /api/runtime/instances/{id}` |
 | 31 | 未来可添加策略 | 插件注册表，仅加类即可 | `registry.py`、`test_strategies.py` |
@@ -159,3 +159,32 @@ npx tsc --noEmit; npx vite build                # 0 errors
 **真实数据策略矩阵（800 根日线）**：招商银行（上涨市）基准 +28.2%，
 ema_trend +20.2%；茅台（下跌市）基准 -6.3%，多数趋势策略亏损、
 均值回归类为正。结论与市场结构一致。
+
+### 持续迭代阶段（C24–C47）
+
+C 轮以"实际使用系统"为主，每轮都从真实操作中找缺陷。完整清单见 `docs/rounds/`。
+
+| 主题 | 轮次 | 关键交付 |
+|---|---|---|
+| 研究工具链 | C24–C26 | 参数优化（IS/OOS）、滚动验证、基准对比（alpha/beta/IR） |
+| 止损一致性 | C27 | `risk/stops.py` 共享逻辑，回测与实盘语义统一 |
+| 风险中心 | C28 | `/api/risk/overview` 聚合接口 + 独立页面 |
+| 参数交接 | C29–C30 | 策略库一键带去回测 / 建成自动实例；实例可编辑 |
+| 组合分析 | C31 | 跨回测合并、相关性矩阵、分散收益 |
+| 真实数据验收 | C32 | 纯真实数据部署修复；助手接入风控 |
+| 跨日边界 | C33 | T+1 释放修复；节假日表覆盖范围显式化 |
+| 压测与 soak | C34 | 5 个压测脚本；运行日志去重与上限 |
+| 前端测试 | C35 | Vitest + Testing Library，48 项 |
+| 研究链路 | C36 | 滚动验证丢窗口、结构性告警被覆盖、优化器漏报衰减 |
+| 信号一致性 | C37 | 预览套用持仓状态，与回测成交语义对齐 |
+| 数据质量 | C38 | 缺口按日历计算；用真实数据反向校验发现 2026 春节少休一天 |
+| 实盘安全 | C39–C40 | 自动运行独立开关 + 每轮复查；前端实盘开户入口 |
+| 助手健壮性 | C41, C46 | 无账户时给指引而非 500；按账户市场选默认标的 |
+| 币种一致性 | C42 | 图表 tooltip 跟随市场；后端返回 currency |
+| 归档语义 | C43–C44 | 归档即停止实例；确认弹窗列出后果 |
+| 数据管理 | C45 | 按标的/周期删除 K 线 |
+
+**当前规模**：后端 362 项测试、前端 48 项测试，全部通过。
+
+**验证方式**：除自动化测试外，每轮都在真实浏览器中操作 2K 界面确认，
+并在真实 A 股行情（腾讯数据源）上跑通同步 → 回测 → 优化 → 滚动验证 → 组合分析。

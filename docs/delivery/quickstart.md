@@ -34,17 +34,28 @@ npm run dev
 ## 第一次使用
 1. 打开总览页 → “创建模拟账户”。
 2. 在交易页下第一笔市价单，确认持仓、成交、账本同步。
-3. 到策略库挑选策略，用默认参数跑一次信号预览，再进回测页跑 1500 根。
+3. 到策略库挑选策略，调好参数后可直接「带去回测」或「建成自动实例」，无需重填。
 4. 在自动运行页新建实例并启动，等待下一根已收盘 K 线触发。
-5. 组合页查看权益、回撤、风控状态与盈亏归因。
-6. AI 助手可直接提问：“我的持仓怎么样”“回测 MACD 最近 800 根”。
+5. 组合页查看权益、回撤、风控状态与盈亏归因；「风控」页集中查看敞口与止损保护。
+6. 回测页的「组合分析」可把多个回测合并，看相关性与分散效果。
+7. AI 助手可直接提问：“我的持仓怎么样”“我现在能开仓吗”“回测 MACD 最近 800 根”；
+   未指定标的时按当前账户市场选择基准标的（A 股 600036.SH / 加密 BTCUSDT）。
 
 ## 配置实盘（默认关闭）
 
 1. 复制 `backend\.env.example` 为 `backend\.env`。
 2. 设置 `LQ_LIVE_TRADING_ENABLED=true`、`LQ_BINANCE_API_KEY`、`LQ_BINANCE_API_SECRET`。
 3. 重启后端，`GET /api/brokers/status` 应显示 `ready: true`。
-4. 创建 `kind=live` 的账户，下单请求必须带 `X-Live-Confirm: true`。
+4. 在「账户」页新建账户时把类型选为「实盘」，手动下单请求必须带 `X-Live-Confirm: true`。
+
+若要让**策略实例自动下实盘单**，还需要额外开启：
+
+```env
+LQ_LIVE_AUTO_TRADING_ENABLED=true
+```
+
+这个开关每次调度都会复查：关闭后已存在的实例立即停止开仓，
+但止损等保护性离场不受影响——禁止止损会让实盘持仓失去保护。
 
 > 实盘账户的本地现金与持仓由成交回写维护；使用前请先用 `/api/brokers/binance/verify`
 > 核对交易所余额。密钥只从环境读取，不写入数据库。
@@ -68,9 +79,19 @@ powershell -ExecutionPolicy Bypass -File .\scripts\run-tests.ps1
 
 ```powershell
 cd D:\LumenQuant\backend
-..\.venv\Scripts\python.exe -m pytest -q             # 119 项
-..\.venv\Scripts\python.exe -m pytest tests/stress -q # 压测（需先启动服务）
+..\.venv\Scripts\python.exe -m pytest -q             # 362 项
 ```
+
+前端：
+
+```powershell
+cd D:\LumenQuant\frontend
+npm test                # Vitest，48 项
+npx tsc --noEmit        # 含测试文件
+npx vite build
+```
+
+压测脚本见 `backend\tests\stress\README.md`（需先以放大的限流阈值启动服务）。
 
 ## 数据位置
 - 数据库：`data\lumenquant.db`（SQLite WAL）
