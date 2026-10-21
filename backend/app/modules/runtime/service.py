@@ -315,6 +315,17 @@ class RuntimeService:
         """Evaluate the latest closed bar once; returns a short outcome string."""
         strategy = get(row.strategy_key)
         params = strategy.validate_params(json.loads(row.params_json))
+        # An archived account must never trade, even if an instance slipped
+        # through (archived before this guard existed, or edited directly in the
+        # DB). Archiving also stops instances now; this is the execution backstop.
+        account = self.accounts.require(row.account_id)
+        if account.status != "active":
+            self._log(
+                row.id, "warn", "account_archived", "账户已归档，跳过执行",
+                bar_time=row.last_bar_time,
+            )
+            self.session.commit()
+            return "account_archived"
         # Re-check the live opt-in on every evaluation, not only at creation.
         # Flipping LQ_LIVE_AUTO_TRADING_ENABLED off must take effect immediately;
         # an instance created while it was on would otherwise keep sending real

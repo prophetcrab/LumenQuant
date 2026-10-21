@@ -214,10 +214,27 @@ class AccountService:
             if not name:
                 raise ValidationError("account name must not be empty")
             account.name = name
+        stopped: list[str] = []
         if status is not None:
             if status not in {"active", "archived"}:
                 raise ValidationError("status must be active or archived")
             account.status = status
+            if status == "archived":
+                # Archiving means "stop trading this account". Leaving running
+                # instances behind kept placing orders: the scheduler only checked
+                # status when an instance was started, so an archived account's
+                # instance went on trading until someone noticed.
+                from app.modules.runtime.models import StrategyInstance
+
+                running = self.session.scalars(
+                    select(StrategyInstance).where(
+                        StrategyInstance.account_id == account.id,
+                        StrategyInstance.running.is_(True),
+                    )
+                ).all()
+                for instance in running:
+                    instance.running = False
+                    stopped.append(instance.id)
         if leverage is not None:
             if leverage < 1 or leverage > 10:
                 raise ValidationError("leverage must be between 1 and 10")
@@ -227,7 +244,13 @@ class AccountService:
             action="account.updated",
             entity="account",
             entity_id=account.id,
-            detail=json.dumps({"status": account.status, "leverage": account.leverage}),
+            detail=json.dumps(
+                {
+                    "status": account.status,
+                    "leverage": account.leverage,
+                    "stopped_instances": len(stopped),
+                }
+            ),
         )
         try:
             self.session.commit()
