@@ -40,10 +40,33 @@ export function PortfolioPanel({ history }: Props) {
     [baskets.data],
   );
 
-  const runs = useMemo(
-    () => (history ?? []).filter((item) => item.bars >= 50).slice(0, 60),
+  // Sleeves imported from a basket are ordinary runs but hidden from the
+  // single-symbol history, so they must be fetched to be shown and weighted.
+  const historyIds = useMemo(
+    () => new Set((history ?? []).map((item) => item.id)),
     [history],
   );
+  const orphanIds = useMemo(
+    () => selected.filter((id) => !historyIds.has(id)),
+    [selected, historyIds],
+  );
+  const imported = useQuery({
+    queryKey: ["imported-runs", orphanIds],
+    queryFn: async () => {
+      const rows = await Promise.all(orphanIds.map((id) => api.backtest(id)));
+      return rows;
+    },
+    enabled: orphanIds.length > 0,
+  });
+
+  const runs = useMemo(() => {
+    const base = (history ?? []).filter((item) => item.bars >= 50).slice(0, 60);
+    const extra = (imported.data ?? []).filter(
+      (item) => !base.some((existing) => existing.id === item.id),
+    );
+    // Imported sleeves first: they are what the user just acted on.
+    return [...extra, ...base];
+  }, [history, imported.data]);
 
   const toggle = (id: string) => {
     setSelected((prev) => {
@@ -113,7 +136,19 @@ export function PortfolioPanel({ history }: Props) {
                 const ids = basket?.child_run_ids ?? [];
                 if (ids.length > 0) {
                   setSelected(ids);
-                  setWeights({});
+                  // Restore the basket's own weights instead of resetting to
+                  // equal: the user configured that mix deliberately, and the
+                  // whole point of importing is to study *that* portfolio.
+                  // child_run_ids is aligned with symbols/weights, so index
+                  // pairing is safe.
+                  const restored: Record<string, string> = {};
+                  ids.forEach((runId, index) => {
+                    const weight = basket?.weights?.[index];
+                    if (typeof weight === "number" && weight > 0) {
+                      restored[runId] = String(weight);
+                    }
+                  });
+                  setWeights(restored);
                   setCapital(String(Math.round(basket?.initial_capital ?? 100000)));
                 }
               }}
