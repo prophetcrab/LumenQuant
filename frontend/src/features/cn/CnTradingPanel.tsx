@@ -154,6 +154,24 @@ export function CnTradingPanel() {
       <div className="buy-sell-grid">
         <Card title="A股下单" subtitle="涨跌停、手数、T+1 由服务端强制校验">
           <div className="stack" style={{ gap: 14 }}>
+            {session.data && !session.data.open ? (
+              <div
+                className="helper"
+                style={{
+                  padding: "9px 12px",
+                  border: "1px solid var(--border-strong)",
+                  borderRadius: 9,
+                  background: "var(--surface-subtle)",
+                  lineHeight: 1.7,
+                }}
+              >
+                {/* Paper accounts may trade outside the session by default, so the
+                    order fills immediately at the last price. Saying so prevents
+                    the reasonable-but-wrong assumption that it queues until open. */}
+                当前休市。模拟账户仍可下单，按最近价格即时成交；
+                实盘会被交易时段校验拒绝。
+              </div>
+            ) : null}
             <div className="row" style={{ justifyContent: "space-between" }}>
               <div className="segmented">
                 <button className={side === "buy" ? "active" : ""} onClick={() => setSide("buy")}>
