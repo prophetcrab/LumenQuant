@@ -136,4 +136,16 @@ class StrategyRuntimeEngine:
                         logger.info("pruned %s acknowledged alerts", purged)
                 except Exception:
                     logger.exception("alert pruning failed")
+                try:
+                    from app.modules.backtest.multi import MultiSymbolBacktester
+                    from app.modules.market.service import MarketService
+
+                    multi = MultiSymbolBacktester(
+                        MarketService(session), session=session
+                    )
+                    pruned = multi.prune_orphan_sleeves()
+                    if pruned:
+                        logger.info("pruned %s orphan backtest sleeves", pruned)
+                except Exception:
+                    logger.exception("orphan sleeve pruning failed")
             return results

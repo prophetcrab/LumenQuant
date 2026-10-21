@@ -317,13 +317,46 @@ class MultiSymbolBacktester:
 
     def delete_run(self, run_id: str) -> None:
         from app.core.errors import NotFoundError
-        from app.modules.backtest.models import MultiBacktestRun
+        from app.modules.backtest.models import BacktestRun, MultiBacktestRun
 
         row = self.session.get(MultiBacktestRun, run_id)
         if row is None:
             raise NotFoundError(f"multi backtest {run_id} not found")
+        # Delete the sleeves with their parent: an orphaned sleeve shows up in
+        # portfolio analysis as a run the user cannot trace back to anything.
+        child_ids = json.loads(row.child_run_ids_json or "[]")
+        for child in self.session.scalars(
+            select(BacktestRun).where(BacktestRun.id.in_(child_ids))
+        ).all():
+            self.session.delete(child)
         self.session.delete(row)
         self.session.commit()
+
+    def prune_orphan_sleeves(self) -> int:
+        """Remove `origin='multi'` runs whose parent no longer exists.
+
+        Guards against rows left behind by a crash between the two deletes, or by
+        an older version that did not cascade. Called by the scheduler.
+        """
+        from app.modules.backtest.models import BacktestRun, MultiBacktestRun
+
+        parents = self.session.scalars(
+            select(MultiBacktestRun.child_run_ids_json)
+        ).all()
+        referenced: set[str] = set()
+        for raw in parents:
+            referenced.update(json.loads(raw or "[]"))
+        orphans = self.session.scalars(
+            select(BacktestRun).where(BacktestRun.origin == "multi")
+        ).all()
+        removed = 0
+        for row in orphans:
+            if row.id not in referenced:
+                self.session.delete(row)
+                removed += 1
+        if removed:
+            self.session.commit()
+        return removed
 
     # ------------------------------------------------------------- helpers
     @staticmethod

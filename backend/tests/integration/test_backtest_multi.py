@@ -302,3 +302,49 @@ def test_rebalanced_sleeves_are_stored_unrebalanced(client):
     a = client.get(f"/api/backtests/{rebalanced['child_run_ids'][0]}").json()
     b = client.get(f"/api/backtests/{plain['child_run_ids'][0]}").json()
     assert a["equity"] == b["equity"]
+
+
+def test_deleting_a_basket_removes_its_sleeves(client):
+    """Orphaned sleeves would appear in portfolio analysis with no parent.
+
+    The user deletes the basket, then later sees three unexplained runs in the
+    portfolio picker — and cannot delete them from the single-symbol history
+    because they are hidden there.
+    """
+    created = run(client).json()
+    children = created["child_run_ids"]
+    assert client.delete(f"/api/backtests/multi/{created['id']}").status_code == 204
+    for child in children:
+        assert client.get(f"/api/backtests/{child}").status_code == 404
+
+
+def test_prune_orphan_sleeves_cleans_up_leftovers(client):
+    """A crash between deletes (or an older version) can leave sleeves behind."""
+    from sqlalchemy import select
+
+    from app.modules.backtest.models import BacktestRun
+    from app.modules.backtest.multi import MultiSymbolBacktester
+
+    created = run(client).json()
+    settings = client.app.state.settings
+    db = Database(settings.database_url)
+    with db.session() as session:
+        # Detach the children from their parent without deleting the children.
+        from app.modules.backtest.models import MultiBacktestRun
+
+        parent = session.get(MultiBacktestRun, created["id"])
+        parent.child_run_ids_json = "[]"
+        session.commit()
+        orphans = session.scalars(
+            select(BacktestRun).where(BacktestRun.origin == "multi")
+        ).all()
+        assert len(orphans) >= 3
+        removed = MultiSymbolBacktester(
+            client.app.state.live_market, session=session
+        ).prune_orphan_sleeves()
+        assert removed >= 3
+        remaining = session.scalars(
+            select(BacktestRun).where(BacktestRun.origin == "multi")
+        ).all()
+        assert remaining == []
+    db.dispose()
