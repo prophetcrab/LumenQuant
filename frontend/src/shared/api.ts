@@ -226,6 +226,7 @@ export type BacktestRun = {
   strategy: string;
   symbol: string;
   timeframe: string;
+  currency?: string;
   params: Record<string, number | string>;
   config: Record<string, number | string>;
   metrics: BacktestMetrics;
@@ -258,6 +259,7 @@ export type PortfolioComponent = {
 export type PortfolioReport = {
   timeframe: string;
   market: "crypto" | "cn_stock";
+  currency: string;
   initial_capital: number;
   start_time: number;
   end_time: number;

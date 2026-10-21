@@ -1,6 +1,6 @@
 import type { EChartsOption } from "echarts";
 import type { Candle } from "./api";
-import { timeLabel } from "./format";
+import { currencySymbol, timeLabel } from "./format";
 
 const AXIS_COLOR = "#e7eaf0";
 const LABEL_COLOR = "#8a94a6";
@@ -57,14 +57,22 @@ export function timeAxis(dates: string[]): Record<string, unknown> {
   };
 }
 
-export function equityOption(points: { time: string; equity: number }[], baseline?: number): EChartsOption {
+export function equityOption(
+  points: { time: string; equity: number }[],
+  baseline?: number,
+  currency = "USDT",
+): EChartsOption {
   const dates = points.map((p) => p.time);
   return {
     animationDuration: 400,
     grid: { left: 8, right: 14, top: 18, bottom: 4, containLabel: true },
     tooltip: {
       ...baseTooltip(),
-      valueFormatter: (value) => `$${Number(value).toLocaleString("en-US", { maximumFractionDigits: 2 })}`,
+      valueFormatter: (value) =>
+        `${currencySymbol(currency)}${Number(value).toLocaleString("en-US", {
+          minimumFractionDigits: 2,
+          maximumFractionDigits: 2,
+        })}`,
     },
     xAxis: timeAxis(dates),
     yAxis: {
@@ -252,14 +260,22 @@ export function candleOption(candles: Candle[], overlays: Record<string, (number
 export function backtestEquityOption(
   points: { time: number; equity: number }[],
   comparison?: { time: number; strategy: number; benchmark: number }[],
+  currency = "USDT",
 ): EChartsOption {
   const dates = points.map((p) => new Date(p.time).toISOString());
+  const symbol = currencySymbol(currency);
   return {
     animationDuration: 400,
     grid: { left: 8, right: 14, top: 18, bottom: 4, containLabel: true },
     tooltip: {
       ...baseTooltip(),
-      valueFormatter: (value) => `$${Number(value).toLocaleString("en-US", { maximumFractionDigits: 2 })}`,
+      // Currency follows the traded symbol's market: A-share backtests are in
+      // CNY, so a hard-coded "$" mislabels every yuan amount as dollars.
+      valueFormatter: (value) =>
+        `${symbol}${Number(value).toLocaleString("en-US", {
+          minimumFractionDigits: 2,
+          maximumFractionDigits: 2,
+        })}`,
     },
     xAxis: timeAxis(dates),
     yAxis: {

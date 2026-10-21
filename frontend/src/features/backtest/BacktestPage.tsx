@@ -103,16 +103,21 @@ export function BacktestPage() {
   });
 
   const metrics = selectedRun?.metrics;
-  // Backtest currency follows the traded symbol's market; A-shares are CNY.
-  const runCurrency = selectedRun?.symbol?.endsWith(".SH") || selectedRun?.symbol?.endsWith(".SZ") || selectedRun?.symbol?.endsWith(".BJ")
-    ? "CNY"
-    : "USDT";
+  // The server states the currency; fall back to the symbol suffix only for runs
+  // stored before that field existed.
+  const runCurrency =
+    selectedRun?.currency ??
+    (selectedRun?.symbol?.endsWith(".SH") ||
+    selectedRun?.symbol?.endsWith(".SZ") ||
+    selectedRun?.symbol?.endsWith(".BJ")
+      ? "CNY"
+      : "USDT");
   const equityOption = useMemo(
     () =>
       selectedRun?.equity
-        ? backtestEquityOption(selectedRun.equity, selectedRun.comparison)
+        ? backtestEquityOption(selectedRun.equity, selectedRun.comparison, runCurrency)
         : null,
-    [selectedRun],
+    [selectedRun, runCurrency],
   );
 
   return (

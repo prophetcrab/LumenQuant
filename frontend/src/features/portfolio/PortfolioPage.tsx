@@ -110,7 +110,7 @@ export function PortfolioPage() {
           <div style={{ padding: "6px 8px 8px" }}>
             {points.length > 1 ? (
               <>
-                <Chart option={equityOption(points, data?.net_contributions)} height={260} notMerge />
+                <Chart option={equityOption(points, data?.net_contributions, currency)} height={260} notMerge />
                 <Chart option={drawdownOption} height={150} notMerge />
               </>
             ) : (

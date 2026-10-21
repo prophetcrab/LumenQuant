@@ -4,7 +4,7 @@ import { Chart } from "../../shared/echarts";
 import { api } from "../../shared/api";
 import type { BacktestRun, PortfolioReport } from "../../shared/api";
 import { backtestEquityOption } from "../../shared/charts";
-import { pct, price } from "../../shared/format";
+import { cash, pct } from "../../shared/format";
 import { Badge, Card, EmptyState, Field, Stat } from "../../components/ui";
 import { ButtonField } from "../../components/form";
 
@@ -13,6 +13,11 @@ type Props = {
 };
 
 const MAX_SLEEVES = 8;
+
+// Portfolio runs must share a market (the backend rejects mixed ones), so the
+// report's own currency field applies to every amount it shows.
+const currencyOf = (report: { currency?: string; market: "crypto" | "cn_stock" }) =>
+  report.currency ?? (report.market === "cn_stock" ? "CNY" : "USDT");
 
 /** Volatility and drawdown are magnitudes, not signed changes: no leading "+". */
 const mag = (value: number) => `${value.toFixed(2)}%`;
@@ -62,7 +67,7 @@ export function PortfolioPanel({ history }: Props) {
 
   const report = analyse.data ?? null;
   const equityOption = useMemo(
-    () => (report ? backtestEquityOption(report.equity) : null),
+    () => (report ? backtestEquityOption(report.equity, undefined, currencyOf(report)) : null),
     [report],
   );
 
@@ -180,6 +185,7 @@ function PortfolioResult({
   equityOption: ReturnType<typeof backtestEquityOption> | null;
 }) {
   const positive = report.metrics.total_return_pct >= 0;
+  const currency = currencyOf(report);
   return (
     <>
       {report.warnings.length > 0 ? (
@@ -259,7 +265,7 @@ function PortfolioResult({
                       </div>
                     </td>
                     <td className="numeric">{(item.weight * 100).toFixed(1)}%</td>
-                    <td className="numeric mono">{price(item.allocation)}</td>
+                    <td className="numeric mono">{cash(item.allocation, currency, 0)}</td>
                     <td className={`numeric ${item.return_pct >= 0 ? "up" : "down"}`}>
                       {pct(item.return_pct)}
                     </td>

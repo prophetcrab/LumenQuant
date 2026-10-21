@@ -168,6 +168,10 @@ class BacktestService:
             "strategy": row.strategy,
             "symbol": row.symbol,
             "timeframe": row.timeframe,
+            # Explicit currency instead of letting the UI infer it from the symbol
+            # suffix. A new market (e.g. .HK) would otherwise silently be labelled
+            # USDT, and A-shares were already rendering "$" in chart tooltips.
+            "currency": "CNY" if row.symbol.endswith((".SH", ".SZ", ".BJ")) else "USDT",
             "params": json.loads(row.params_json),
             "config": json.loads(row.config_json),
             "metrics": json.loads(row.metrics_json),

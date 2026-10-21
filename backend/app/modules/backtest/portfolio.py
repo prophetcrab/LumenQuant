@@ -258,6 +258,7 @@ class PortfolioAnalyser:
         return {
             "timeframe": timeframe,
             "market": market,
+            "currency": "CNY" if market == "cn_stock" else "USDT",
             "initial_capital": round(initial_capital, 2),
             "start_time": common[0],
             "end_time": common[-1],

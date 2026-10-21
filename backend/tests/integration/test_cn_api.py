@@ -583,3 +583,25 @@ def test_csv_import_invalidates_cached_quality(cn_client):
         "/api/data/quality", params={"symbol": symbol, "timeframe": "1d"}
     ).json()
     assert after["bars"] == before["bars"] + 3
+
+
+def test_backtest_reports_the_traded_currency(cn_client):
+    """The client must not infer currency from the symbol suffix.
+
+    Charts labelled A-share yuan amounts with "$" because the UI guessed from
+    `.SH`/`.SZ`/`.BJ`. Stating it in the payload keeps every consumer correct,
+    including future markets whose suffix nobody has taught the UI about.
+    """
+    symbols = cn_client.get("/api/cn/symbols").json()
+    code = symbols[0]["code"]
+    run = cn_client.post(
+        "/api/backtests",
+        json={"strategy": "sma_cross", "symbol": code, "timeframe": "1d", "bars": 100},
+    ).json()
+    assert run["currency"] == "CNY"
+
+    crypto = cn_client.post(
+        "/api/backtests",
+        json={"strategy": "sma_cross", "symbol": "BTCUSDT", "timeframe": "1h", "bars": 100},
+    ).json()
+    assert crypto["currency"] == "USDT"
