@@ -39,12 +39,31 @@ export function AccountsPage() {
 
   const toggleStatus = useMutation({
     mutationFn: (status: "active" | "archived") => api.updateAccount(accountId as string, { status }),
-    onSuccess: () => {
-      toast.push("账户状态已更新");
+    onSuccess: (_account, status) => {
+      // Archiving stops every running instance on this account server-side;
+      // saying so confirms the side effect rather than leaving it a surprise.
+      toast.push(
+        status === "archived"
+          ? "账户已归档，该账户下的自动运行实例已停止"
+          : "账户已恢复；自动运行实例需要手动重新启动",
+      );
       queryClient.invalidateQueries();
     },
     onError: (error: Error) => toast.push(error.message, "error"),
   });
+
+  // Native confirm() blocks the whole page (and any automation driving it), so
+  // the warning lives in the app's own modal like every other confirmation.
+  const [archiveOpen, setArchiveOpen] = useState(false);
+
+  const archiveAccount = () => {
+    if (!account) return;
+    if (account.status !== "active") {
+      toggleStatus.mutate("active");
+      return;
+    }
+    setArchiveOpen(true);
+  };
 
   return (
     <div className="stack" style={{ gap: 16 }}>
@@ -75,14 +94,15 @@ export function AccountsPage() {
               <div className="toolbar-spacer" />
               <ButtonField
                 variant={account.status === "active" ? "danger" : "default"}
-                onClick={() => toggleStatus.mutate(account.status === "active" ? "archived" : "active")}
+                onClick={archiveAccount}
                 disabled={toggleStatus.isPending}
               >
                 {account.status === "active" ? "归档账户" : "恢复账户"}
               </ButtonField>
             </div>
             <p className="helper" style={{ marginTop: 14, marginBottom: 0 }}>
-              出入金只影响模拟现金余额，不改变已实现盈亏；归档后禁止下单与入金，历史数据仍可查询。
+              出入金只影响模拟现金余额，不改变已实现盈亏。
+              归档后禁止下单与入金，并停止该账户下所有自动运行实例；历史数据仍可查询。
             </p>
           </Card>
 
@@ -172,6 +192,40 @@ export function AccountsPage() {
       </Card>
 
       <CreateAccountModal open={createOpen} onClose={() => setCreateOpen(false)} />
+
+      <Modal
+        open={archiveOpen}
+        title="归档账户"
+        onClose={() => setArchiveOpen(false)}
+        footer={
+          <>
+            <button className="button" onClick={() => setArchiveOpen(false)}>
+              取消
+            </button>
+            <button
+              className="button danger"
+              disabled={toggleStatus.isPending}
+              onClick={() => {
+                toggleStatus.mutate("archived");
+                setArchiveOpen(false);
+              }}
+            >
+              {toggleStatus.isPending ? "归档中…" : "确认归档"}
+            </button>
+          </>
+        }
+      >
+        <div className="stack" style={{ gap: 10, fontSize: 13 }}>
+          <div>
+            归档后该账户<strong>禁止下单与入金</strong>，
+            所有运行中的<strong>自动运行实例会被停止</strong>。
+          </div>
+          <div className="muted">
+            已有持仓不会自动平仓。历史订单、持仓与资金流水仍然可查询；
+            恢复账户后需要手动重新启动实例。
+          </div>
+        </div>
+      </Modal>
 
       <Modal
         open={fundOpen !== null}
