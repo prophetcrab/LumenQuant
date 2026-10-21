@@ -18,7 +18,10 @@ export function TradingPage() {
   const openOrders = useOrders("open", 100);
   const recentOrders = useOrders(undefined, 50);
   const fills = useFills(50);
-  const snapshots = useSnapshots();
+  // Only the account's own market is tradeable; listing both invited the user to
+  // pick an A-share symbol on a crypto account and collect a 422 at submission.
+  const market = account?.market;
+  const snapshots = useSnapshots(market);
   const [symbol, setSymbol] = useState("BTCUSDT");
   const [side, setSide] = useState<"buy" | "sell">("buy");
   const [orderType, setOrderType] = useState<"market" | "limit">("market");
@@ -27,6 +30,23 @@ export function TradingPage() {
 
   const snapshot = snapshots.data?.find((item) => item.symbol === symbol);
   const position = positions.data?.find((item) => item.symbol === symbol);
+
+  useEffect(() => {
+    // Switching accounts changes the market; the previously selected symbol may
+    // no longer exist in the list, which would leave the select showing a value
+    // that is not among its options.
+    const rows = snapshots.data ?? [];
+    if (rows.length === 0) return;
+    if (rows.some((item) => item.symbol === symbol)) return;
+    // Fall back to the market's benchmark rather than whatever sorts first:
+    // "ADAUSDT" is a surprising default for a fresh crypto account.
+    const preferred = market === "cn_stock" ? "600036.SH" : "BTCUSDT";
+    const next = rows.some((item) => item.symbol === preferred)
+      ? preferred
+      : rows[0].symbol;
+    setSymbol(next);
+    setLimitPrice("");
+  }, [snapshots.data, symbol, market]);
 
   useEffect(() => {
     if (snapshot && !limitPrice) setLimitPrice(snapshot.price.toFixed(2));
