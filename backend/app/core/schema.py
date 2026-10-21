@@ -8,3 +8,4 @@ from app.modules.backtest import models as backtest_models  # noqa: F401
 from app.modules.portfolio import models as portfolio_models  # noqa: F401
 from app.modules.runtime import models as runtime_models  # noqa: F401
 from app.modules.risk import models as risk_models  # noqa: F401
+from app.modules.alerts import models as alerts_models  # noqa: F401

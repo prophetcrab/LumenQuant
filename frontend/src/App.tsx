@@ -19,6 +19,9 @@ const CnMarketPage = lazy(() =>
 const RiskPage = lazy(() =>
   import("./features/risk/RiskPage").then((m) => ({ default: m.RiskPage })),
 );
+const AlertsPage = lazy(() =>
+  import("./features/alerts/AlertsPage").then((m) => ({ default: m.AlertsPage })),
+);
 const RuntimePage = lazy(() =>
   import("./features/runtime/RuntimePage").then((m) => ({ default: m.RuntimePage })),
 );
@@ -54,6 +57,7 @@ export default function App() {
           <Route path="/trading" element={<TradingPage />} />
           <Route path="/cn" element={<CnMarketPage />} />
           <Route path="/risk" element={<RiskPage />} />
+          <Route path="/alerts" element={<AlertsPage />} />
           <Route path="/runtime" element={<RuntimePage />} />
           <Route path="/strategies" element={<StrategiesPage />} />
           <Route path="/backtest" element={<BacktestPage />} />

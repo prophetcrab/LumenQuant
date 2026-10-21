@@ -145,6 +145,19 @@ class RiskService:
             entity_id=account_id,
             detail=json.dumps({"reason": reason}),
         )
+        # A tripped breaker stops all new orders. Nobody watching the screen at
+        # that moment would otherwise learn about it until they tried to trade.
+        from app.modules.alerts.service import AlertService
+
+        AlertService(self.session).raise_alert(
+            category="breaker",
+            level="critical",
+            account_id=account_id,
+            title="风控熔断已触发，新开仓被禁止",
+            message=reason,
+            ref_type="account",
+            ref_id=account_id,
+        )
         self.session.commit()
         return self.state(account_id)
 

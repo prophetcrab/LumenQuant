@@ -271,6 +271,25 @@ export type MultiBacktestReport = {
   warnings: string[];
 };
 
+export type Alert = {
+  id: string;
+  account_id: string;
+  level: "info" | "warning" | "critical";
+  category: string;
+  title: string;
+  message: string;
+  ref_type: string;
+  ref_id: string;
+  acknowledged: boolean;
+  acknowledged_at: string;
+  created_at: string;
+};
+
+export type AlertSummary = {
+  unacknowledged: number;
+  by_level: Record<string, number>;
+};
+
 export type MultiBacktestSummary = {
   id: string;
   strategy: string;
@@ -864,6 +883,15 @@ export const api = {
     config: Record<string, unknown>;
   }) => request<BacktestRun>("/backtests", { method: "POST", body: JSON.stringify(body) }),
   deleteBacktest: (id: string) => request<void>(`/backtests/${id}`, { method: "DELETE" }),
+  alerts: (params: { account_id?: string; unacknowledged_only?: boolean; level?: string; limit?: number } = {}) =>
+    request<Alert[]>(`/alerts${qs(params)}`),
+  alertSummary: (accountId?: string) =>
+    request<AlertSummary>(`/alerts/summary${qs({ account_id: accountId })}`),
+  ackAlert: (id: string) => request<Alert>(`/alerts/${id}/ack`, { method: "POST" }),
+  ackAllAlerts: (accountId?: string) =>
+    request<{ acknowledged: number }>(`/alerts/ack-all${qs({ account_id: accountId })}`, {
+      method: "POST",
+    }),
   multiBacktests: (limit = 30) =>
     request<MultiBacktestSummary[]>(`/backtests/multi${qs({ limit })}`),
   multiBacktestRun: (id: string) =>

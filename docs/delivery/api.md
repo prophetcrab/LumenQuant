@@ -113,3 +113,11 @@ Base URL：`http://127.0.0.1:8000/api`　完整交互式文档：`/docs`
 可用工具：`list_accounts`、`account_overview`、`risk_overview`、`list_positions`、
 `recent_orders`、`market_snapshot`、`list_strategies`、`strategy_signals`、
 `run_backtest`、`list_runtime_instances`。全部只读。
+
+## 告警
+- `GET /api/alerts?account_id=&unacknowledged_only=&level=&limit=` — 告警列表
+- `GET /api/alerts/summary?account_id=` — 未确认数量（按级别）
+- `POST /api/alerts/{id}/ack`、`POST /api/alerts/ack-all?account_id=` — 确认
+
+熔断触发、保护性离场（含失败）、自动下单被拒与网关故障会自动产生告警；
+同一条未确认告警在 5 分钟内不会重复。

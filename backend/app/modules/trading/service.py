@@ -661,6 +661,18 @@ class TradingService:
                 client_order_id=client_order_id,
                 reason=str(exc),
             )
+            from app.modules.alerts.service import AlertService
+
+            AlertService(self.session).raise_alert(
+                category="gateway_failure",
+                level="critical",
+                account_id=account_id,
+                title=f"{symbol} 下单网关调用失败",
+                message=f"{side} {quantity} {symbol}：{exc}",
+                ref_type="account",
+                ref_id=account_id,
+                commit=True,
+            )
             raise ConflictError(
                 f"下单网关调用失败，订单未确认提交：{exc}"
             ) from exc

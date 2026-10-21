@@ -3,6 +3,7 @@ from __future__ import annotations
 from fastapi import APIRouter
 
 from app.modules.accounts.router import router as accounts_router
+from app.modules.alerts.router import router as alerts_router
 from app.modules.assistant.router import router as assistant_router
 from app.modules.backtest.router import router as backtest_router
 from app.modules.brokers.router import router as brokers_router
@@ -26,6 +27,7 @@ api_router.include_router(strategies_router)
 api_router.include_router(backtest_router)
 api_router.include_router(portfolio_router)
 api_router.include_router(runtime_router)
+api_router.include_router(alerts_router)
 api_router.include_router(assistant_router)
 api_router.include_router(brokers_router)
 api_router.include_router(risk_router)
