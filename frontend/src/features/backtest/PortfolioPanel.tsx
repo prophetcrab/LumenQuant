@@ -1,5 +1,5 @@
 import { useMemo, useState } from "react";
-import { useMutation } from "@tanstack/react-query";
+import { useMutation, useQuery } from "@tanstack/react-query";
 import { Chart } from "../../shared/echarts";
 import { api } from "../../shared/api";
 import type { BacktestRun, PortfolioReport } from "../../shared/api";
@@ -26,6 +26,19 @@ export function PortfolioPanel({ history }: Props) {
   const [selected, setSelected] = useState<string[]>([]);
   const [weights, setWeights] = useState<Record<string, string>>({});
   const [capital, setCapital] = useState("100000");
+  // Basket runs already contain per-symbol curves; importing them saves the user
+  // from re-running each symbol just to see their correlation.
+  const baskets = useQuery({
+    queryKey: ["multi-backtests", 20],
+    queryFn: () => api.multiBacktests(20),
+  });
+  const [basketId, setBasketId] = useState("");
+  // Runs saved before sleeve persistence exist without children; they would fill
+  // the list with options that do nothing when chosen.
+  const importable = useMemo(
+    () => (baskets.data ?? []).filter((item) => (item.child_run_ids?.length ?? 0) > 0),
+    [baskets.data],
+  );
 
   const runs = useMemo(
     () => (history ?? []).filter((item) => item.bars >= 50).slice(0, 60),
@@ -85,6 +98,36 @@ export function PortfolioPanel({ history }: Props) {
           </ButtonField>
         }
       >
+        {importable.length > 0 ? (
+          <Field
+            label="从多标的回测导入"
+            hint="把一次篮子回测的各标的曲线直接加入组合"
+          >
+            <select
+              className="select"
+              value={basketId}
+              onChange={(event) => {
+                const id = event.target.value;
+                setBasketId(id);
+                const basket = baskets.data?.find((item) => item.id === id);
+                const ids = basket?.child_run_ids ?? [];
+                if (ids.length > 0) {
+                  setSelected(ids);
+                  setWeights({});
+                  setCapital(String(Math.round(basket?.initial_capital ?? 100000)));
+                }
+              }}
+            >
+              <option value="">选择一次多标的回测…</option>
+              {importable.map((item) => (
+                <option key={item.id} value={item.id}>
+                  {item.strategy} · {item.symbols.join("/")} · {item.timeframe}
+                </option>
+              ))}
+            </select>
+          </Field>
+        ) : null}
+
         <div className="grid grid-2" style={{ gap: 12, marginBottom: 14 }}>
           <Field label="组合初始资金" hint="按权重分配到各回测">
             <input
@@ -289,10 +332,15 @@ function PortfolioResult({
 function CorrelationMatrix({ labels, matrix }: { labels: string[]; matrix: number[][] }) {
   // Keep the strategy and the run discriminator: dropping everything after the
   // first " · " collapsed duplicate runs into identical row headers.
+  // The label is "strategy · symbol" (plus a run discriminator when two rows are
+  // identical). Showing only the strategy collapsed every same-strategy basket
+  // into identical headers; the symbol is what distinguishes them.
   const short = labels.map((label) => {
     const [strategy, rest] = label.split(" · ");
-    const tag = rest?.split(" #")[1];
-    return tag ? `${strategy} #${tag}` : strategy;
+    if (!rest) return strategy;
+    const tag = rest.split(" #")[1];
+    const symbol = rest.split(" #")[0];
+    return tag ? `${symbol} #${tag}` : symbol;
   });
   const cell = (value: number) => {
     if (value === 1) return { background: "var(--surface-active)", color: "var(--text-muted)" };

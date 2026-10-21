@@ -302,6 +302,7 @@ export type MultiBacktestSummary = {
   final_equity: number;
   bars: number;
   metrics: BacktestMetrics;
+  child_run_ids?: string[];
   started_at: string;
   duration_ms: number;
 };

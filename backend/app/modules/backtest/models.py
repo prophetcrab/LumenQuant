@@ -30,6 +30,10 @@ class BacktestRun(Base):
     started_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, index=True)
     finished_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
     duration_ms: Mapped[float] = mapped_column(Float, default=0.0)
+    # "" for a normal run, "multi" for a sleeve written by a basket backtest.
+    # Sleeves are ordinary runs (same shape, same analysis path) but should not
+    # clutter the single-symbol history list.
+    origin: Mapped[str] = mapped_column(String(16), default="", index=True)
 
 
 class MultiBacktestRun(Base):
@@ -59,5 +63,8 @@ class MultiBacktestRun(Base):
     initial_capital: Mapped[float] = mapped_column(Float, default=100_000.0)
     final_equity: Mapped[float] = mapped_column(Float, default=0.0)
     bars: Mapped[int] = mapped_column(Integer, default=0)
+    # BacktestRun ids for each sleeve, in the same order as `symbols_json`.
+    # Portfolio analysis consumes these directly.
+    child_run_ids_json: Mapped[str] = mapped_column(Text, default="[]")
     started_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, index=True)
     duration_ms: Mapped[float] = mapped_column(Float, default=0.0)

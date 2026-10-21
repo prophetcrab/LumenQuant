@@ -174,13 +174,25 @@ class MultiSymbolBacktester:
         # Measured across the whole basket, not just the merge step.
         report["duration_ms"] = round((time.perf_counter() - started) * 1000, 2)
         if self.session is not None:
-            report["id"] = self._persist(report, shares)
+            run_id, child_ids = self._persist(report, sleeves, shares)
+            report["id"] = run_id
+            report["child_run_ids"] = child_ids
         return report
 
     # ----------------------------------------------------------- persistence
-    def _persist(self, report: dict, shares: list[float]) -> str:
-        from app.modules.backtest.models import MultiBacktestRun
+    def _persist(
+        self, report: dict, sleeves: list[dict], shares: list[float]
+    ) -> tuple[str, list[str]]:
+        """Save the basket and one ordinary BacktestRun per sleeve.
 
+        The sleeves are the reason this exists: portfolio analysis already knows
+        how to correlate a set of BacktestRun curves, so writing them in that shape
+        makes "run a basket, then study its diversification" a two-click flow
+        instead of requiring the user to re-run each symbol separately.
+        """
+        from app.modules.backtest.models import BacktestRun, MultiBacktestRun
+
+        child_ids = self._persist_sleeves(report, sleeves)
         row = MultiBacktestRun(
             strategy=report["strategy"],
             symbols_json=json.dumps([c["symbol"] for c in report["components"]]),
@@ -200,6 +212,7 @@ class MultiSymbolBacktester:
             comparison_json=json.dumps(report["comparison"]),
             components_json=json.dumps(report["components"]),
             warnings_json=json.dumps(report["warnings"]),
+            child_run_ids_json=json.dumps(child_ids),
             initial_capital=report["initial_capital"],
             final_equity=report["equity"][-1]["equity"],
             bars=report["aligned_bars"],
@@ -208,7 +221,41 @@ class MultiSymbolBacktester:
         self.session.add(row)
         self.session.commit()
         self.session.refresh(row)
-        return row.id
+        return row.id, child_ids
+
+    def _persist_sleeves(self, report: dict, sleeves: list[dict]) -> list[str]:
+        from app.modules.backtest.models import BacktestRun
+
+        ids: list[str] = []
+        for sleeve in sleeves:
+            result = sleeve["result"]
+            run = BacktestRun(
+                strategy=report["strategy"],
+                symbol=sleeve["symbol"],
+                timeframe=report["timeframe"],
+                params_json=json.dumps(report["params"]),
+                config_json=json.dumps(
+                    {
+                        "initial_capital": sleeve["allocation"],
+                        "market": report["market"],
+                        "rebalance_bars": report["rebalance_bars"],
+                    }
+                ),
+                metrics_json=json.dumps(result.metrics),
+                equity_json=json.dumps(result.equity_curve),
+                comparison_json="[]",
+                trades_json=json.dumps([t.as_dict() for t in result.trades]),
+                initial_capital=sleeve["allocation"],
+                final_equity=result.metrics.get("final_equity", 0.0),
+                bars=len(sleeve["candles"]),
+                origin="multi",
+            )
+            self.session.add(run)
+            # The id comes from a Python-side default, so it only exists after a
+            # flush — appending `run.id` before that yields None.
+            self.session.flush()
+            ids.append(run.id)
+        return ids
 
     def list_runs(self, *, limit: int = 30) -> list[dict]:
         from app.modules.backtest.models import MultiBacktestRun
@@ -231,6 +278,7 @@ class MultiSymbolBacktester:
                 "final_equity": row.final_equity,
                 "bars": row.bars,
                 "metrics": json.loads(row.metrics_json),
+                "child_run_ids": json.loads(row.child_run_ids_json or "[]"),
                 "started_at": row.started_at.isoformat() if row.started_at else "",
                 "duration_ms": round(row.duration_ms, 2),
             }
@@ -262,6 +310,7 @@ class MultiSymbolBacktester:
             "comparison": json.loads(row.comparison_json),
             "components": json.loads(row.components_json),
             "warnings": json.loads(row.warnings_json),
+            "child_run_ids": json.loads(row.child_run_ids_json or "[]"),
             "started_at": row.started_at.isoformat() if row.started_at else "",
             "duration_ms": round(row.duration_ms, 2),
         }

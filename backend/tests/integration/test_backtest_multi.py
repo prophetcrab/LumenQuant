@@ -246,3 +246,59 @@ def test_failed_run_is_not_persisted(client):
     before = len(client.get("/api/backtests/multi").json())
     assert run(client, symbols=["BTCUSDT", "600036.SH"]).status_code == 422
     assert len(client.get("/api/backtests/multi").json()) == before
+
+
+def test_sleeves_are_stored_as_ordinary_runs(client):
+    """Each sleeve must be a normal BacktestRun so portfolio analysis can use it.
+
+    Without this the user had to re-run every symbol individually before the
+    correlation view could say anything — the basket run knew the answer but had
+    no way to hand it over.
+    """
+    created = run(client).json()
+    children = created.get("child_run_ids") or []
+    assert len(children) == 3
+    assert all(isinstance(item, str) and item for item in children)
+
+    # They are reachable as ordinary runs.
+    for run_id in children:
+        detail = client.get(f"/api/backtests/{run_id}")
+        assert detail.status_code == 200
+        assert detail.json()["strategy"] == "sma_cross"
+
+
+def test_sleeves_stay_out_of_the_single_symbol_history(client):
+    """Basket sleeves belong to their parent run, not the flat history list."""
+    created = run(client).json()
+    history = client.get("/api/backtests").json()
+    ids = {item["id"] for item in history}
+    assert all(child not in ids for child in created["child_run_ids"])
+
+
+def test_sleeves_feed_portfolio_analysis(client):
+    """The whole point: a basket run can be studied for diversification at once."""
+    created = run(client).json()
+    response = client.post(
+        "/api/backtests/portfolio", json={"run_ids": created["child_run_ids"][:2]}
+    )
+    assert response.status_code == 200, response.text
+    body = response.json()
+    assert len(body["components"]) == 2
+    assert body["correlation"]["matrix"][0][1] == pytest.approx(
+        body["correlation"]["matrix"][1][0]
+    )
+    labels = body["correlation"]["labels"]
+    assert "BTCUSDT" in labels[0] and "ETHUSDT" in labels[1]
+
+
+def test_rebalanced_sleeves_are_stored_unrebalanced(client):
+    """Sleeve rows hold the per-symbol strategy curve, not the basket mix.
+
+    The parent run owns the rebalanced combination; a sleeve is "this strategy on
+    this symbol", which is what correlation analysis needs.
+    """
+    rebalanced = run(client, rebalance_bars=20).json()
+    plain = run(client, rebalance_bars=0).json()
+    a = client.get(f"/api/backtests/{rebalanced['child_run_ids'][0]}").json()
+    b = client.get(f"/api/backtests/{plain['child_run_ids'][0]}").json()
+    assert a["equity"] == b["equity"]

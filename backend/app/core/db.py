@@ -96,6 +96,10 @@ class Database:
             },
             "backtest_runs": {
                 "comparison_json": "TEXT NOT NULL DEFAULT '[]'",
+                "origin": "VARCHAR(16) NOT NULL DEFAULT ''",
+            },
+            "multi_backtest_runs": {
+                "child_run_ids_json": "TEXT NOT NULL DEFAULT '[]'",
             },
             "risk_states": {
                 "day_key": "VARCHAR(10) NOT NULL DEFAULT ''",

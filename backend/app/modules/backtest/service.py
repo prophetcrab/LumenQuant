@@ -144,8 +144,13 @@ class BacktestService:
         return self._view(run, include_series=True)
 
     def list(self, *, limit: int = 30) -> list[dict]:
+        # Basket sleeves live here too (so portfolio analysis can use them), but
+        # they belong to their parent run, not to the single-symbol history.
         rows = self.session.scalars(
-            select(BacktestRun).order_by(BacktestRun.started_at.desc()).limit(max(1, min(limit, 200)))
+            select(BacktestRun)
+            .where(BacktestRun.origin != "multi")
+            .order_by(BacktestRun.started_at.desc())
+            .limit(max(1, min(limit, 200)))
         ).all()
         return [self._view(row, include_series=False) for row in rows]
 
