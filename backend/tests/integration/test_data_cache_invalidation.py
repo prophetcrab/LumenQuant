@@ -98,3 +98,55 @@ def test_delete_invalidates_the_candle_cache(client):
     ).json()["candles"]
     # Daily aggregation of an empty store yields nothing rather than stale bars.
     assert after == [] or all(bar["close"] != 40.0 for bar in after)
+
+
+def test_sync_endpoint_invalidates_caches(tmp_path, monkeypatch):
+    """Sync is a writer too; it used to leave the caches untouched.
+
+    `/api/cn/data/sync` fetches quotes and rewrites bars, but it lives in the CN
+    data router and never touched the caches the market router reads through. The
+    quality panel then showed pre-sync numbers for up to 30 seconds — precisely
+    when the user is looking at it to confirm the sync worked.
+    """
+    from app.core.cache import invalidate_symbol_caches
+    from app.modules.cn.sync import SymbolSyncResult, SyncReport
+
+    settings = Settings(
+        database_url=f"sqlite:///{(tmp_path / 'sync-cache.db').as_posix()}",
+        seed_market=False,
+        cn_symbols_enabled=True,
+        cn_data_source="tencent",
+        cn_sync_on_start=False,
+        runtime_enabled=False,
+        cn_session_enforced=False,
+        cn_live_session_gate=False,
+    )
+    db = Database(settings.database_url)
+    db.create_schema()
+    app = create_app(settings, db)
+
+    def fake_sync(self, codes=None, *, daily_limit=0, intraday_limit=0):
+        report = SyncReport(source="tencent")
+        report.symbols = [
+            SymbolSyncResult(code="600036.SH", daily_bars=10),
+            SymbolSyncResult(code="000001.SZ", daily_bars=0, error="upstream down"),
+        ]
+        return report
+
+    monkeypatch.setattr(
+        "app.modules.cn.sync.CnDataSyncService.sync_symbols", fake_sync
+    )
+    calls: list[str] = []
+    # Patch where the sync handler looks the name up, not where it is defined.
+    monkeypatch.setattr(
+        "app.modules.cn.data_router.invalidate_symbol_caches",
+        lambda _state, code: calls.append(code),
+    )
+
+    with TestClient(app) as client:
+        response = client.post("/api/cn/data/sync")
+        assert response.status_code == 200, response.text
+    db.dispose()
+
+    # Only successfully synced symbols are invalidated; a failed one changed nothing.
+    assert calls == ["600036.SH"]

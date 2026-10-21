@@ -81,3 +81,27 @@ class TTLCache:
             "misses": self.misses,
             "hit_rate": round(self.hits / total, 4) if total else 0.0,
         }
+
+
+def invalidate_symbol_caches(app_state, symbol: str) -> None:
+    """Drop every cached view of one symbol's market data.
+
+    Three caches hold derived copies of the same rows: coverage/quality (30s),
+    candles (2s) and snapshots (1.5s). Every writer — CSV import, series delete,
+    data sync — must clear all three, or the write stays invisible for its TTL
+    while the user is looking at the screen to confirm it worked.
+
+    The snapshot cache is keyed by market rather than by symbol, so its whole
+    family is dropped; there is no per-symbol key to target.
+    """
+    code = symbol.upper()
+    stats = getattr(app_state, "stats_cache", None)
+    if stats is not None:
+        stats.invalidate("coverage")
+        stats.invalidate(f"quality:{code}:")
+    candles = getattr(app_state, "candle_cache", None)
+    if candles is not None:
+        candles.invalidate(f"{code}:")
+    market = getattr(app_state, "market_cache", None)
+    if market is not None:
+        market.invalidate("snapshots:")

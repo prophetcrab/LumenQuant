@@ -83,6 +83,9 @@ trades: 2  ret: 175.12%  blocked: 全部为 0  warnings: []
 - 这套"缓存与写入"的配对关系目前靠约定维持。可以在 `TTLCache` 上增加一个
   `invalidation_group` 概念，让写入方声明"我改了哪些组"，而不是记住前缀字符串。
   当前只有三处缓存，加抽象反而增加理解成本，先记下。
-- 同步服务（`CnDataSyncService`）也写 K 线，但它跑在后台任务里、不经过 HTTP
-  router，因此拿不到 `request.app.state` 的缓存。同步后 2 秒内的陈旧读数同样存在。
-  如果要彻底解决，需要在缓存层暴露一个进程级句柄，属于结构性改动。
+- 同步端点（`/api/cn/data/sync`）同样是写入方，最初也没有失效缓存。
+  本轮一并修复：失效逻辑被提取到 `app/core/cache.py` 的
+  `invalidate_symbol_caches(app_state, symbol)`，由 CSV 导入、序列删除、
+  数据同步三处共用。同步只清"成功同步"的标的——失败的标的没有改动数据，
+  清缓存只会让页面白白重算。
+- 后台调度器（`CnDataSyncService` 的定时调用）走的是同一个端点，因此也已被覆盖。

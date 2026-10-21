@@ -13,6 +13,7 @@ from sqlalchemy.orm import Session
 
 from app.api.deps import get_session
 from app.api.wiring import build_market, settings_of
+from app.core.cache import invalidate_symbol_caches
 from app.modules.cn.sources.base import SourceUnavailable
 from app.modules.cn.sources.tencent import TencentSource
 from app.modules.cn.sync import CnDataSyncService
@@ -69,6 +70,13 @@ def sync(
         daily_limit=daily_limit or settings.cn_sync_daily_limit,
         intraday_limit=intraday_limit or settings.cn_sync_intraday_limit,
     )
+    # Sync rewrites bars, closes and quote fields for every symbol it touched, so
+    # every cached view of them is now wrong. Without this the quality panel and
+    # the K-line chart keep showing the pre-sync series for up to 30 seconds —
+    # exactly when the user is looking at them to confirm the sync worked.
+    for item in report.symbols:
+        if not item.error:
+            invalidate_symbol_caches(request.app.state, item.code)
     return report.as_dict()
 
 
