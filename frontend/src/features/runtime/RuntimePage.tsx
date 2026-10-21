@@ -492,7 +492,31 @@ export function RuntimePage() {
             </Field>
           ))}
         </div>
-        <div className="helper">实例启动后会在下一根已收盘 K 线触发首次评估，并遵守账户级风控。</div>
+        {account.kind === "live" ? (
+          <div
+            className="stack"
+            style={{
+              gap: 6,
+              marginTop: 12,
+              padding: "12px 14px",
+              border: "1px solid var(--negative-soft, #f3c2c2)",
+              background: "var(--negative-soft)",
+              borderRadius: 10,
+              fontSize: 12.5,
+              lineHeight: 1.7,
+            }}
+          >
+            <strong>当前账户是实盘账户：此实例会自动下真实订单。</strong>
+            <span>
+              需要服务端开启 <span className="mono">LQ_LIVE_AUTO_TRADING_ENABLED=true</span>，
+              否则创建会被拒绝。关闭该开关后，已存在的实例也会立即停止开仓
+              （止损等保护性离场不受影响）。
+            </span>
+          </div>
+        ) : null}
+        <div className="helper" style={{ marginTop: 10 }}>
+          实例启动后会在下一根已收盘 K 线触发首次评估，并遵守账户级风控。
+        </div>
       </Modal>
 
       <Modal
