@@ -30,6 +30,11 @@ class StrategyInstance(Base):
     running: Mapped[bool] = mapped_column(Boolean, default=False, index=True)
     last_bar_time: Mapped[int] = mapped_column(BigInteger, default=0)
     last_signal_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    # Protective exits — must mirror the backtest or research and production diverge.
+    stop_loss_pct: Mapped[float] = mapped_column(Float, default=0.0)
+    take_profit_pct: Mapped[float] = mapped_column(Float, default=0.0)
+    trailing_stop_pct: Mapped[float] = mapped_column(Float, default=0.0)
+    peak_price: Mapped[float] = mapped_column(Float, default=0.0)
     last_error: Mapped[str] = mapped_column(String(400), default="")
     executions: Mapped[int] = mapped_column(Integer, default=0)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)

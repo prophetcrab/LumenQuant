@@ -44,6 +44,9 @@ def create_instance(
         params=payload.params,
         position_pct=payload.position_pct,
         max_order_notional=payload.max_order_notional,
+        stop_loss_pct=payload.stop_loss_pct,
+        take_profit_pct=payload.take_profit_pct,
+        trailing_stop_pct=payload.trailing_stop_pct,
         start=payload.start,
     )
 
@@ -60,6 +63,9 @@ def update_instance(
         params=payload.params,
         position_pct=payload.position_pct,
         max_order_notional=payload.max_order_notional,
+        stop_loss_pct=payload.stop_loss_pct,
+        take_profit_pct=payload.take_profit_pct,
+        trailing_stop_pct=payload.trailing_stop_pct,
     )
 
 

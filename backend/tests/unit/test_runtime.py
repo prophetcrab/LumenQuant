@@ -54,6 +54,10 @@ class Market:
     def __init__(self) -> None:
         self.time = 1_700_000_000_000
         self.closed_only_seen: bool | None = None
+        self.current = 100.0
+
+    def last_price(self, _symbol: str) -> float:
+        return self.current
 
     def require_symbol(self, code):
         return SymbolView(
@@ -181,3 +185,101 @@ def test_sizing_explains_notional_cap_not_cash(env):
     assert "max_order_notional" in message or "单笔上限" in message
     assert "可用资金" not in message.split("；")[0] or "超过单笔上限" in message
     assert trading.positions(account.id) == []
+
+
+def test_protective_exit_closes_position(env):
+    """The runner must honour stop rules — the backtest always did."""
+    service, accounts, trading, account, market = env
+    accounts.deposit(account.id, 900_000)
+    view = service.create(
+        account_id=account.id,
+        strategy_key="test_buy_now",
+        symbol="BTCUSDT",
+        timeframe="1h",
+        params={},
+        position_pct=0.5,
+        max_order_notional=50_000,
+        stop_loss_pct=10,       # percent form, normalised to 0.10
+        start=True,
+    )
+    row = service._require(view.id)
+    assert service.evaluate_instance(row) == "executed"
+    positions = trading.positions(account.id)
+    assert positions and positions[0].quantity > 0
+    entry = positions[0].avg_price
+    assert row.stop_loss_pct == pytest.approx(0.10)
+
+    # Nudge the fake market below the stop and run the protective sweep.
+    market.current = entry * 0.85
+    outcomes = service.protect_positions()
+    assert outcomes.get(row.id) == "stop_loss"
+
+    assert trading.positions(account.id) == []
+    logs = service.logs(view.id)
+    assert any(log.event == "stop_loss" for log in logs)
+    assert service._require(view.id).peak_price == 0.0
+
+
+def test_protective_sweep_ignores_instances_without_rules(env):
+    service, accounts, _, account, market = env
+    accounts.deposit(account.id, 900_000)
+    view = service.create(
+        account_id=account.id, strategy_key="test_buy_now", symbol="BTCUSDT",
+        timeframe="1h", params={}, position_pct=0.5, max_order_notional=50_000, start=True,
+    )
+    row = service._require(view.id)
+    service.evaluate_instance(row)
+    market.current = row_last_price(service, row) * 0.5
+    outcomes = service.protect_positions()
+    assert outcomes == {}
+
+
+def row_last_price(service, row) -> float:
+    return service.market.last_price(row.symbol)
+
+
+def test_trailing_stop_ratchets_peak(env):
+    service, accounts, trading, account, market = env
+    accounts.deposit(account.id, 900_000)
+    view = service.create(
+        account_id=account.id, strategy_key="test_buy_now", symbol="BTCUSDT",
+        timeframe="1h", params={}, position_pct=0.5, max_order_notional=50_000,
+        trailing_stop_pct=10, start=True,
+    )
+    row = service._require(view.id)
+    service.evaluate_instance(row)
+    entry = trading.positions(account.id)[0].avg_price
+
+    # Price advances 20%: peak ratchets up, position stays open.
+    market.current = entry * 1.20
+    outcomes = service.protect_positions()
+    assert outcomes == {}
+    assert row.peak_price == pytest.approx(entry * 1.20, rel=1e-6)
+
+    # A 10% pullback from the peak (108 when entry=100) must exit.
+    market.current = entry * 1.06
+    outcomes = service.protect_positions()
+    assert outcomes.get(row.id) == "trailing_stop"
+    assert trading.positions(account.id) == []
+
+
+def test_price_failure_is_reported_not_silent(env):
+    """A broken price feed must surface, not silently skip protection."""
+    service, accounts, _, account, market = env
+    accounts.deposit(account.id, 900_000)
+    view = service.create(
+        account_id=account.id, strategy_key="test_buy_now", symbol="BTCUSDT",
+        timeframe="1h", params={}, position_pct=0.5, max_order_notional=50_000,
+        stop_loss_pct=5, start=True,
+    )
+    service.evaluate_instance(service._require(view.id))
+
+    def broken(_symbol):
+        raise RuntimeError("feed offline")
+
+    market.last_price = broken
+    outcomes = service.protect_positions()
+    assert outcomes.get(view.id) == "price_unavailable"
+    logs = service.logs(view.id)
+    assert any(log.event == "price_unavailable" for log in logs)
+    assert "feed offline" in service._require(view.id).last_error

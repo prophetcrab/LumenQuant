@@ -19,6 +19,7 @@ from app.core.errors import AppError, ConflictError, NotFoundError, ValidationEr
 from app.core.timeutil import iso, utcnow
 from app.modules.market.service import SUPPORTED_TIMEFRAMES, MarketService
 from app.modules.runtime.models import RuntimeLog, StrategyInstance, new_id
+from app.modules.risk.stops import StopRules, evaluate_tick, parse_rules
 from app.modules.strategies.registry import get
 from app.modules.trading.service import TradingService
 
@@ -36,6 +37,10 @@ class InstanceView:
     params: dict
     position_pct: float
     max_order_notional: float
+    stop_loss_pct: float
+    take_profit_pct: float
+    trailing_stop_pct: float
+    peak_price: float
     running: bool
     last_bar_time: int
     last_signal_at: str
@@ -95,6 +100,10 @@ class RuntimeService:
             params=json.loads(row.params_json),
             position_pct=row.position_pct,
             max_order_notional=row.max_order_notional,
+            stop_loss_pct=row.stop_loss_pct,
+            take_profit_pct=row.take_profit_pct,
+            trailing_stop_pct=row.trailing_stop_pct,
+            peak_price=row.peak_price,
             running=row.running,
             last_bar_time=row.last_bar_time,
             last_signal_at=iso(row.last_signal_at),
@@ -143,6 +152,9 @@ class RuntimeService:
         params: dict | None,
         position_pct: float = 0.25,
         max_order_notional: float = 50_000.0,
+        stop_loss_pct: float = 0.0,
+        take_profit_pct: float = 0.0,
+        trailing_stop_pct: float = 0.0,
         start: bool = False,
     ) -> InstanceView:
         if timeframe not in SUPPORTED_TIMEFRAMES:
@@ -165,6 +177,11 @@ class RuntimeService:
             raise ValidationError(
                 f"{symbol_view.code} 属于 {symbol_view.market} 市场，与账户市场 {account.market} 不一致"
             )
+        rules = parse_rules(
+            stop_loss_pct=stop_loss_pct,
+            take_profit_pct=take_profit_pct,
+            trailing_stop_pct=trailing_stop_pct,
+        )
         row = StrategyInstance(
             id=new_id(),
             account_id=account_id,
@@ -174,6 +191,9 @@ class RuntimeService:
             params_json=json.dumps(parsed.model_dump()),
             position_pct=float(position_pct),
             max_order_notional=float(max_order_notional),
+            stop_loss_pct=rules.stop_loss_pct,
+            take_profit_pct=rules.take_profit_pct,
+            trailing_stop_pct=rules.trailing_stop_pct,
             running=bool(start),
         )
         self.session.add(row)
@@ -197,6 +217,9 @@ class RuntimeService:
         params: dict | None = None,
         position_pct: float | None = None,
         max_order_notional: float | None = None,
+        stop_loss_pct: float | None = None,
+        take_profit_pct: float | None = None,
+        trailing_stop_pct: float | None = None,
     ) -> InstanceView:
         row = self._require(instance_id)
         if params is not None:
@@ -214,6 +237,17 @@ class RuntimeService:
             if max_order_notional <= 0:
                 raise ValidationError("max_order_notional must be positive")
             row.max_order_notional = float(max_order_notional)
+        if stop_loss_pct is not None or take_profit_pct is not None or trailing_stop_pct is not None:
+            rules = parse_rules(
+                stop_loss_pct=row.stop_loss_pct if stop_loss_pct is None else stop_loss_pct,
+                take_profit_pct=row.take_profit_pct if take_profit_pct is None else take_profit_pct,
+                trailing_stop_pct=(
+                    row.trailing_stop_pct if trailing_stop_pct is None else trailing_stop_pct
+                ),
+            )
+            row.stop_loss_pct = rules.stop_loss_pct
+            row.take_profit_pct = rules.take_profit_pct
+            row.trailing_stop_pct = rules.trailing_stop_pct
         self._log(row.id, "info", "updated", "参数已更新")
         self.session.commit()
         self.session.refresh(row)
@@ -302,6 +336,86 @@ class RuntimeService:
             self._log(row.id, "error", "rejected", str(exc), bar_time=last.time)
         self.session.commit()
         return "executed"
+
+    def protect_positions(self) -> dict[str, str]:
+        """Check every running instance's open position against its stop rules.
+
+        Runs on every scheduler tick rather than only on new bars: a 10% intrabar
+        drop should exit at the stop, not wait for the bar to close. This is the
+        live counterpart of the backtester's intrabar stop check — without it the
+        same strategy behaves completely differently in research and production.
+        """
+        outcomes: dict[str, str] = {}
+        for row in self.running_instances():
+            rules = StopRules(
+                stop_loss_pct=row.stop_loss_pct,
+                take_profit_pct=row.take_profit_pct,
+                trailing_stop_pct=row.trailing_stop_pct,
+            )
+            if not rules.enabled:
+                continue
+            position = self._position_row(row.account_id, row.symbol)
+            if position is None or position.quantity <= 0:
+                # Flat: reset the trailing peak so the next entry starts fresh.
+                if row.peak_price:
+                    row.peak_price = 0.0
+                    self.session.flush()
+                continue
+            try:
+                price = self.market.last_price(row.symbol)
+            except Exception as exc:
+                # Silent failure here would hide a broken price feed while the
+                # position kept running without any protection.
+                row.last_error = f"无法获取 {row.symbol} 价格：{exc}"[:400]
+                self._log(
+                    row.id, "error", "price_unavailable", row.last_error,
+                    bar_time=row.last_bar_time,
+                )
+                outcomes[row.id] = "price_unavailable"
+                continue
+            if price <= 0:
+                continue
+
+            decision = evaluate_tick(
+                entry_price=position.avg_price,
+                current_peak=row.peak_price,
+                last_price=price,
+                rules=rules,
+            )
+            if decision.new_peak != row.peak_price:
+                row.peak_price = decision.new_peak
+            if not decision.triggered:
+                continue
+            try:
+                order = self.trading.close_position(row.account_id, row.symbol)
+            except Exception as exc:
+                row.last_error = str(exc)[:400]
+                self._log(row.id, "error", "exit_failed", str(exc), bar_time=row.last_bar_time)
+                outcomes[row.id] = "exit_failed"
+                continue
+            row.executions += 1
+            row.peak_price = 0.0
+            self._log(
+                row.id,
+                "info",
+                decision.reason,
+                f"{decision.reason} 触发：{row.symbol} @ {price:.4f}"
+                + (f"（委托 {order.id[:8]}）" if order else ""),
+                order_id=order.id if order else "",
+                bar_time=row.last_bar_time,
+            )
+            outcomes[row.id] = decision.reason
+        self.session.commit()
+        return outcomes
+
+    def _position_row(self, account_id: str, symbol: str):
+        from app.modules.trading.models import Position
+
+        return self.session.scalar(
+            select(Position).where(
+                Position.account_id == account_id, Position.symbol == symbol.upper()
+            )
+        )
 
     def _place_entry(self, row: StrategyInstance, price: float) -> None:
         account = self.accounts.get(row.account_id)

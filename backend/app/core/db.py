@@ -88,6 +88,12 @@ class Database:
             "accounts": {"market": "VARCHAR(16) NOT NULL DEFAULT 'crypto'"},
             "positions": {"available_quantity": "FLOAT NOT NULL DEFAULT 0"},
             "orders": {"broker_order_id": "VARCHAR(64) NOT NULL DEFAULT ''"},
+            "strategy_instances": {
+                "stop_loss_pct": "FLOAT NOT NULL DEFAULT 0",
+                "take_profit_pct": "FLOAT NOT NULL DEFAULT 0",
+                "trailing_stop_pct": "FLOAT NOT NULL DEFAULT 0",
+                "peak_price": "FLOAT NOT NULL DEFAULT 0",
+            },
             "backtest_runs": {
                 "comparison_json": "TEXT NOT NULL DEFAULT '[]'",
             },

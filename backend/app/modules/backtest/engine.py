@@ -24,6 +24,7 @@ from app.modules.backtest.metrics import TradeRecord, compute_metrics
 from app.modules.cn.fees import CnFeeSchedule
 from app.modules.cn.rules import price_band, round_tick
 from app.modules.market.service_types import CandlePoint
+from app.modules.risk.stops import StopRules, evaluate
 from app.modules.strategies.base import Strategy, StrategyParams
 
 
@@ -35,6 +36,7 @@ class BacktestConfig:
     position_pct: float = 0.95
     stop_loss_pct: float = 0.0
     take_profit_pct: float = 0.0
+    trailing_stop_pct: float = 0.0
     market: str = "crypto"
     limit_pct: float = 0.0
     tick_size: float = 0.01
@@ -52,6 +54,7 @@ class BacktestConfig:
             position_pct=min(max(float(raw.get("position_pct", 0.95)), 0.01), 1.0),
             stop_loss_pct=max(float(raw.get("stop_loss_pct", 0.0)), 0.0),
             take_profit_pct=max(float(raw.get("take_profit_pct", 0.0)), 0.0),
+            trailing_stop_pct=max(float(raw.get("trailing_stop_pct", 0.0)), 0.0),
             market=market,
             limit_pct=float(raw.get("limit_pct", 0.0)),
             tick_size=float(raw.get("tick_size", 0.01)),
@@ -76,6 +79,7 @@ class _OpenPosition:
     quantity: float
     entry_fee: float
     entry_day: str
+    peak_price: float = 0.0
 
 
 class BacktestEngine:
@@ -118,6 +122,11 @@ class BacktestEngine:
         equity_points: list[dict] = []
         equity_values: list[float] = []
         bars_in_market = 0
+        stop_rules = StopRules(
+            stop_loss_pct=cfg.stop_loss_pct,
+            take_profit_pct=cfg.take_profit_pct,
+            trailing_stop_pct=cfg.trailing_stop_pct,
+        )
         blocked = {
             "limit_up": 0,
             "limit_down": 0,
@@ -172,7 +181,8 @@ class BacktestEngine:
                         if cost <= cash + 1e-9:
                             cash = round_money(cash - cost)
                             position = _OpenPosition(
-                                candle.time, price, quantity, fee, self._day(candle.time)
+                                candle.time, price, quantity, fee, self._day(candle.time),
+                                peak_price=price,
                             )
             elif pending == "sell" and position is not None:
                 if at_limit_down:
@@ -187,40 +197,31 @@ class BacktestEngine:
                     position = None
             pending = None
 
-            # 2) Intrabar protective exits.
+            # 2) Intrabar protective exits (fixed stop, trailing stop, target).
             if position is not None:
-                stop_price = (
-                    position.entry_price * (1 - cfg.stop_loss_pct) if cfg.stop_loss_pct else None
-                )
-                target_price = (
-                    position.entry_price * (1 + cfg.take_profit_pct)
-                    if cfg.take_profit_pct
-                    else None
-                )
-                exit_price = None
-                reason = ""
                 same_day = cfg.t_plus_one and position.entry_day == self._day(candle.time)
+                decision = evaluate(
+                    entry_price=position.entry_price,
+                    current_peak=position.peak_price,
+                    bar_open=candle.open,
+                    bar_high=candle.high,
+                    bar_low=candle.low,
+                    rules=stop_rules,
+                )
                 if same_day:
                     # T+1 blocks every exit, including protective ones.
-                    would_exit = (stop_price is not None and candle.low <= stop_price) or (
-                        target_price is not None and candle.high >= target_price
-                    )
-                    if would_exit:
+                    if decision.triggered:
                         blocked["t_plus_one"] += 1
-                    pass
-                elif stop_price is not None and candle.low <= stop_price:
-                    exit_price = min(stop_price, candle.open if candle.open < stop_price else stop_price)
-                    reason = "stop_loss"
-                elif target_price is not None and candle.high >= target_price:
-                    exit_price = max(target_price, candle.open if candle.open > target_price else target_price)
-                    reason = "take_profit"
-                if exit_price is not None:
-                    cash, trade = self._close(
-                        position, sell_price(exit_price), candle.time, cash, reason
-                    )
-                    trades.append(trade)
-                    position = None
-                    pending = None
+                else:
+                    position.peak_price = decision.new_peak
+                    if decision.triggered:
+                        cash, trade = self._close(
+                            position, sell_price(decision.exit_price), candle.time, cash,
+                            decision.reason,
+                        )
+                        trades.append(trade)
+                        position = None
+                        pending = None
 
             # 3) Mark to market and collect the new signal.
             equity = cash + (position.quantity * candle.close if position else 0.0)

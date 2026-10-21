@@ -248,6 +248,10 @@ export type StrategyInstance = {
   params: Record<string, number | string>;
   position_pct: number;
   max_order_notional: number;
+  stop_loss_pct: number;
+  take_profit_pct: number;
+  trailing_stop_pct: number;
+  peak_price: number;
   running: boolean;
   last_bar_time: number;
   last_signal_at: string;
@@ -687,11 +691,21 @@ export const api = {
     params: Record<string, unknown>;
     position_pct: number;
     max_order_notional: number;
+    stop_loss_pct?: number;
+    take_profit_pct?: number;
+    trailing_stop_pct?: number;
     start: boolean;
   }) => request<StrategyInstance>("/runtime/instances", { method: "POST", body: JSON.stringify(body) }),
   updateRuntimeInstance: (
     id: string,
-    body: { params?: Record<string, unknown>; position_pct?: number; max_order_notional?: number },
+    body: {
+      params?: Record<string, unknown>;
+      position_pct?: number;
+      max_order_notional?: number;
+      stop_loss_pct?: number;
+      take_profit_pct?: number;
+      trailing_stop_pct?: number;
+    },
   ) => request<StrategyInstance>(`/runtime/instances/${id}`, { method: "PATCH", body: JSON.stringify(body) }),
   toggleRuntimeInstance: (id: string, running: boolean) =>
     request<StrategyInstance>(`/runtime/instances/${id}/toggle`, {

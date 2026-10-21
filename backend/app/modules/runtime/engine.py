@@ -84,6 +84,12 @@ class StrategyRuntimeEngine:
                 session, accounts_service=accounts, market=market, trading=trading
             )
             results: dict[str, str] = {}
+            # Protective exits run first: a stop must fire even when no new bar
+            # has closed, and even if the strategy loop below throws.
+            try:
+                results.update(service.protect_positions())
+            except Exception:
+                logger.exception("protective exit sweep failed")
             for row in service.running_instances():
                 try:
                     results[row.id] = service.evaluate_instance(row)

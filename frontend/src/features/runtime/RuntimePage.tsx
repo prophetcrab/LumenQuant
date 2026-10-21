@@ -22,6 +22,9 @@ export function RuntimePage() {
   const [timeframe, setTimeframe] = useState<(typeof TIMEFRAMES)[number]>("1h");
   const [positionPct, setPositionPct] = useState("20");
   const [maxNotional, setMaxNotional] = useState("20000");
+  const [stopLoss, setStopLoss] = useState("0");
+  const [takeProfit, setTakeProfit] = useState("0");
+  const [trailingStop, setTrailingStop] = useState("0");
   const [params, setParams] = useState<Record<string, ParamValue>>({});
 
   const catalog = useQuery({ queryKey: ["strategies"], queryFn: api.strategies });
@@ -68,6 +71,9 @@ export function RuntimePage() {
         params: parsed,
         position_pct: Number(positionPct) / 100,
         max_order_notional: Number(maxNotional),
+        stop_loss_pct: Number(stopLoss),
+        take_profit_pct: Number(takeProfit),
+        trailing_stop_pct: Number(trailingStop),
         start: true,
       });
     },
@@ -176,6 +182,7 @@ export function RuntimePage() {
                   <th>标的 / 周期</th>
                   <th>参数</th>
                   <th className="numeric">单次仓位</th>
+                  <th>保护</th>
                   <th className="numeric">执行次数</th>
                   <th>最近信号</th>
                   <th>状态</th>
@@ -198,6 +205,17 @@ export function RuntimePage() {
                       {Object.entries(instance.params).map(([k, v]) => `${k}=${v}`).join(" ")}
                     </td>
                     <td className="numeric">{(instance.position_pct * 100).toFixed(0)}%</td>
+                    <td className="mono muted" style={{ fontSize: 11 }}>
+                      {instance.stop_loss_pct || instance.take_profit_pct || instance.trailing_stop_pct
+                        ? [
+                            instance.stop_loss_pct ? `止损${(instance.stop_loss_pct * 100).toFixed(0)}%` : "",
+                            instance.take_profit_pct ? `止盈${(instance.take_profit_pct * 100).toFixed(0)}%` : "",
+                            instance.trailing_stop_pct ? `移动${(instance.trailing_stop_pct * 100).toFixed(0)}%` : "",
+                          ]
+                            .filter(Boolean)
+                            .join(" · ")
+                        : "无"}
+                    </td>
                     <td className="numeric">{instance.executions}</td>
                     <td className="muted">
                       {instance.last_signal_at ? timeLabel(new Date(instance.last_signal_at).getTime()) : "—"}
@@ -340,6 +358,15 @@ export function RuntimePage() {
           </Field>
           <Field label="单次仓位 %" hint="按可用现金比例开仓">
             <input className="input num" type="number" value={positionPct} onChange={(event) => setPositionPct(event.target.value)} />
+          </Field>
+          <Field label="止损 %" hint="0 表示不启用；触发即平仓">
+            <input className="input num" type="number" min={0} max={50} value={stopLoss} onChange={(event) => setStopLoss(event.target.value)} />
+          </Field>
+          <Field label="止盈 %" hint="0 表示不启用">
+            <input className="input num" type="number" min={0} max={500} value={takeProfit} onChange={(event) => setTakeProfit(event.target.value)} />
+          </Field>
+          <Field label="移动止损 %" hint="自峰值回撤该比例离场；0 关闭">
+            <input className="input num" type="number" min={0} max={50} value={trailingStop} onChange={(event) => setTrailingStop(event.target.value)} />
           </Field>
           <Field
             label="单笔名义上限"
