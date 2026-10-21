@@ -7,7 +7,12 @@ from __future__ import annotations
 
 import argparse
 import statistics
+import sys
 import time
+from pathlib import Path
+
+# Allow running this file directly from any working directory.
+sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
 from app.core.config import Settings
 from app.core.db import Database
@@ -53,7 +58,9 @@ def main() -> None:
                     )
                     elapsed = (time.perf_counter() - start) * 1000
                     timings.append(elapsed)
-                    results.append((symbol, strategy.key, result.metrics["total_return_pct"]))
+                    results.append(
+                        (symbol, strategy.key, round(elapsed, 1), result.metrics["total_return_pct"])
+                    )
     db.dispose()
 
     timings.sort()
@@ -65,7 +72,10 @@ def main() -> None:
             "p95_ms": round(timings[int(len(timings) * 0.95) - 1], 1),
             "max_ms": round(timings[-1], 1),
             "total_s": round(sum(timings) / 1000, 2),
-            "top": sorted(results, key=lambda r: r[2], reverse=True)[:3],
+            # Slowest runs, not highest returns: this script exists to find
+            # throughput outliers, and returning the same strategy three times
+            # says nothing about cost.
+            "slowest": sorted(results, key=lambda r: r[2], reverse=True)[:3],
         }
     )
 

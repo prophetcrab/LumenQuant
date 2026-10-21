@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import time
 
 from app.core.config import Settings
 from app.core.db import Database
@@ -16,6 +17,9 @@ from app.modules.trading.service import TradingService
 
 logger = logging.getLogger(__name__)
 
+# Logs are written by a background loop nobody watches; check the cap hourly.
+LOG_PRUNE_INTERVAL_SECONDS = 3600.0
+
 
 class StrategyRuntimeEngine:
     def __init__(self, database: Database, settings: Settings, *, market_engine=None, bus=None) -> None:
@@ -25,6 +29,7 @@ class StrategyRuntimeEngine:
         self.bus = bus
         self._task: asyncio.Task | None = None
         self._stopping = asyncio.Event()
+        self._last_prune = 0.0
 
     async def start(self) -> None:
         self._stopping.clear()
@@ -98,4 +103,15 @@ class StrategyRuntimeEngine:
                     row.last_error = str(exc)[:400]
                     session.commit()
                     results[row.id] = "error"
+            # Logs grow unattended; trim once an hour rather than on every tick.
+            now = time.monotonic()
+            if now - self._last_prune >= LOG_PRUNE_INTERVAL_SECONDS:
+                self._last_prune = now
+                try:
+                    removed = service.prune_all_logs()
+                    session.commit()
+                    if removed:
+                        logger.info("pruned %s runtime log rows", removed)
+                except Exception:
+                    logger.exception("runtime log pruning failed")
             return results

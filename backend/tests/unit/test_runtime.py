@@ -334,3 +334,87 @@ def test_adding_a_stop_to_a_live_instance_protects_the_open_position(env):
     outcomes = service.protect_positions()
     assert outcomes.get(view.id) == "stop_loss"
     assert trading.positions(account.id) == []
+
+
+def test_repeated_warning_is_logged_once_per_window(env):
+    """A persistent condition must not write one row per scheduler tick.
+
+    The scheduler runs every few seconds. "insufficient data" or a dead price
+    feed used to append a fresh row each tick — ~14k rows/day for one unresolved
+    warning, growing the database for the life of the deployment.
+    """
+    service, accounts, _, account, market = env
+    accounts.deposit(account.id, 900_000)
+    view = service.create(
+        account_id=account.id, strategy_key="test_buy_now", symbol="BTCUSDT",
+        timeframe="1h", params={}, position_pct=0.2, max_order_notional=5_000,
+        start=True,
+    )
+    row = service._require(view.id)
+
+    # Force the insufficient-data path: no candles at all.
+    market.candles = lambda *a, **k: []
+    for _ in range(5):
+        assert service.evaluate_instance(row) == "insufficient_data"
+
+    warnings = [log for log in service.logs(view.id) if log.event == "insufficient_data"]
+    assert len(warnings) == 1, f"expected one row, got {len(warnings)}"
+
+
+def test_warning_reappears_after_the_dedupe_window(env, monkeypatch):
+    service, accounts, _, account, _market = env
+    accounts.deposit(account.id, 900_000)
+    view = service.create(
+        account_id=account.id, strategy_key="test_buy_now", symbol="BTCUSDT",
+        timeframe="1h", params={}, position_pct=0.2, max_order_notional=5_000,
+        start=True,
+    )
+    row = service._require(view.id)
+    service._log(view.id, "warn", "feed_down", "no price", bar_time=1)
+    service._log(view.id, "warn", "feed_down", "no price", bar_time=2)
+    # autoflush is off, so a pending row is invisible to a following query.
+    service.session.commit()
+    assert len([l for l in service.logs(view.id) if l.event == "feed_down"]) == 1
+
+    from datetime import timedelta
+
+    import app.modules.runtime.service as runtime_service
+
+    later = runtime_service.utcnow() + timedelta(
+        seconds=runtime_service.LOG_DEDUPE_SECONDS + 1
+    )
+    monkeypatch.setattr(runtime_service, "utcnow", lambda: later)
+    service._log(view.id, "warn", "feed_down", "no price", bar_time=3)
+    service.session.commit()
+    assert len([l for l in service.logs(view.id) if l.event == "feed_down"]) == 2
+
+
+def test_state_changes_are_not_deduped(env):
+    """Toggling an instance twice is user intent, not a repeated warning."""
+    service, accounts, _, account, _market = env
+    view = service.create(
+        account_id=account.id, strategy_key="test_buy_now", symbol="BTCUSDT",
+        timeframe="1h", params={}, position_pct=0.2, max_order_notional=5_000,
+    )
+    service.set_running(view.id, True)
+    service.set_running(view.id, False)
+    service.set_running(view.id, True)
+    started = [l for l in service.logs(view.id) if l.event == "started"]
+    assert len(started) == 2
+
+
+def test_log_pruning_keeps_the_newest_rows(env):
+    service, accounts, _, account, _market = env
+    view = service.create(
+        account_id=account.id, strategy_key="test_buy_now", symbol="BTCUSDT",
+        timeframe="1h", params={}, position_pct=0.2, max_order_notional=5_000,
+    )
+    for index in range(30):
+        service._log(view.id, "info", "note", f"row {index}")
+    service.session.commit()
+
+    removed = service.prune_logs(view.id, keep=10)
+    assert removed == 21  # 30 notes + 1 "created"
+    remaining = service.logs(view.id, limit=200)
+    assert len(remaining) == 10
+    assert remaining[0].message == "row 29"  # newest first

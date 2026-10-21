@@ -11,12 +11,12 @@ import math
 from dataclasses import dataclass
 from datetime import datetime
 
-from sqlalchemy import select
+from sqlalchemy import delete, select
 from sqlalchemy.orm import Session
 
 from app.core.audit import record_audit
 from app.core.errors import AppError, ConflictError, NotFoundError, ValidationError
-from app.core.timeutil import iso, utcnow
+from app.core.timeutil import ensure_utc, iso, utcnow
 from app.modules.market.service import SUPPORTED_TIMEFRAMES, MarketService
 from app.modules.runtime.models import RuntimeLog, StrategyInstance, new_id
 from app.modules.risk.stops import StopRules, evaluate_tick, parse_rules
@@ -24,6 +24,11 @@ from app.modules.strategies.registry import get
 from app.modules.trading.service import TradingService
 
 MAX_LOGS = 200
+# Hard cap on rows kept per instance; the API never returns more than MAX_LOGS,
+# so anything beyond this is pure disk growth.
+MAX_LOGS_PER_INSTANCE = 2000
+# A repeated identical condition is logged at most once per this many seconds.
+LOG_DEDUPE_SECONDS = 300
 
 
 @dataclass(frozen=True)
@@ -484,6 +489,34 @@ class RuntimeService:
         order_id: str = "",
         bar_time: int = 0,
     ) -> None:
+        """Append a log row, suppressing an identical repeat within the window.
+
+        The scheduler ticks every few seconds. A persistent condition — insufficient
+        data, a dead price feed, a sizing limit below one board lot — would otherwise
+        write one row per tick for as long as it lasts: ~14k rows per day per
+        instance for a single unresolved warning.
+        """
+        # autoflush is off, so flush first or a row written earlier in this tick
+        # would be invisible to the query below.
+        self.session.flush()
+        latest = self.session.scalar(
+            select(RuntimeLog)
+            .where(
+                RuntimeLog.instance_id == instance_id,
+                RuntimeLog.event == event,
+                RuntimeLog.message == message,
+            )
+            .order_by(RuntimeLog.created_at.desc())
+            .limit(1)
+        )
+        # Only suppress repeated warnings/errors. State changes ("started",
+        # "updated") are user intent and stay in the audit trail even when they
+        # happen twice in quick succession.
+        if latest is not None and level in {"warn", "error"}:
+            # SQLite returns naive datetimes even for timezone-aware columns.
+            age = (utcnow() - ensure_utc(latest.created_at)).total_seconds()
+            if age < LOG_DEDUPE_SECONDS:
+                return
         self.session.add(
             RuntimeLog(
                 instance_id=instance_id,
@@ -494,3 +527,31 @@ class RuntimeService:
                 bar_time=bar_time,
             )
         )
+
+    def prune_logs(self, instance_id: str, *, keep: int = MAX_LOGS_PER_INSTANCE) -> int:
+        """Drop all but the newest `keep` rows for an instance.
+
+        Logs are the only per-instance table with no natural bound, and they are
+        written by a background loop nobody is watching. Without this the file grows
+        for the life of the deployment.
+        """
+        keep_ids = (
+            select(RuntimeLog.id)
+            .where(RuntimeLog.instance_id == instance_id)
+            .order_by(RuntimeLog.created_at.desc())
+            .limit(keep)
+        )
+        result = self.session.execute(
+            delete(RuntimeLog).where(
+                RuntimeLog.instance_id == instance_id,
+                RuntimeLog.id.not_in(keep_ids),
+            )
+        )
+        return int(result.rowcount or 0)
+
+    def prune_all_logs(self, *, keep: int = MAX_LOGS_PER_INSTANCE) -> int:
+        """Prune every instance's log tail; called by the scheduler, not the request path."""
+        total = 0
+        for row in self.session.scalars(select(StrategyInstance.id)).all():
+            total += self.prune_logs(row, keep=keep)
+        return total
