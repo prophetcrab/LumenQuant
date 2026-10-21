@@ -170,6 +170,11 @@ export function CnMarketPage() {
                     <span key={day} className="badge">{day.slice(5)}</span>
                   ))}
                 </div>
+                {calendar.data.coverage.covered ? null : (
+                  <div className="error-text" style={{ marginTop: 4, lineHeight: 1.6 }}>
+                    {calendar.data.coverage.warning}
+                  </div>
+                )}
               </div>
             ) : (
               <Loader />

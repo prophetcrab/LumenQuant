@@ -84,7 +84,7 @@ Base URL：`http://127.0.0.1:8000/api`　完整交互式文档：`/docs`
 ## A股
 - `GET /api/cn/rules` — 手数、板块涨跌停、费率、T+1、时段
 - `GET /api/cn/session` — 当前是否开市、下一开盘时间
-- `GET /api/cn/calendar?days=` — 交易日历
+- `GET /api/cn/calendar?days=` — 交易日历，含 `coverage`（该年节假日表是否已加载）
 - `GET /api/cn/symbols` — A 股标的含现价/涨跌停
 - `POST /api/cn/symbols/{code}/suspend?suspended=` — 模拟停牌
 - `POST /api/cn/settle`、`POST /api/trading/settle` — 释放 T+1 冻结

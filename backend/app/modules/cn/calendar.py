@@ -52,6 +52,27 @@ _HOLIDAYS: set[str] = {
     "2026-10-05", "2026-10-06", "2026-10-07",
 }
 
+# Years whose moveable holidays (Spring Festival, Qingming, Dragon Boat, Mid-
+# Autumn) are enumerated above. The fixed statutory dates below stay correct in
+# any year, but a moveable holiday outside this window would be treated as a
+# trading day — silently, because there is nothing to look up. Deployments are
+# told about the gap through `calendar_coverage()` instead of guessing.
+CALENDAR_YEARS: frozenset[int] = frozenset({2024, 2025, 2026})
+
+# Statutory closures that fall on the same Gregorian dates every year. Lunar
+# holidays are deliberately absent: their dates cannot be derived and a wrong
+# guess is worse than an explicitly reported gap.
+FIXED_HOLIDAYS: tuple[tuple[int, int], ...] = (
+    (1, 1),        # New Year's Day
+    (5, 1),        # Labour Day
+    (10, 1), (10, 2), (10, 3),  # National Day
+)
+
+
+def _is_fixed_holiday(day: date) -> bool:
+    return (day.month, day.day) in FIXED_HOLIDAYS
+
+
 
 def add_holidays(values: list[str]) -> None:
     """Allow deployments to extend the calendar (weekday closures, typhoons)."""
@@ -62,7 +83,36 @@ def add_holidays(values: list[str]) -> None:
 
 
 def is_trading_day(day: date) -> bool:
-    return day.weekday() < 5 and day.isoformat() not in _HOLIDAYS
+    if day.weekday() >= 5 or day.isoformat() in _HOLIDAYS:
+        return False
+    # Outside the tabulated years only the fixed statutory dates are known; the
+    # lunar holidays are not, so `calendar_coverage()` reports the gap.
+    if day.year not in CALENDAR_YEARS and _is_fixed_holiday(day):
+        return False
+    return True
+
+
+def calendar_coverage(day: date | None = None) -> dict:
+    """Whether the holiday table actually covers a date.
+
+    Callers cannot distinguish "a trading day" from "a date we have no data for",
+    so the state is exposed explicitly instead of letting a missing year silently
+    produce phantom sessions.
+    """
+    target = day or date.today()
+    covered = target.year in CALENDAR_YEARS
+    return {
+        "year": target.year,
+        "covered": covered,
+        "covered_years": sorted(CALENDAR_YEARS),
+        "warning": ""
+        if covered
+        else (
+            f"{target.year} 年的节假日表尚未加载，只按周末和固定法定假日判断；"
+            f"春节、清明、端午、中秋等农历假日会被当作交易日。"
+            f"请通过 LQ_CN_EXTRA_HOLIDAYS 补充，或更新 calendar.py。"
+        ),
+    }
 
 
 def trading_days(start: date, end: date) -> list[date]:

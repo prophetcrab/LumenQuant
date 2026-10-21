@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import time
 from datetime import date
 
 from sqlalchemy import select
@@ -98,12 +99,17 @@ class TradingEngine:
             return service.match_open_orders()
 
     def _session_duties(self, session) -> None:
-        """Release T+1 and refresh limits once per trading day at the open."""
+        """Release T+1 and refresh limits once per trading day at the open.
+
+        The simulated CN engine supplies the session clock when it exists. In a
+        real-data-only deployment there is no such engine, and the old early
+        return meant T+1 was *never* released: a position bought today stayed
+        unsellable forever because nothing else clears `available_quantity`.
+        Falling back to the wall clock keeps the duty running in both modes.
+        """
         cn_engine = getattr(self.market_engine, "cn", None)
         clock = getattr(cn_engine, "clock", None)
-        if clock is None:
-            return
-        now = clock.now_ms()
+        now = clock.now_ms() if clock is not None else int(time.time() * 1000)
         today = day_key(now)
         if self._last_settlement_day == today:
             return
@@ -112,10 +118,19 @@ class TradingEngine:
         rows = session.scalars(
             select(Symbol).where(Symbol.market == "cn_stock")
         ).all()
+        from app.modules.accounts.models import Account
         from app.modules.trading.models import Position
 
+        # Only A-shares are T+1. Releasing every position would silently unlock
+        # anything that happens to have available < quantity for another reason.
+        cn_account_ids = session.scalars(
+            select(Account.id).where(Account.market == "cn_stock")
+        ).all()
         positions = session.scalars(
-            select(Position).where(Position.quantity > Position.available_quantity)
+            select(Position).where(
+                Position.quantity > Position.available_quantity,
+                Position.account_id.in_(cn_account_ids),
+            )
         ).all()
         for position in positions:
             position.available_quantity = position.quantity

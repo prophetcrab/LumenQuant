@@ -12,6 +12,7 @@ from app.api.deps import get_session
 from app.api.wiring import build_market, cn_fee_schedule, settings_of
 from app.core.errors import ValidationError
 from app.modules.cn.calendar import (
+    calendar_coverage,
     is_trading_day,
     next_trading_day,
     prev_trading_day,
@@ -60,6 +61,11 @@ def calendar(
         "prev_trading_day": prev_trading_day(today).isoformat(),
         "next_trading_day": next_trading_day(today).isoformat(),
         "upcoming": [day.isoformat() for day in upcoming],
+        # Never let a missing holiday table look like a normal trading calendar.
+        "coverage": calendar_coverage(today),
+        "upcoming_coverage": calendar_coverage(
+            upcoming[-1] if upcoming else today
+        ),
     }
 
 

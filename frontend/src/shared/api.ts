@@ -336,12 +336,21 @@ export type CnSession = {
   next_open: number;
 };
 
+export type CalendarCoverage = {
+  year: number;
+  covered: boolean;
+  covered_years: number[];
+  warning: string;
+};
+
 export type CnCalendar = {
   today: string;
   is_trading_day: boolean;
   prev_trading_day: string;
   next_trading_day: string;
   upcoming: string[];
+  coverage: CalendarCoverage;
+  upcoming_coverage: CalendarCoverage;
 };
 
 export type CnSymbol = SymbolInfo & {

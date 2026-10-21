@@ -863,9 +863,24 @@ class TradingService:
 
     # ----------------------------------------------------------- settlement
     def settle_t1(self) -> int:
-        """Release T+1 holds for A-share positions. Run once per session open."""
+        """Release T+1 holds for A-share positions. Run once per session open.
+
+        Scoped to A-share accounts: crypto settles instantly, so touching its
+        positions here would mask a genuine quantity/availability mismatch instead
+        of fixing it.
+        """
+        from app.modules.accounts.models import Account
+
+        cn_account_ids = self.session.scalars(
+            select(Account.id).where(Account.market == "cn_stock")
+        ).all()
+        if not cn_account_ids:
+            return 0
         rows = self.session.scalars(
-            select(Position).where(Position.quantity > Position.available_quantity)
+            select(Position).where(
+                Position.quantity > Position.available_quantity,
+                Position.account_id.in_(cn_account_ids),
+            )
         ).all()
         for position in rows:
             position.available_quantity = position.quantity
