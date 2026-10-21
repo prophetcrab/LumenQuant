@@ -238,6 +238,42 @@ export type BacktestRun = {
   trades?: BacktestTrade[];
 };
 
+export type PortfolioComponent = {
+  run_id: string;
+  strategy: string;
+  symbol: string;
+  timeframe: string;
+  params: Record<string, number | string>;
+  weight: number;
+  allocation: number;
+  bars_total: number;
+  bars_aligned: number;
+  return_pct: number;
+  volatility_pct: number;
+  max_drawdown_pct: number;
+  trade_count: number;
+};
+
+export type PortfolioReport = {
+  timeframe: string;
+  market: "crypto" | "cn_stock";
+  initial_capital: number;
+  start_time: number;
+  end_time: number;
+  aligned_bars: number;
+  metrics: BacktestMetrics;
+  equity: { time: number; equity: number }[];
+  components: PortfolioComponent[];
+  correlation: { labels: string[]; matrix: number[][] };
+  diversification: {
+    weighted_volatility_pct: number;
+    combined_volatility_pct: number;
+    ratio: number;
+    benefit_pct: number;
+  };
+  warnings: string[];
+};
+
 export type StrategyInstance = {
   id: string;
   account_id: string;
@@ -769,6 +805,15 @@ export const api = {
     config: Record<string, unknown>;
   }) => request<BacktestRun>("/backtests", { method: "POST", body: JSON.stringify(body) }),
   deleteBacktest: (id: string) => request<void>(`/backtests/${id}`, { method: "DELETE" }),
+  portfolioBacktest: (body: {
+    run_ids: string[];
+    weights?: number[];
+    initial_capital?: number;
+  }) =>
+    request<PortfolioReport>("/backtests/portfolio", {
+      method: "POST",
+      body: JSON.stringify(body),
+    }),
   walkForwardBacktest: (body: {
     strategy: string;
     symbol: string;

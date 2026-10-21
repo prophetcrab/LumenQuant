@@ -10,8 +10,10 @@ from app.modules.backtest.optimiser import OptimiserService, parse_space
 from app.modules.backtest.schemas import (
     BacktestRequest,
     OptimiseRequest,
+    PortfolioRequest,
     WalkForwardRequest,
 )
+from app.modules.backtest.portfolio import PortfolioAnalyser
 from app.modules.backtest.walkforward import WalkForwardService
 from app.modules.backtest.service import BacktestService
 
@@ -172,6 +174,20 @@ def walk_forward(
         ),
     )
     return report.as_dict()
+
+
+@router.post("/portfolio")
+def portfolio(payload: PortfolioRequest, session: Session = Depends(get_session)):
+    """Combine stored backtests into one portfolio.
+
+    Read-only over existing runs: the analysis reuses the equity curves the user
+    already saw, so re-running it can never produce slightly different numbers.
+    """
+    return PortfolioAnalyser(session).analyse(
+        run_ids=payload.run_ids,
+        weights=payload.weights,
+        initial_capital=payload.initial_capital,
+    )
 
 
 @router.get("/{run_id}")

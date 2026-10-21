@@ -32,6 +32,16 @@ class OptimiseRequest(BaseModel):
     top_n: int = Field(default=10, ge=1, le=50)
 
 
+class PortfolioRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    run_ids: list[str] = Field(min_length=2, max_length=8)
+    weights: list[float] | None = Field(
+        default=None, description="与 run_ids 一一对应；省略则等权"
+    )
+    initial_capital: float = Field(default=100_000.0, gt=0)
+
+
 class WalkForwardRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 

@@ -45,15 +45,20 @@ Base URL：`http://127.0.0.1:8000/api`　完整交互式文档：`/docs`
 ## 回测
 - `POST /api/backtests` — `{strategy, symbol, timeframe, bars, params, config}`
 - `GET /api/backtests?limit=`、`GET /api/backtests/{id}`、`DELETE /api/backtests/{id}`
+- `POST /api/backtests/optimise` — 网格搜索 + 样本外检验
+- `POST /api/backtests/walk-forward` — 多窗口滚动验证
+- `POST /api/backtests/portfolio` — `{run_ids[], weights?, initial_capital?}`
+  合并已保存回测：对齐权益曲线、计算合并指标、成分贡献、相关性矩阵与分散效果。
+  要求周期与市场一致，重叠区间至少 50 根。
 
 ## 自动运行
 - `GET /api/runtime/instances?account_id=`
 - `POST /api/runtime/instances` — `{account_id, strategy_key, symbol, timeframe, params, position_pct, max_order_notional, start}`
-- `PATCH /api/runtime/instances/{id}` — `{params?, position_pct?, max_order_notional?}`
+- `PATCH /api/runtime/instances/{id}` — `{params?, position_pct?, max_order_notional?, stop_loss_pct?, take_profit_pct?, trailing_stop_pct?}`（策略/标的/周期不可改）
 - `POST /api/runtime/instances/{id}/toggle` — `{running}`
 - `DELETE /api/runtime/instances/{id}`（需先停止）
 - `GET /api/runtime/instances/{id}/logs?limit=`
-- `POST /api/runtime/tick` — 立即评估全部运行中实例
+- `POST /api/runtime/tick` — 立即评估全部运行中实例（先保护性离场，再评估信号）
 
 ## 组合
 - `GET /api/portfolio/overview?account_id=&record=`

@@ -10,6 +10,7 @@ import { Badge, Card, EmptyState, Field, Loader, Stat } from "../../components/u
 import { ButtonField } from "../../components/form";
 import { OptimisePanel } from "./OptimisePanel";
 import { WalkForwardPanel } from "./WalkForwardPanel";
+import { PortfolioPanel } from "./PortfolioPanel";
 import { Segmented } from "../../components/ui";
 import { buildParams, initialParams, type ParamValue } from "../../shared/strategy-params";
 
@@ -62,7 +63,7 @@ export function BacktestPage() {
     handoff.current?.params ?? {},
   );
   const [selectedRun, setSelectedRun] = useState<BacktestRun | null>(null);
-  const [tab, setTab] = useState<"run" | "optimise" | "walkforward">("run");
+  const [tab, setTab] = useState<"run" | "optimise" | "walkforward" | "portfolio">("run");
 
   const meta = catalog.data?.find((item) => item.key === strategy) ?? null;
 
@@ -144,6 +145,7 @@ export function BacktestPage() {
             { value: "run", label: "单次回测" },
             { value: "optimise", label: "参数优化" },
             { value: "walkforward", label: "滚动验证" },
+            { value: "portfolio", label: "组合分析" },
           ]}
           onChange={(value) => setTab(value)}
         />
@@ -152,10 +154,15 @@ export function BacktestPage() {
             ? "验证一组参数的表现"
             : tab === "optimise"
               ? "枚举参数空间，用样本外数据检验过拟合"
-              : "多窗口滚动：每段独立选参，再看紧接着的样本外表现"}
+              : tab === "walkforward"
+                ? "多窗口滚动：每段独立选参，再看紧接着的样本外表现"
+                : "多个回测叠加后的真实风险：相关性、合并波动与分散收益"}
         </span>
       </div>
 
+      {tab === "portfolio" ? (
+        <PortfolioPanel history={history.data ?? []} />
+      ) : (
       <Card title="目标" subtitle="策略、标的与周期对单次回测和参数优化都生效">
         <div className="grid" style={{ gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))" }}>
           <Field label="策略">
@@ -191,6 +198,7 @@ export function BacktestPage() {
           </Field>
         </div>
       </Card>
+      )}
 
       {tab === "walkforward" ? (
         <WalkForwardPanel
