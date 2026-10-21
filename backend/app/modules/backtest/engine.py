@@ -265,7 +265,16 @@ class BacktestEngine:
                             settling.append((self._next_day(candle.time), settled))
 
             # 3) Mark to market and collect the new signal.
-            equity = cash + (position.quantity * candle.close if position else 0.0)
+            # Cash parked in T+1 settlement is still the account's money — it just
+            # cannot fund a purchase yet. Leaving it out made equity fall by the
+            # whole proceeds amount on the sale bar and jump back on release, which
+            # showed up as -95% / +1785% single-bar moves on real A-share data.
+            settling_total = sum(amount for _day, amount in settling)
+            equity = (
+                cash
+                + settling_total
+                + (position.quantity * candle.close if position else 0.0)
+            )
             equity = round_money(equity)
             equity_values.append(equity)
             equity_points.append({"time": candle.time, "equity": equity})
@@ -279,19 +288,30 @@ class BacktestEngine:
                     pending = "sell"
 
         # Close any open position at the final close so metrics are comparable.
+        # Settling cash counts as equity here for the same reason as in the loop.
+        final_settling = sum(amount for _day, amount in settling)
         if position is not None:
             if cfg.t_plus_one and position.entry_day == self._day(candles[-1].time):
                 # Cannot legally exit; mark to market and leave it open.
                 equity_values[-1] = round_money(
-                    cash + position.quantity * candles[-1].close
+                    cash + final_settling + position.quantity * candles[-1].close
                 )
                 equity_points[-1]["equity"] = equity_values[-1]
             else:
+                proceeds_before = cash
                 cash, trade = self._close(
                     position, sell_price(candles[-1].close), candles[-1].time, cash, "end_of_data"
                 )
                 trades.append(trade)
-                equity_values[-1] = round_money(cash)
+                # Final equity is the account's total value either way: cash plus
+                # anything still in settlement. Parking the proceeds simply moves
+                # money between the two, so the sum is unchanged.
+                total = cash + final_settling
+                if cfg.t_plus_one:
+                    total = proceeds_before + final_settling + round_money(
+                        cash - proceeds_before
+                    )
+                equity_values[-1] = round_money(total)
                 equity_points[-1]["equity"] = equity_values[-1]
 
         metrics = compute_metrics(

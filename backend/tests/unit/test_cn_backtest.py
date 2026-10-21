@@ -209,3 +209,38 @@ def test_crypto_entries_can_use_sale_proceeds_immediately():
     )
     result = BacktestEngine(cfg).run(_ReEnterSameDay(), _ReEnterSameDay.Params(), candles, "1d")
     assert len(result.trades) >= 2
+
+
+def test_equity_includes_cash_held_for_t1_settlement():
+    """Proceeds parked for T+1 are still the account's money.
+
+    Regression (real A-share data): after a sale, `cash` dropped by the whole
+    proceeds amount and the money sat in `settling` — but the equity mark only
+    added `cash + position`. Equity therefore fell ~95% on the sale bar and jumped
+    ~1785% when the hold was released, producing nonsense returns and a
+    single-bar return series that broke every downstream metric.
+    """
+    candles = daily_candles([10.0 + (i % 3) * 0.1 for i in range(12)])
+    engine = BacktestEngine(cn_config(position_pct=0.9))
+    result = engine.run(_ReEnterSameDay(), _ReEnterSameDay.Params(), candles, "1d")
+
+    equity = [point["equity"] for point in result.equity_curve]
+    returns = [
+        (equity[i] / equity[i - 1] - 1) * 100 for i in range(1, len(equity)) if equity[i - 1]
+    ]
+    # A 10-11 price series with a 90% position cannot move more than a few percent
+    # per bar; anything larger means the settlement bucket was dropped.
+    assert max(returns) < 5, f"implausible single-bar gain: {max(returns):.1f}%"
+    assert min(returns) > -5, f"implausible single-bar loss: {min(returns):.1f}%"
+
+
+def test_final_equity_includes_unsettled_proceeds():
+    """The last bar must not lose the money still sitting in settlement."""
+    candles = daily_candles([10.0 + (i % 3) * 0.1 for i in range(12)])
+    result = BacktestEngine(cn_config(position_pct=0.9)).run(
+        _ReEnterSameDay(), _ReEnterSameDay.Params(), candles, "1d"
+    )
+    final = result.equity_curve[-1]["equity"]
+    initial = result.metrics["initial_capital"]
+    # With these prices a 10% move is the plausible bound.
+    assert final == pytest.approx(initial, rel=0.15)
