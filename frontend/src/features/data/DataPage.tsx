@@ -1,4 +1,4 @@
-import { useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { api } from "../../shared/api";
 import { timeLabel } from "../../shared/format";
@@ -12,15 +12,42 @@ export function DataPage() {
   const fileRef = useRef<HTMLInputElement | null>(null);
   const [symbol, setSymbol] = useState("BTCUSDT");
   const [replace, setReplace] = useState(true);
+  const [timeframe, setTimeframe] = useState("15m");
   const coverage = useQuery({ queryKey: ["data-coverage"], queryFn: api.dataCoverage, refetchInterval: 20_000 });
+  const symbols = useQuery({ queryKey: ["symbols", "all"], queryFn: () => api.symbols() });
+
+  // The coverage table has one row per (symbol, timeframe); a plain map over it
+  // listed every symbol twice in the picker.
+  const uniqueSymbols = useMemo(
+    () => [...new Set((coverage.data ?? []).map((item) => item.symbol))],
+    [coverage.data],
+  );
+
+  const symbolMeta = useMemo(
+    () => (symbols.data ?? []).find((item) => item.code === symbol) ?? null,
+    [symbols.data, symbol],
+  );
+
+  // The backend accepts the symbol's base timeframe, plus native daily bars for
+  // A-shares (what real exchange exports contain). Offering anything else would
+  // just produce a 422 after the upload.
+  const importTimeframes = useMemo(() => {
+    const base = symbolMeta?.base_timeframe || "15m";
+    return symbolMeta?.market === "cn_stock" ? [base, "1d"] : [base];
+  }, [symbolMeta]);
+
+  useEffect(() => {
+    if (!importTimeframes.includes(timeframe)) setTimeframe(importTimeframes[0]);
+  }, [importTimeframes, timeframe]);
+
   const quality = useQuery({
-    queryKey: ["data-quality", symbol],
-    queryFn: () => api.dataQuality(symbol),
+    queryKey: ["data-quality", symbol, timeframe],
+    queryFn: () => api.dataQuality(symbol, timeframe),
     enabled: Boolean(symbol),
   });
 
   const upload = useMutation({
-    mutationFn: (file: File) => api.importCsv(symbol, file, replace),
+    mutationFn: (file: File) => api.importCsv(symbol, file, replace, timeframe),
     onSuccess: (report) => {
       toast.push(`导入完成：新增 ${report.imported} 行，跳过 ${report.skipped} 行`);
       queryClient.invalidateQueries({ queryKey: ["data-quality"] });
@@ -38,14 +65,30 @@ export function DataPage() {
             <div className="grid grid-2" style={{ gap: 12 }}>
               <Field label="标的">
                 <select className="select" value={symbol} onChange={(event) => setSymbol(event.target.value)}>
-                  {(coverage.data ?? []).map((item) => (
-                    <option key={item.symbol} value={item.symbol}>
-                      {item.symbol}
+                  {uniqueSymbols.map((code) => (
+                    <option key={code} value={code}>
+                      {code}
                     </option>
                   ))}
-                  {!coverage.data?.some((item) => item.symbol === symbol) ? (
+                  {uniqueSymbols.length === 0 || !uniqueSymbols.includes(symbol) ? (
                     <option value={symbol}>{symbol}</option>
                   ) : null}
+                </select>
+              </Field>
+              <Field
+                label="周期"
+                hint={symbolMeta?.market === "cn_stock" ? "A 股可用原生日线" : "加密只接受基础周期"}
+              >
+                <select
+                  className="select"
+                  value={timeframe}
+                  onChange={(event) => setTimeframe(event.target.value)}
+                >
+                  {importTimeframes.map((item) => (
+                    <option key={item} value={item}>
+                      {item}
+                    </option>
+                  ))}
                 </select>
               </Field>
               <Field label="写入方式">
@@ -97,7 +140,7 @@ export function DataPage() {
           </div>
         </Card>
 
-        <Card title="数据质量" subtitle={symbol}>
+        <Card title="数据质量" subtitle={`${symbol} · ${timeframe}`}>
           {quality.isLoading || !quality.data ? (
             <Loader />
           ) : (
@@ -109,7 +152,11 @@ export function DataPage() {
               <Row label="非单调" value={String(quality.data.non_monotonic)} tone={quality.data.non_monotonic ? "down" : undefined} />
               <Row label="非法 OHLC" value={String(quality.data.invalid_ohlc)} tone={quality.data.invalid_ohlc ? "down" : undefined} />
               <Row label="缺口" value={String(quality.data.gaps)} tone={quality.data.gaps ? "down" : undefined} />
-              <div className="helper">15 分钟基础周期；其他周期由读取时聚合。</div>
+              <div className="helper">
+                {timeframe === "1d"
+                  ? "原生日线序列，直接由数据源提供。"
+                  : "基础周期；其他周期由读取时聚合。"}
+              </div>
             </div>
           )}
         </Card>

@@ -9,6 +9,7 @@
 | `load_api.py` | ✅ | 纯读接口的吞吐 |
 | `strategy_load.py` | ❌（进程内） | 9 个策略 × 2 标的 × N 轮的回测耗时分布 |
 | `soak_cn_engine.py` | ❌（进程内） | 跨月/跨年连续运行后的数据不变量 |
+| `verify_calendar.py` | ❌（需外网） | 手工维护的节假日表是否与真实交易所数据一致 |
 
 ## 运行 system_load / cn_load / load_api
 
@@ -48,6 +49,17 @@ python tests/stress/strategy_load.py --bars 2000 --repeat 5
 `soak_cn_engine.py` 压缩时间：直接推进模拟交易时钟，90 个交易日约 5 秒跑完，
 然后检查不变量（非交易日无 K 线、无重复日线、OHLC 自洽、涨跌停字段齐全）。
 退出码非 0 表示有不变量被破坏。
+
+`verify_calendar.py` 拉取真实日线，逐日比对 `calendar.py` 的判定，
+双向报告「日历说开市但没有 K 线」和「日历说休市但有 K 线」。
+节假日表是人工维护的，每年 12 月更新后应当跑一次：
+
+```bash
+python tests/stress/verify_calendar.py --bars 400
+```
+
+退出码非 0 表示日历与真实数据不符，需要更新 `_HOLIDAYS` 或用
+`LQ_CN_EXTRA_HOLIDAYS` 补充。
 
 ## 已知的性能边界
 

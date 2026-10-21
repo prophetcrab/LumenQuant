@@ -60,6 +60,19 @@ class TTLCache:
     def clear(self) -> None:
         self._data.clear()
 
+    def invalidate(self, prefix: str) -> int:
+        """Drop every entry whose key starts with `prefix`.
+
+        Writes need to invalidate the specific aggregates they changed. Clearing
+        the whole cache on every import would be simpler but throws away unrelated
+        entries; leaving it alone (the old behaviour) meant a freshly imported CSV
+        still showed the previous coverage and quality for the full TTL.
+        """
+        doomed = [key for key in self._data if key.startswith(prefix)]
+        for key in doomed:
+            self._data.pop(key, None)
+        return len(doomed)
+
     def stats(self) -> dict[str, int | float]:
         total = self.hits + self.misses
         return {

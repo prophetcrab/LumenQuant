@@ -77,4 +77,10 @@ async def import_csv(
     report = DataService(session).import_csv(
         symbol, timeframe=timeframe, content=content, replace=replace
     )
+    # Coverage and quality are cached for 30s; without this the dashboard keeps
+    # showing the pre-import numbers right after a successful upload.
+    cache = getattr(request.app.state, "stats_cache", None)
+    if cache is not None:
+        cache.invalidate("coverage")
+        cache.invalidate(f"quality:{symbol.upper()}:")
     return asdict(report)

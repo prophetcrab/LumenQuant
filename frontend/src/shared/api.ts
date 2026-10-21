@@ -867,7 +867,7 @@ export const api = {
     request<{ symbol: string; timeframe: string; bars: number; first_time: number; last_time: number }[]>(
       "/data/coverage",
     ),
-  dataQuality: (symbol: string) =>
+  dataQuality: (symbol: string, timeframe?: string) =>
     request<{
       symbol: string;
       timeframe: string;
@@ -879,11 +879,11 @@ export const api = {
       invalid_ohlc: number;
       gaps: number;
       expected_step: number;
-    }>(`/data/quality${qs({ symbol })}`),
-  importCsv: async (symbol: string, file: File, replace: boolean) => {
+    }>(`/data/quality${qs({ symbol, timeframe })}`),
+  importCsv: async (symbol: string, file: File, replace: boolean, timeframe = "15m") => {
     const form = new FormData();
     form.set("symbol", symbol);
-    form.set("timeframe", "15m");
+    form.set("timeframe", timeframe);
     form.set("replace", String(replace));
     form.set("file", file);
     const response = await fetch("/api/data/import", { method: "POST", body: form });

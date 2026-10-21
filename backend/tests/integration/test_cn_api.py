@@ -488,3 +488,98 @@ def test_cn_symbols_registered_without_synthetic_market(tmp_path):
         assert all(item["market"] == "cn_stock" for item in symbols)
         assert all(item["enabled"] for item in symbols)
     db.dispose()
+
+
+def test_daily_quality_does_not_report_weekends_as_gaps(tmp_path):
+    """Gap counting must follow the trading calendar, not the raw time delta.
+
+    Naive `next - prev > step` treated every weekend and holiday as missing data:
+    158 real daily bars came back with 341 "gaps". The number was arithmetic
+    noise and made a clean series look broken.
+    """
+    from datetime import date, datetime, timedelta, timezone
+
+    from sqlalchemy import select
+
+    from app.modules.cn.calendar import trading_days
+    from app.modules.market.models import Candle
+
+    CN_TZ = timezone(timedelta(hours=8))
+
+    settings = Settings(
+        database_url=f"sqlite:///{(tmp_path / 'gaps.sqlite').as_posix()}",
+        seed_market=False,
+        cn_symbols_enabled=True,
+        cn_data_source="synthetic",
+        cn_sync_on_start=False,
+        runtime_enabled=False,
+    )
+    db = Database(settings.database_url)
+    db.create_schema()
+    app = create_app(settings, db)
+
+    days = trading_days(date(2026, 1, 5), date(2026, 2, 13))
+    with TestClient(app) as client:
+        with db.session() as session:
+            for day in days:
+                midnight = datetime(day.year, day.month, day.day, tzinfo=CN_TZ)
+                session.add(
+                    Candle(
+                        symbol="600519.SH",
+                        timeframe="1d",
+                        open_time=int(midnight.timestamp() * 1000),
+                        open=100.0,
+                        high=101.0,
+                        low=99.0,
+                        close=100.5,
+                        volume=1000,
+                    )
+                )
+            session.commit()
+
+        quality = client.get(
+            "/api/data/quality", params={"symbol": "600519.SH", "timeframe": "1d"}
+        ).json()
+        assert quality["bars"] == len(days)
+        assert quality["gaps"] == 0, quality
+
+        # Drop one mid-series bar: exactly one gap must be reported.
+        with db.session() as session:
+            rows = session.scalars(
+                select(Candle).where(Candle.timeframe == "1d").order_by(Candle.open_time)
+            ).all()
+            session.delete(rows[len(rows) // 2])
+            session.commit()
+        # The quality endpoint caches for 30s; a direct DB write bypasses the
+        # import path that would have invalidated it.
+        app.state.stats_cache.clear()
+        quality = client.get(
+            "/api/data/quality", params={"symbol": "600519.SH", "timeframe": "1d"}
+        ).json()
+        assert quality["gaps"] == 1, quality
+    db.dispose()
+
+
+def test_csv_import_invalidates_cached_quality(cn_client):
+    """A successful import must not leave a stale quality panel behind."""
+    symbol = "600036.SH"
+    before = cn_client.get(
+        "/api/data/quality", params={"symbol": symbol, "timeframe": "1d"}
+    ).json()
+
+    rows = ["open_time,open,high,low,close,volume"]
+    base = before["last_time"] + 86_400_000 if before["last_time"] else 1_700_000_000_000
+    for offset in range(3):
+        ts = base + offset * 86_400_000
+        rows.append(f"{ts},40.0,41.0,39.0,40.5,1000")
+    response = cn_client.post(
+        "/api/data/import",
+        data={"symbol": symbol, "timeframe": "1d", "replace": "false"},
+        files={"file": ("extra.csv", "\n".join(rows), "text/csv")},
+    )
+    assert response.status_code == 201, response.text
+
+    after = cn_client.get(
+        "/api/data/quality", params={"symbol": symbol, "timeframe": "1d"}
+    ).json()
+    assert after["bars"] == before["bars"] + 3

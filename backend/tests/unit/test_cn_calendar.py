@@ -67,3 +67,16 @@ def test_spring_festival_gap_is_skipped_when_tabulated():
     # 2026-02-15..2026-02-21 are closed for Spring Festival.
     assert date(2026, 2, 16) not in days
     assert date(2026, 2, 13) in days
+
+
+def test_spring_festival_2026_runs_through_feb_23():
+    """Real exchange data showed no bars from Feb 16 to Feb 23, resuming Feb 24.
+
+    The provisional list stopped at Feb 21, so Monday Feb 23 looked tradable and
+    every data-quality check reported a phantom gap there.
+    """
+    for day in range(16, 24):
+        assert not is_trading_day(date(2026, 2, day)), day
+    assert is_trading_day(date(2026, 2, 24))
+    # The day before the holiday week still trades.
+    assert is_trading_day(date(2026, 2, 13))

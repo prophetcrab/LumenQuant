@@ -197,11 +197,11 @@ class DataService:
             or row.high < max(row.open, row.close)
             or row.low > min(row.open, row.close)
         )
-        gaps = 0
-        for i in range(1, len(times)):
-            delta = times[i] - times[i - 1]
-            if delta > step:
-                gaps += int(delta // step) - 1
+        symbol_row = self.session.scalar(
+            select(Symbol).where(Symbol.code == symbol.upper())
+        )
+        market = symbol_row.market if symbol_row is not None else "crypto"
+        gaps = self._count_gaps(times, step=step, timeframe=timeframe, market=market)
         return QualityReport(
             symbol=symbol.upper(),
             timeframe=timeframe,
@@ -214,6 +214,57 @@ class DataService:
             gaps=gaps,
             expected_step=step,
         )
+
+    @staticmethod
+    def _count_gaps(
+        times: list[int], *, step: int, timeframe: str, market: str
+    ) -> int:
+        """Count missing bars, respecting the market's trading calendar.
+
+        A naive `delta > step` test calls every weekend and lunch break a gap.
+        On real A-share daily data that produced 341 "gaps" for 158 bars — the
+        number was really just the closed days between sessions, and it made a
+        clean series look catastrophically broken.
+        """
+        if len(times) < 2:
+            return 0
+        if market != "cn_stock":
+            gaps = 0
+            for i in range(1, len(times)):
+                delta = times[i] - times[i - 1]
+                if delta > step:
+                    gaps += int(delta // step) - 1
+            return gaps
+
+        from app.modules.cn.calendar import day_key, sessions, trading_days
+
+        if timeframe == "1d":
+            first = day_key(times[0])
+            last = day_key(times[-1])
+            expected_days = len(trading_days(first, last))
+            return max(0, expected_days - len(times))
+
+        # Intraday: expected bars exist only inside a session. Count the bars each
+        # trading day should contain and compare with what is stored, so the
+        # overnight gap and the lunch break are not treated as missing data.
+        per_day: dict[str, int] = {}
+        for ts in times:
+            key = day_key(ts).isoformat()
+            per_day[key] = per_day.get(key, 0) + 1
+        if not sessions(day_key(times[0])):
+            return 0
+        # The first and last days are partial by construction: the fetch window
+        # may start mid-session, and "today" is still running. Counting them
+        # reports bars that were never supposed to exist yet.
+        ordered_days = sorted(per_day)
+        missing = 0
+        for day_iso in ordered_days[1:-1]:
+            from datetime import date
+
+            day = date.fromisoformat(day_iso)
+            expected = max(0, sum((end - start) // step for start, end in sessions(day)))
+            missing += max(0, expected - per_day[day_iso])
+        return missing
 
     def coverage(self) -> list[dict]:
         rows = self.session.execute(
