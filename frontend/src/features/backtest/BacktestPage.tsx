@@ -14,11 +14,13 @@ import { PortfolioPanel } from "./PortfolioPanel";
 import { Segmented } from "../../components/ui";
 import { buildParams, initialParams, type ParamValue } from "../../shared/strategy-params";
 import { parseStrategyHandoff } from "../../shared/handoff";
+import { useAccount } from "../../shared/account-context";
 
 const TIMEFRAMES = ["15m", "30m", "1h", "4h", "1d"] as const;
 
 export function BacktestPage() {
   const queryClient = useQueryClient();
+  const { account } = useAccount();
   const catalog = useQuery({ queryKey: ["strategies"], queryFn: api.strategies });
   const symbols = useQuery({ queryKey: ["symbols", "all"], queryFn: () => api.symbols() });
   const history = useQuery({ queryKey: ["backtests", 30], queryFn: () => api.backtests(30) });
@@ -43,6 +45,32 @@ export function BacktestPage() {
   );
   const [selectedRun, setSelectedRun] = useState<BacktestRun | null>(null);
   const [tab, setTab] = useState<"run" | "optimise" | "walkforward" | "portfolio">("run");
+
+  // Research is not bound to an account, so every symbol stays selectable — but
+  // the default should be an instrument from the account's own market. Opening
+  // the page on an A-share account and finding BTCUSDT preselected invites an
+  // accidental crypto backtest.
+  const handoffSymbol = useRef(handoff.current?.symbol);
+  useEffect(() => {
+    const rows = symbols.data ?? [];
+    if (rows.length === 0 || !account) return;
+    // A symbol handed over from the strategy library was chosen deliberately;
+    // never replace it, even if it belongs to another market.
+    if (handoffSymbol.current) {
+      if (rows.some((item) => item.code === handoffSymbol.current)) {
+        handoffSymbol.current = undefined;
+        return;
+      }
+      return;
+    }
+    const inMarket = rows.filter((item) => item.market === account.market);
+    if (inMarket.length === 0) return;
+    if (inMarket.some((item) => item.code === symbol)) return;
+    const preferred = account.market === "cn_stock" ? "600036.SH" : "BTCUSDT";
+    setSymbol(
+      inMarket.some((item) => item.code === preferred) ? preferred : inMarket[0].code,
+    );
+  }, [symbols.data, account, symbol]);
 
   const meta = catalog.data?.find((item) => item.key === strategy) ?? null;
 

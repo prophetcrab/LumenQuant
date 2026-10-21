@@ -53,6 +53,12 @@ const apiMock = vi.hoisted(() => ({
 }));
 
 vi.mock("../../shared/api", () => ({ api: apiMock }));
+// The page reads the selected account only to pick a market-appropriate default
+// symbol; no account means "leave the explicit choice alone".
+let currentAccount: { market: "crypto" | "cn_stock"; base_currency: string } | null = null;
+vi.mock("../../shared/account-context", () => ({
+  useAccount: () => ({ account: currentAccount, accountId: undefined }),
+}));
 // ECharts needs a real canvas; the panels below the form are out of scope here.
 vi.mock("../../shared/echarts", () => ({
   Chart: () => null,
@@ -83,7 +89,9 @@ describe("BacktestPage strategy handoff", () => {
     apiMock.symbols.mockResolvedValue([
       { code: "600036.SH", market: "cn_stock" },
       { code: "BTCUSDT", market: "crypto" },
+      { code: "ETHUSDT", market: "crypto" },
     ]);
+    currentAccount = null;
     apiMock.backtests.mockResolvedValue([]);
   });
 
@@ -142,5 +150,24 @@ describe("BacktestPage strategy handoff", () => {
     await waitFor(() => expect(screen.getByLabelText("RSI 周期")).toBeTruthy());
     expect((screen.getByLabelText("RSI 周期") as HTMLInputElement).value).toBe("14");
     expect(screen.queryByLabelText("快线周期")).toBeNull();
+  });
+
+  it("defaults to a symbol from the account's market", async () => {
+    // Research is not account-bound, so every symbol stays selectable; only the
+    // preselected value follows the account, to avoid opening an A-share account
+    // on a crypto backtest.
+    currentAccount = { market: "cn_stock", base_currency: "CNY" };
+    renderAt("/backtest");
+    await waitFor(() => expect((screen.getByLabelText("标的") as HTMLSelectElement).value).toBe("600036.SH"));
+    currentAccount = null;
+  });
+
+  it("keeps the symbol handed over from the strategy library", async () => {
+    // The user picked it deliberately; a market-based default must not override it.
+    currentAccount = { market: "cn_stock", base_currency: "CNY" };
+    renderAt("/backtest?strategy=sma_cross&symbol=ETHUSDT");
+    await waitFor(() => expect(numberField("快线周期").value).toBe("10"));
+    expect((screen.getByLabelText("标的") as HTMLSelectElement).value).toBe("ETHUSDT");
+    currentAccount = null;
   });
 });
