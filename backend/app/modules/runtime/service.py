@@ -192,6 +192,14 @@ class RuntimeService:
             raise ValidationError(
                 f"{symbol_view.code} 属于 {symbol_view.market} 市场，与账户市场 {account.market} 不一致"
             )
+        # A-share data has no 4h series. Accepting it here created an instance that
+        # could never read a candle — and worse, one that made the whole scheduler
+        # tick return 422, stopping every other instance on the same account.
+        allowed = self.market.supported_timeframes(symbol_view.market)
+        if timeframe not in allowed:
+            raise ValidationError(
+                f"{symbol_view.market} 支持 {', '.join(allowed)}，不支持 {timeframe}"
+            )
         # An automated instance on a live account places real orders with no human
         # in the loop, so it must not be creatable without the same explicit
         # opt-in that a manual live order requires. Before this check, a live

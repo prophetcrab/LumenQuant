@@ -170,4 +170,32 @@ describe("BacktestPage strategy handoff", () => {
     expect((screen.getByLabelText("标的") as HTMLSelectElement).value).toBe("ETHUSDT");
     currentAccount = null;
   });
+
+  it("lets the user research a symbol from another market", async () => {
+    // The market-based default applies once. An effect that kept correcting the
+    // selection made it impossible to backtest BTC from an A-share account.
+    currentAccount = { market: "cn_stock", base_currency: "CNY" };
+    renderAt("/backtest");
+    await waitFor(() => expect((screen.getByLabelText("标的") as HTMLSelectElement).value).toBe("600036.SH"));
+
+    fireEvent.change(screen.getByLabelText("标的"), { target: { value: "BTCUSDT" } });
+    await waitFor(() => expect((screen.getByLabelText("标的") as HTMLSelectElement).value).toBe("BTCUSDT"));
+    currentAccount = null;
+  });
+
+  it("offers 4h only for crypto symbols", async () => {
+    // A-share data has no 4h series; offering it produced a 422 after the user
+    // had configured the whole backtest.
+    currentAccount = { market: "cn_stock", base_currency: "CNY" };
+    renderAt("/backtest");
+    await waitFor(() => expect((screen.getByLabelText("标的") as HTMLSelectElement).value).toBe("600036.SH"));
+    const optionsFor = () =>
+      [...(screen.getByLabelText("周期") as HTMLSelectElement).options].map((o) => o.value);
+
+    expect(optionsFor()).toEqual(["15m", "30m", "1h", "1d"]);
+
+    fireEvent.change(screen.getByLabelText("标的"), { target: { value: "BTCUSDT" } });
+    await waitFor(() => expect(optionsFor()).toContain("4h"));
+    currentAccount = null;
+  });
 });

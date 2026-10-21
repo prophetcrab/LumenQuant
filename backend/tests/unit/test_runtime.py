@@ -59,6 +59,10 @@ class Market:
     def last_price(self, _symbol: str) -> float:
         return self.current
 
+    def supported_timeframes(self, market: str = "crypto"):
+        # Mirrors the real service so instance creation exercises the same guard.
+        return ("15m", "30m", "1h", "4h", "1d") if market != "cn_stock" else ("15m", "30m", "1h", "1d")
+
     def require_symbol(self, code):
         return SymbolView(
             code=code, name=code, asset_class="test", base=code, quote="USDT",

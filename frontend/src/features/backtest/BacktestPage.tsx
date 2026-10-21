@@ -15,8 +15,11 @@ import { Segmented } from "../../components/ui";
 import { buildParams, initialParams, type ParamValue } from "../../shared/strategy-params";
 import { parseStrategyHandoff } from "../../shared/handoff";
 import { useAccount } from "../../shared/account-context";
+import { CRYPTO_TIMEFRAMES, timeframesFor, type Timeframe } from "../../shared/timeframes";
 
-const TIMEFRAMES = ["15m", "30m", "1h", "4h", "1d"] as const;
+// Handoff parsing accepts every timeframe any market supports; the picker below
+// narrows to what the selected symbol's market can actually serve.
+const TIMEFRAMES = CRYPTO_TIMEFRAMES;
 
 export function BacktestPage() {
   const queryClient = useQueryClient();
@@ -30,8 +33,8 @@ export function BacktestPage() {
   const handoff = useRef(parseStrategyHandoff(searchParams, TIMEFRAMES));
   const [strategy, setStrategy] = useState(handoff.current?.strategy ?? "sma_cross");
   const [symbol, setSymbol] = useState(handoff.current?.symbol ?? "BTCUSDT");
-  const [timeframe, setTimeframe] = useState<(typeof TIMEFRAMES)[number]>(
-    (handoff.current?.timeframe as (typeof TIMEFRAMES)[number] | undefined) ?? "1h",
+  const [timeframe, setTimeframe] = useState<Timeframe>(
+    (handoff.current?.timeframe as Timeframe | undefined) ?? "1h",
   );
   const [bars, setBars] = useState("1500");
   const [capital, setCapital] = useState("100000");
@@ -50,27 +53,40 @@ export function BacktestPage() {
   // the default should be an instrument from the account's own market. Opening
   // the page on an A-share account and finding BTCUSDT preselected invites an
   // accidental crypto backtest.
-  const handoffSymbol = useRef(handoff.current?.symbol);
+  // Choose a market-appropriate default once, when the symbol list first
+  // arrives. It must NOT keep enforcing the account's market: research is not
+  // account-bound, and an effect that re-corrected every deviation made it
+  // impossible to research a crypto symbol from an A-share account.
+  const symbolDefaultApplied = useRef(false);
+  // Captured at mount: the handoff ref is cleared as soon as the query string is
+  // stripped, which happens before the symbol list arrives.
+  const initialSymbol = useRef(handoff.current?.symbol);
   useEffect(() => {
     const rows = symbols.data ?? [];
-    if (rows.length === 0 || !account) return;
-    // A symbol handed over from the strategy library was chosen deliberately;
-    // never replace it, even if it belongs to another market.
-    if (handoffSymbol.current) {
-      if (rows.some((item) => item.code === handoffSymbol.current)) {
-        handoffSymbol.current = undefined;
-        return;
-      }
+    if (rows.length === 0 || symbolDefaultApplied.current) return;
+    symbolDefaultApplied.current = true;
+    if (initialSymbol.current) {
+      // A handed-over symbol was chosen deliberately; never replace it.
       return;
     }
+    if (!account) return;
     const inMarket = rows.filter((item) => item.market === account.market);
-    if (inMarket.length === 0) return;
     if (inMarket.some((item) => item.code === symbol)) return;
+    if (inMarket.length === 0) return;
     const preferred = account.market === "cn_stock" ? "600036.SH" : "BTCUSDT";
     setSymbol(
       inMarket.some((item) => item.code === preferred) ? preferred : inMarket[0].code,
     );
   }, [symbols.data, account, symbol]);
+
+  const selectedSymbolMarket = symbols.data?.find((item) => item.code === symbol)?.market;
+  // The timeframe list follows the symbol, not the account: a backtest can target
+  // any listed instrument, and an A-share symbol has no 4h series at all.
+  const timeframes = useMemo(() => timeframesFor(selectedSymbolMarket), [selectedSymbolMarket]);
+
+  useEffect(() => {
+    if (!timeframes.includes(timeframe)) setTimeframe(timeframes[0]);
+  }, [timeframes, timeframe]);
 
   const meta = catalog.data?.find((item) => item.key === strategy) ?? null;
 
@@ -199,9 +215,9 @@ export function BacktestPage() {
             <select
               className="select"
               value={timeframe}
-              onChange={(event) => setTimeframe(event.target.value as (typeof TIMEFRAMES)[number])}
+              onChange={(event) => setTimeframe(event.target.value as Timeframe)}
             >
-              {TIMEFRAMES.map((item) => (
+              {timeframes.map((item) => (
                 <option key={item} value={item}>
                   {item}
                 </option>

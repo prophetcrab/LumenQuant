@@ -114,5 +114,15 @@ def tick(request: Request, session: Session = Depends(get_session)):
     except Exception:  # a broken stop check must not block signal evaluation
         pass
     for row in service.running_instances():
-        results[row.id] = service.evaluate_instance(row)
+        # One malformed instance (bad stored params, a timeframe its market no
+        # longer supports) must not abort the pass and starve every other
+        # instance. The background scheduler already isolates per instance; the
+        # manual endpoint used to let the exception escape as a 422 for the whole
+        # request.
+        try:
+            results[row.id] = service.evaluate_instance(row)
+        except Exception as exc:
+            row.last_error = str(exc)[:400]
+            session.commit()
+            results[row.id] = "error"
     return {"evaluated": results}

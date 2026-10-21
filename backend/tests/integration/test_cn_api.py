@@ -632,3 +632,31 @@ def test_delete_series_rejects_a_bad_timeframe(cn_client):
     )
     assert response.status_code == 422
     assert "timeframe" in response.json()["error"]["message"]
+
+
+def test_cn_instance_rejects_4h_timeframe(cn_client):
+    """A-share data has no 4h series.
+
+    Accepting it created an instance that could never read a candle, and because
+    `evaluate_instance` raised inside the tick loop, one such instance made the
+    whole scheduler pass return 422 — stopping every other instance too.
+    """
+    account = cn_client.post(
+        "/api/accounts",
+        json={"name": "TF账户", "initial_balance": 500_000, "market": "cn_stock"},
+    ).json()
+    response = cn_client.post(
+        "/api/runtime/instances",
+        json={
+            "account_id": account["id"],
+            "strategy_key": "sma_cross",
+            "symbol": "600036.SH",
+            "timeframe": "4h",
+            "params": {},
+            "position_pct": 0.1,
+            "max_order_notional": 50_000,
+        },
+    )
+    assert response.status_code == 422
+    message = response.json()["error"]["message"]
+    assert "4h" in message and "不支持" in message

@@ -10,8 +10,9 @@ import { Badge, Card, EmptyState, Field, Loader, Modal, Stat } from "../../compo
 import { ButtonField } from "../../components/form";
 import { buildParams, initialParams, type ParamValue } from "../../shared/strategy-params";
 import { parseStrategyHandoff } from "../../shared/handoff";
+import { CRYPTO_TIMEFRAMES, timeframesFor, type Timeframe } from "../../shared/timeframes";
 
-const TIMEFRAMES = ["15m", "30m", "1h", "4h", "1d"] as const;
+const TIMEFRAMES = CRYPTO_TIMEFRAMES;
 
 export function RuntimePage() {
   const { account, accountId } = useAccount();
@@ -25,9 +26,16 @@ export function RuntimePage() {
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [strategyKey, setStrategyKey] = useState(handoff.current?.strategy ?? "sma_cross");
   const [symbol, setSymbol] = useState(handoff.current?.symbol ?? "BTCUSDT");
-  const [timeframe, setTimeframe] = useState<(typeof TIMEFRAMES)[number]>(
-    (handoff.current?.timeframe as (typeof TIMEFRAMES)[number] | undefined) ?? "1h",
+  const [timeframe, setTimeframe] = useState<Timeframe>(
+    (handoff.current?.timeframe as Timeframe | undefined) ?? "1h",
   );
+  // Instances trade the account's market, so the picker follows it: an A-share
+  // account cannot read 4h bars at all.
+  const timeframes = useMemo(() => timeframesFor(account?.market), [account?.market]);
+
+  useEffect(() => {
+    if (!timeframes.includes(timeframe)) setTimeframe(timeframes[0]);
+  }, [timeframes, timeframe]);
   const [positionPct, setPositionPct] = useState("20");
   const [maxNotional, setMaxNotional] = useState("20000");
   const [stopLoss, setStopLoss] = useState("0");
@@ -436,9 +444,9 @@ export function RuntimePage() {
             <select
               className="select"
               value={timeframe}
-              onChange={(event) => setTimeframe(event.target.value as (typeof TIMEFRAMES)[number])}
+              onChange={(event) => setTimeframe(event.target.value as Timeframe)}
             >
-              {TIMEFRAMES.map((item) => (
+              {timeframes.map((item) => (
                 <option key={item} value={item}>
                   {item}
                 </option>

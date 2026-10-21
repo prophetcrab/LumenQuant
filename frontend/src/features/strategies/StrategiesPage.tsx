@@ -8,10 +8,10 @@ import type { StrategyMeta } from "../../shared/api";
 import { candleOption, palette } from "../../shared/charts";
 import { categoryLabel, price, timeLabel } from "../../shared/format";
 import { Badge, Card, EmptyState, Field, Loader } from "../../components/ui";
+import { timeframesFor, type Timeframe } from "../../shared/timeframes";
 import { ButtonField } from "../../components/form";
 import { buildParams, initialParams, type ParamValue } from "../../shared/strategy-params";
 
-const TIMEFRAMES = ["15m", "30m", "1h", "4h", "1d"] as const;
 
 export function StrategiesPage() {
   const navigate = useNavigate();
@@ -20,7 +20,13 @@ export function StrategiesPage() {
   const [selected, setSelected] = useState<string | null>(null);
   const [params, setParams] = useState<Record<string, ParamValue>>({});
   const [symbol, setSymbol] = useState("BTCUSDT");
-  const [timeframe, setTimeframe] = useState<(typeof TIMEFRAMES)[number]>("1h");
+  const [timeframe, setTimeframe] = useState<Timeframe>("1h");
+  // A-share symbols have no 4h series; the picker must match the market.
+  const timeframes = useMemo(() => timeframesFor(account?.market), [account?.market]);
+
+  useEffect(() => {
+    if (!timeframes.includes(timeframe)) setTimeframe(timeframes[0]);
+  }, [timeframes, timeframe]);
   const symbols = useQuery({ queryKey: ["symbols", "all"], queryFn: () => api.symbols() });
 
   // The research target should default to the selected account's market: a
@@ -116,9 +122,9 @@ export function StrategiesPage() {
                   <select
                     className="select"
                     value={timeframe}
-                    onChange={(event) => setTimeframe(event.target.value as (typeof TIMEFRAMES)[number])}
+                    onChange={(event) => setTimeframe(event.target.value as Timeframe)}
                   >
-                    {TIMEFRAMES.map((item) => (
+                    {timeframes.map((item) => (
                       <option key={item} value={item}>
                         {item}
                       </option>

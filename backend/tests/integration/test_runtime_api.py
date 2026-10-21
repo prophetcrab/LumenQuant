@@ -165,3 +165,63 @@ def test_update_accepts_stops_and_rejects_invalid_sizing(runtime_client):
         f"/api/runtime/instances/{instance['id']}", json={"position_pct": 3}
     )
     assert bad.status_code == 422
+
+
+def test_one_bad_instance_does_not_break_the_whole_tick(runtime_client):
+    """A malformed running instance must not abort every other instance.
+
+    The background scheduler isolates each instance; the manual endpoint let the
+    exception escape, so a single stale row turned the entire pass into a 422.
+    """
+    from sqlalchemy import select
+
+    from app.core.db import Database
+    from app.modules.runtime.models import StrategyInstance
+
+    account = runtime_client.post(
+        "/api/accounts", json={"name": "Tick Isolation", "initial_balance": 100_000}
+    ).json()
+    good = runtime_client.post(
+        "/api/runtime/instances",
+        json={
+            "account_id": account["id"],
+            "strategy_key": "sma_cross",
+            "symbol": "BTCUSDT",
+            "timeframe": "1h",
+            "params": {},
+            "position_pct": 0.1,
+            "max_order_notional": 5000,
+            "start": True,
+        },
+    ).json()
+
+    # Corrupt a second instance's stored params directly, bypassing validation.
+    bad = runtime_client.post(
+        "/api/runtime/instances",
+        json={
+            "account_id": account["id"],
+            "strategy_key": "sma_cross",
+            "symbol": "BTCUSDT",
+            "timeframe": "1h",
+            "params": {},
+            "position_pct": 0.1,
+            "max_order_notional": 5000,
+            "start": True,
+        },
+    ).json()
+
+    settings = runtime_client.app.state.settings
+    db = Database(settings.database_url)
+    with db.session() as session:
+        row = session.scalar(
+            select(StrategyInstance).where(StrategyInstance.id == bad["id"])
+        )
+        row.params_json = '{"fast": 100, "slow": 5}'  # fast >= slow
+        session.commit()
+    db.dispose()
+
+    response = runtime_client.post("/api/runtime/tick")
+    assert response.status_code == 200, response.text
+    evaluated = response.json()["evaluated"]
+    assert evaluated.get(bad["id"]) == "error"
+    assert good["id"] in evaluated
