@@ -9,10 +9,13 @@ from app.core.errors import ValidationError
 from app.modules.backtest.optimiser import OptimiserService, parse_space
 from app.modules.backtest.schemas import (
     BacktestRequest,
+    MultiBacktestRequest,
     OptimiseRequest,
     PortfolioRequest,
     WalkForwardRequest,
 )
+from app.modules.backtest.multi import MultiSymbolBacktester
+from app.modules.cn.fees import CnFeeSchedule
 from app.modules.backtest.portfolio import PortfolioAnalyser
 from app.modules.backtest.walkforward import WalkForwardService
 from app.modules.backtest.service import BacktestService
@@ -174,6 +177,40 @@ def walk_forward(
         ),
     )
     return report.as_dict()
+
+
+@router.post("/multi")
+def multi_symbol(payload: MultiBacktestRequest, request: Request, session: Session = Depends(get_session)):
+    """Run one strategy across a basket, splitting capital by weight.
+
+    Sleeves are traded independently — this is not a cross-symbol portfolio
+    optimiser, and the response says so in its warnings when the basket behaves
+    suspiciously uniformly.
+    """
+    from app.api.wiring import build_market
+
+    settings = request.app.state.settings
+    market = build_market(request, session, live=False)
+    service = MultiSymbolBacktester(
+        market,
+        fee_bps=settings.fee_bps,
+        slippage_bps=settings.slippage_bps,
+        cn_fees=CnFeeSchedule(
+            commission_bps=settings.cn_commission_bps,
+            min_commission=settings.cn_min_commission,
+            stamp_duty_bps=settings.cn_stamp_duty_bps,
+            transfer_fee_bps=settings.cn_transfer_fee_bps,
+        ),
+    )
+    return service.run(
+        strategy_key=payload.strategy,
+        symbols=payload.symbols,
+        timeframe=payload.timeframe,
+        bars=payload.bars,
+        params=payload.params,
+        config=payload.config,
+        weights=payload.weights,
+    )
 
 
 @router.post("/portfolio")

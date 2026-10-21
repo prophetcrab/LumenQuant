@@ -47,6 +47,9 @@ Base URL：`http://127.0.0.1:8000/api`　完整交互式文档：`/docs`
 - `GET /api/backtests?limit=`、`GET /api/backtests/{id}`、`DELETE /api/backtests/{id}`
 - `POST /api/backtests/optimise` — 网格搜索 + 样本外检验
 - `POST /api/backtests/walk-forward` — 多窗口滚动验证
+- `POST /api/backtests/multi` — `{strategy, symbols[], timeframe, bars, params, config, weights?}`
+  同一策略跑一篮子标的：资金按权重拆分，各 sleeve 独立回测后合并成一条曲线；
+  要求标的同市场、同周期。
 - `POST /api/backtests/portfolio` — `{run_ids[], weights?, initial_capital?}`
   合并已保存回测：对齐权益曲线、计算合并指标、成分贡献、相关性矩阵与分散效果。
   要求周期与市场一致，重叠区间至少 50 根。

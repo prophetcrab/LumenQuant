@@ -32,6 +32,20 @@ class OptimiseRequest(BaseModel):
     top_n: int = Field(default=10, ge=1, le=50)
 
 
+class MultiBacktestRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    strategy: str = Field(min_length=2, max_length=48)
+    symbols: list[str] = Field(min_length=2, max_length=12)
+    timeframe: str = "1d"
+    bars: int = Field(default=500, ge=50, le=5000)
+    params: dict[str, Any] = Field(default_factory=dict)
+    config: dict[str, Any] = Field(default_factory=dict)
+    weights: list[float] | None = Field(
+        default=None, description="与 symbols 一一对应；省略则等权"
+    )
+
+
 class PortfolioRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 

@@ -240,6 +240,35 @@ export type BacktestRun = {
   trades?: BacktestTrade[];
 };
 
+export type MultiBacktestComponent = {
+  symbol: string;
+  name: string;
+  share: number;
+  allocation: number;
+  bars_total: number;
+  bars_aligned: number;
+  return_pct: number;
+  trades: number;
+  blocked: Record<string, number>;
+};
+
+export type MultiBacktestReport = {
+  strategy: string;
+  timeframe: string;
+  market: "crypto" | "cn_stock";
+  currency: string;
+  params: Record<string, number | string>;
+  initial_capital: number;
+  aligned_bars: number;
+  start_time: number;
+  end_time: number;
+  metrics: BacktestMetrics;
+  equity: { time: number; equity: number }[];
+  comparison: { time: number; strategy: number; benchmark: number }[];
+  components: MultiBacktestComponent[];
+  warnings: string[];
+};
+
 export type PortfolioComponent = {
   run_id: string;
   strategy: string;
@@ -817,6 +846,19 @@ export const api = {
     config: Record<string, unknown>;
   }) => request<BacktestRun>("/backtests", { method: "POST", body: JSON.stringify(body) }),
   deleteBacktest: (id: string) => request<void>(`/backtests/${id}`, { method: "DELETE" }),
+  multiBacktest: (body: {
+    strategy: string;
+    symbols: string[];
+    timeframe: string;
+    bars: number;
+    params: Record<string, unknown>;
+    config: Record<string, unknown>;
+    weights?: number[];
+  }) =>
+    request<MultiBacktestReport>("/backtests/multi", {
+      method: "POST",
+      body: JSON.stringify(body),
+    }),
   portfolioBacktest: (body: {
     run_ids: string[];
     weights?: number[];
