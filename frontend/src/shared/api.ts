@@ -155,6 +155,7 @@ export type SignalPreview = {
   timeframe: string;
   params: Record<string, number | string>;
   signals: { time: number; price: number; action: "buy" | "sell"; reason: string }[];
+  suppressed_signals: number;
   overlays: Record<string, (number | null)[]>;
 };
 

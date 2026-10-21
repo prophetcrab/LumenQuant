@@ -59,17 +59,33 @@ class StrategyService:
             )
         state = strategy.prepare(candles, parsed)
         points: list[SignalPoint] = []
+        # Simulate the execution layer's position state so the preview shows the
+        # signals that would actually become orders. Strategies emit a bare "buy"
+        # on every bar they want to be long (buy_and_hold does this deliberately
+        # so the runtime, which only sees the latest bar, always finds one);
+        # rendering those raw produced 799 "buy" markers on 800 bars while the
+        # backtest made a single trade. Suppressing an action that the current
+        # holding already satisfies is exactly what the trading layer does.
+        in_position = False
+        suppressed = 0
         for index in range(strategy.warmup(parsed), len(candles)):
             signal: Signal = strategy.evaluate(state, index)
-            if signal.is_actionable:
-                points.append(
-                    SignalPoint(
-                        time=candles[index].time,
-                        price=candles[index].close,
-                        action=signal.action,
-                        reason=signal.reason,
-                    )
+            if not signal.is_actionable:
+                continue
+            if (signal.action == "buy" and in_position) or (
+                signal.action == "sell" and not in_position
+            ):
+                suppressed += 1
+                continue
+            in_position = signal.action == "buy"
+            points.append(
+                SignalPoint(
+                    time=candles[index].time,
+                    price=candles[index].close,
+                    action=signal.action,
+                    reason=signal.reason,
                 )
+            )
         overlays = {name: values for name, values in state.series.items()}
         return {
             "strategy": key,
@@ -80,5 +96,9 @@ class StrategyService:
                 {"time": p.time, "price": p.price, "action": p.action, "reason": p.reason}
                 for p in points
             ],
+            # How many raw signals were dropped because they repeated an action
+            # already in effect. Surfaced so "the strategy fired 800 times but the
+            # chart shows one marker" is explainable rather than suspicious.
+            "suppressed_signals": suppressed,
             "overlays": overlays,
         }

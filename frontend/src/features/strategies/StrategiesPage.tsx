@@ -204,7 +204,10 @@ export function StrategiesPage() {
               title="信号预览"
               subtitle={
                 preview.data
-                  ? `${preview.data.symbol} · ${preview.data.timeframe} · ${preview.data.signals.length} 个信号`
+                  ? `${preview.data.symbol} · ${preview.data.timeframe} · ${preview.data.signals.length} 个可执行信号` +
+                    (preview.data.suppressed_signals
+                      ? `（另有 ${preview.data.suppressed_signals} 个与当前持仓状态重复，已忽略）`
+                      : "")
                   : "选择参数后运行"
               }
               padded={false}

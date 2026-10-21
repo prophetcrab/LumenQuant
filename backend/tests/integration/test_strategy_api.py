@@ -111,3 +111,37 @@ def test_catalog_exposes_boolean_param_type(strategy_client):
     prop = sma["params_schema"]["properties"]["require_regime"]
     assert prop["type"] == "boolean"
     assert sma["defaults"]["require_regime"] is False
+
+
+def test_preview_suppresses_signals_the_position_already_satisfies(strategy_client):
+    """The preview must show what would become orders, not raw strategy output.
+
+    buy_and_hold emits "buy" on every bar from warmup (deliberate: the runtime
+    only evaluates the latest bar, so it needs a standing signal). Rendering those
+    raw gave 799 buy markers over 800 bars while the backtest made exactly one
+    trade — the chart and the report described different systems.
+    """
+    body = strategy_client.post(
+        "/api/strategies/buy_and_hold/signals",
+        json={"symbol": "BTCUSDT", "timeframe": "1h", "limit": 200, "params": {}},
+    ).json()
+    assert len(body["signals"]) == 1
+    assert body["signals"][0]["action"] == "buy"
+    # Every bar from warmup onward produced a raw buy; exactly one survived.
+    # Only ~150 of the requested 200 bars exist at this tick rate, so assert the
+    # relationship instead of a fixed count.
+    assert body["suppressed_signals"] > 0
+    assert len(body["signals"]) == 1
+
+
+def test_preview_actions_alternate_starting_with_buy(strategy_client):
+    """With position state applied, a long-only strategy must alternate buy/sell."""
+    body = strategy_client.post(
+        "/api/strategies/sma_cross/signals",
+        json={"symbol": "BTCUSDT", "timeframe": "1h", "limit": 600, "params": {}},
+    ).json()
+    actions = [item["action"] for item in body["signals"]]
+    assert actions, "expected at least one signal"
+    for index, action in enumerate(actions):
+        expected = "buy" if index % 2 == 0 else "sell"
+        assert action == expected, f"signal {index} was {action}: {actions}"
