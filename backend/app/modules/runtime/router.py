@@ -7,6 +7,7 @@ from sqlalchemy.orm import Session
 
 from app.api.deps import get_session
 from app.api.wiring import build_accounts, build_market, build_trading
+from app.modules.alerts.service import AlertService
 from app.modules.runtime.schemas import InstanceCreate, InstanceUpdate, RunningToggle
 from app.modules.runtime.service import RuntimeService
 
@@ -25,6 +26,7 @@ def build_service(request: Request, session: Session) -> RuntimeService:
         market=market,
         trading=trading,
         live_auto_trading_enabled=settings.live_auto_trading_enabled,
+        alerts=AlertService(session),
     )
 
 

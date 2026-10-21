@@ -29,8 +29,11 @@ class RiskStateView:
 
 
 class RiskService:
-    def __init__(self, session: Session) -> None:
+    def __init__(self, session: Session, *, alerts=None) -> None:
         self.session = session
+        # Optional so the module keeps working in tests and read-only paths;
+        # the composition root wires the real AlertService.
+        self.alerts = alerts
 
     def _roll_day(self, row: RiskState, equity: float, market: str) -> bool:
         """Reset the daily baseline when the risk day changes.
@@ -147,17 +150,16 @@ class RiskService:
         )
         # A tripped breaker stops all new orders. Nobody watching the screen at
         # that moment would otherwise learn about it until they tried to trade.
-        from app.modules.alerts.service import AlertService
-
-        AlertService(self.session).raise_alert(
-            category="breaker",
-            level="critical",
-            account_id=account_id,
-            title="风控熔断已触发，新开仓被禁止",
-            message=reason,
-            ref_type="account",
-            ref_id=account_id,
-        )
+        if self.alerts is not None:
+            self.alerts.raise_alert(
+                category="breaker",
+                level="critical",
+                account_id=account_id,
+                title="风控熔断已触发，新开仓被禁止",
+                message=reason,
+                ref_type="account",
+                ref_id=account_id,
+            )
         self.session.commit()
         return self.state(account_id)
 

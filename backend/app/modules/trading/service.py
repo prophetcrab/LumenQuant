@@ -108,12 +108,14 @@ class TradingService:
         cn_session_enforced: bool = False,
         cn_live_session_gate: bool = True,
         live_market=None,
+        alerts=None,
     ) -> None:
         self.session = session
         self.cash = cash
         self.prices = prices
         self.policy = policy or RiskPolicy()
         self.bus = bus
+        self.alerts = alerts
         self.fee_bps = fee_bps
         self.slippage_bps = slippage_bps
         self.risk = risk
@@ -661,18 +663,17 @@ class TradingService:
                 client_order_id=client_order_id,
                 reason=str(exc),
             )
-            from app.modules.alerts.service import AlertService
-
-            AlertService(self.session).raise_alert(
-                category="gateway_failure",
-                level="critical",
-                account_id=account_id,
-                title=f"{symbol} 下单网关调用失败",
-                message=f"{side} {quantity} {symbol}：{exc}",
-                ref_type="account",
-                ref_id=account_id,
-                commit=True,
-            )
+            if self.alerts is not None:
+                self.alerts.raise_alert(
+                    category="gateway_failure",
+                    level="critical",
+                    account_id=account_id,
+                    title=f"{symbol} 下单网关调用失败",
+                    message=f"{side} {quantity} {symbol}：{exc}",
+                    ref_type="account",
+                    ref_id=account_id,
+                    commit=True,
+                )
             raise ConflictError(
                 f"下单网关调用失败，订单未确认提交：{exc}"
             ) from exc

@@ -7,6 +7,7 @@ from sqlalchemy.orm import Session
 
 from app.api.deps import get_session
 from app.modules.risk.policy import RiskContext, RiskLimits, RiskPolicy
+from app.modules.alerts.service import AlertService
 from app.modules.risk.service import RiskService
 
 
@@ -43,7 +44,7 @@ def observe(
     session: Session = Depends(get_session),
 ):
     """Feed an equity mark into the breakers (called by the portfolio loop)."""
-    service = RiskService(session)
+    service = RiskService(session, alerts=AlertService(session))
     service.observe(account_id, equity)
     view = service.state(account_id)
     decision = RiskPolicy(_limits(request)).breaker(
@@ -93,5 +94,5 @@ def overview(
         trading=trading,
         runtime=runtime,
         limits=_limits(request),
-        service=RiskService(session),
+        service=RiskService(session, alerts=AlertService(session)),
     )

@@ -16,6 +16,7 @@ from app.modules.backtest.service import BacktestService
 from app.modules.brokers.binance import build_broker
 from app.modules.brokers.ths import build_ths_gateway
 from app.modules.cn.fees import CnFeeSchedule
+from app.modules.alerts.service import AlertService
 from app.modules.market.service import MarketService
 from app.modules.portfolio.service import PortfolioService
 from app.modules.risk.policy import RiskLimits, RiskPolicy
@@ -95,7 +96,8 @@ def build_trading(
         bus=getattr(request.app.state, "bus", None),
         fee_bps=settings.fee_bps,
         slippage_bps=settings.slippage_bps,
-        risk=RiskService(session),
+        risk=RiskService(session, alerts=AlertService(session)),
+        alerts=AlertService(session),
         broker=broker,
         cn_broker=cn_broker,
         cn_fees=cn_fee_schedule(settings),

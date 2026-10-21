@@ -83,6 +83,7 @@ class RuntimeService:
         trading: TradingService,
         execution_price=None,
         live_auto_trading_enabled: bool = False,
+        alerts=None,
     ) -> None:
         self.session = session
         self.accounts = accounts_service
@@ -92,6 +93,7 @@ class RuntimeService:
         # Automated orders on a live account need their own opt-in; manual live
         # orders are gated separately by the X-Live-Confirm header.
         self.live_auto_trading_enabled = live_auto_trading_enabled
+        self.alerts = alerts
 
     # ------------------------------------------------------------------ read
     def _require(self, instance_id: str) -> StrategyInstance:
@@ -397,17 +399,16 @@ class RuntimeService:
         except AppError as exc:
             row.last_error = str(exc)[:400]
             self._log(row.id, "error", "rejected", str(exc), bar_time=last.time)
-            from app.modules.alerts.service import AlertService
-
-            AlertService(self.session).raise_alert(
-                category="order_rejected",
-                level="warning",
-                account_id=row.account_id,
-                title=f"{row.symbol} 自动下单被拒绝",
-                message=f"{row.strategy_key} · {row.symbol}：{exc}",
-                ref_type="strategy_instance",
-                ref_id=row.id,
-            )
+            if self.alerts is not None:
+                self.alerts.raise_alert(
+                    category="order_rejected",
+                    level="warning",
+                    account_id=row.account_id,
+                    title=f"{row.symbol} 自动下单被拒绝",
+                    message=f"{row.strategy_key} · {row.symbol}：{exc}",
+                    ref_type="strategy_instance",
+                    ref_id=row.id,
+                )
         self.session.commit()
         return "executed"
 
@@ -470,17 +471,16 @@ class RuntimeService:
                 row.last_error = str(exc)[:400]
                 self._log(row.id, "error", "exit_failed", str(exc), bar_time=row.last_bar_time)
                 outcomes[row.id] = "exit_failed"
-                from app.modules.alerts.service import AlertService
-
-                AlertService(self.session).raise_alert(
-                    category="exit_failed",
-                    level="critical",
-                    account_id=row.account_id,
-                    title=f"{row.symbol} 保护性离场失败",
-                    message=f"{row.strategy_key} · {row.symbol}：{exc}",
-                    ref_type="strategy_instance",
-                    ref_id=row.id,
-                )
+                if self.alerts is not None:
+                    self.alerts.raise_alert(
+                        category="exit_failed",
+                        level="critical",
+                        account_id=row.account_id,
+                        title=f"{row.symbol} 保护性离场失败",
+                        message=f"{row.strategy_key} · {row.symbol}：{exc}",
+                        ref_type="strategy_instance",
+                        ref_id=row.id,
+                    )
                 continue
             row.executions += 1
             row.peak_price = 0.0
@@ -494,20 +494,19 @@ class RuntimeService:
                 bar_time=row.last_bar_time,
             )
             outcomes[row.id] = decision.reason
-            from app.modules.alerts.service import AlertService
-
-            AlertService(self.session).raise_alert(
-                category=decision.reason,
-                level="critical",
-                account_id=row.account_id,
-                title=f"{row.symbol} 触发{'止损' if 'stop' in decision.reason else '离场'}",
-                message=(
-                    f"{row.strategy_key} · {row.symbol} 于 {price:.4f} 离场"
-                    f"（{decision.reason}）"
-                ),
-                ref_type="strategy_instance",
-                ref_id=row.id,
-            )
+            if self.alerts is not None:
+                self.alerts.raise_alert(
+                    category=decision.reason,
+                    level="critical",
+                    account_id=row.account_id,
+                    title=f"{row.symbol} 触发{'止损' if 'stop' in decision.reason else '离场'}",
+                    message=(
+                        f"{row.strategy_key} · {row.symbol} 于 {price:.4f} 离场"
+                        f"（{decision.reason}）"
+                    ),
+                    ref_type="strategy_instance",
+                    ref_id=row.id,
+                )
         self.session.commit()
         return outcomes
 

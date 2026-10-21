@@ -9,8 +9,10 @@ import time
 from app.core.config import Settings
 from app.core.db import Database
 from app.modules.accounts.service import AccountService
+from app.modules.alerts.service import AlertService
 from app.modules.cn.fees import CnFeeSchedule
 from app.modules.market.service import MarketService
+from app.modules.risk.service import RiskService
 from app.modules.runtime.service import RuntimeService
 from app.modules.trading.adapters import AccountCashAdapter, MarketPriceAdapter
 from app.modules.trading.service import TradingService
@@ -87,6 +89,8 @@ class StrategyRuntimeEngine:
                 ),
                 cn_session_enforced=self.settings.cn_session_enforced,
                 live_market=self.market_engine,
+                risk=RiskService(session, alerts=AlertService(session)),
+                alerts=AlertService(session),
             )
             service = RuntimeService(
                 session,
@@ -94,6 +98,7 @@ class StrategyRuntimeEngine:
                 market=market,
                 trading=trading,
                 live_auto_trading_enabled=self.settings.live_auto_trading_enabled,
+                alerts=AlertService(session),
             )
             results: dict[str, str] = {}
             # Protective exits run first: a stop must fire even when no new bar
