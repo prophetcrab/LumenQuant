@@ -348,3 +348,33 @@ def test_prune_orphan_sleeves_cleans_up_leftovers(client):
         ).all()
         assert remaining == []
     db.dispose()
+
+
+def test_merged_curve_flags_an_implausible_sleeve(client):
+    """A bad sleeve must surface even though merging dilutes it.
+
+    One sleeve at 1/N weight turning from 100k to 5k still moves the merged curve
+    by a large fraction; if no warning fires, the diluted jump reads as a real
+    portfolio move.
+    """
+    from app.modules.backtest.multi import MultiSymbolBacktester
+
+    common = list(range(30))
+    # Second sleeve collapses then recovers, as a broken settlement would.
+    curves = [
+        {t: 100_000.0 for t in common},
+        {t: 100_000.0 if t not in (10, 11) else (5_000.0 if t == 10 else 100_000.0) for t in common},
+    ]
+    report = MultiSymbolBacktester.__new__(MultiSymbolBacktester)
+    combined = report._combine(
+        curves=curves, common=common, shares=[0.5, 0.5], rebalance_bars=0
+    )
+    from app.modules.backtest.engine import extreme_bar_return
+
+    flagged = extreme_bar_return(combined)
+    assert flagged is not None
+    index, change = flagged
+    # The drop (index 10) and the recovery (index 11) are both implausible; the
+    # helper reports the first one it meets in the direction of iteration.
+    assert index in (10, 11)
+    assert abs(change) > 40

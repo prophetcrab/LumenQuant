@@ -156,10 +156,10 @@ def test_implausible_bar_movement_is_reported():
     sale bar and recover on release. Total return was unchanged, so nothing
     surfaced it until the per-bar series was inspected.
     """
-    from app.modules.backtest.engine import _extreme_bar_return
+    from app.modules.backtest.engine import extreme_bar_return
 
-    assert _extreme_bar_return([100.0, 101.0, 100.5, 102.0]) is None
-    flagged = _extreme_bar_return([100.0, 5.0, 100.0])
+    assert extreme_bar_return([100.0, 101.0, 100.5, 102.0]) is None
+    flagged = extreme_bar_return([100.0, 5.0, 100.0])
     assert flagged is not None
     index, pct = flagged
     assert index == 1

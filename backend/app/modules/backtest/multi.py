@@ -28,7 +28,11 @@ from sqlalchemy.orm import Session
 
 from app.core.errors import ValidationError
 from app.modules.backtest.benchmark import compare, equity_option_points
-from app.modules.backtest.engine import BacktestConfig, BacktestEngine
+from app.modules.backtest.engine import (
+    BacktestConfig,
+    BacktestEngine,
+    extreme_bar_return,
+)
 from app.modules.backtest.metrics import compute_metrics
 from app.modules.cn.fees import CnFeeSchedule
 from app.modules.market.service import MarketService, SUPPORTED_TIMEFRAMES
@@ -539,6 +543,15 @@ class MultiSymbolBacktester:
                     f"（{_blocked_hint(sleeve['blocked'])}）"
                 )
 
+        # The merged curve can hide a sleeve's problem: one bad sleeve carries a
+        # fraction of the weight, so its jump is diluted but not gone.
+        extreme = extreme_bar_return(combined)
+        if extreme is not None:
+            index, change = extreme
+            warnings.append(
+                f"合并曲线第 {index + 1} 根变动 {change:+.1f}%，超出正常价格波动范围；"
+                "某个标的数据可能有缺口或计算错误"
+            )
         if not any(sleeve["result"].trades for sleeve in sleeves):
             warnings.insert(
                 0,

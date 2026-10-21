@@ -333,7 +333,7 @@ class BacktestEngine:
         # Aggregate metrics only compare the first and last equity points, so a
         # curve that collapses and recovers mid-series looks healthy. Flag any
         # single bar whose return could not plausibly come from price movement.
-        extreme = _extreme_bar_return(equity_values)
+        extreme = extreme_bar_return(equity_values)
         if extreme is not None:
             index, ret = extreme
             warnings.append(
@@ -383,7 +383,7 @@ class BacktestEngine:
 IMPLAUSIBLE_BAR_RETURN = 0.50
 
 
-def _extreme_bar_return(equity: list[float]) -> tuple[int, float] | None:
+def extreme_bar_return(equity: list[float]) -> tuple[int, float] | None:
     """First bar whose equity change is implausible, as (index, percent)."""
     for index in range(1, len(equity)):
         previous = equity[index - 1]
