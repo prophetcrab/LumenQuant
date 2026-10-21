@@ -229,7 +229,12 @@ export function RiskPage() {
                       {item.peak_price ? price(item.peak_price) : "—"}
                     </td>
                     <td className="numeric">{item.executions}</td>
-                    <td className="error-text" style={{ maxWidth: 260, overflow: "hidden", textOverflow: "ellipsis" }}>
+                    <td
+                      className={item.last_error ? "error-text" : "muted"}
+                      style={{ maxWidth: 260, overflow: "hidden", textOverflow: "ellipsis" }}
+                    >
+                      {/* `error-text` marks a real problem; rendering the "—"
+                          placeholder in red made a healthy account look broken. */}
                       {item.last_error || "—"}
                     </td>
                   </tr>
