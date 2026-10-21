@@ -1,4 +1,5 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
+import { useSearchParams } from "react-router-dom";
 import { Chart } from "../../shared/echarts";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { api } from "../../shared/api";
@@ -19,23 +20,71 @@ export function BacktestPage() {
   const catalog = useQuery({ queryKey: ["strategies"], queryFn: api.strategies });
   const symbols = useQuery({ queryKey: ["symbols", "all"], queryFn: () => api.symbols() });
   const history = useQuery({ queryKey: ["backtests", 30], queryFn: () => api.backtests(30) });
-  const [strategy, setStrategy] = useState("sma_cross");
-  const [symbol, setSymbol] = useState("BTCUSDT");
-  const [timeframe, setTimeframe] = useState<(typeof TIMEFRAMES)[number]>("1h");
+  const [searchParams, setSearchParams] = useSearchParams();
+  // Read the handoff once, before any state is initialised, so the page opens
+  // directly on the strategy and parameters chosen in the strategy library.
+  const handoff = useRef(
+    (() => {
+      const incoming = searchParams.get("strategy");
+      if (!incoming) return null;
+      let parsed: Record<string, ParamValue> = {};
+      try {
+        const raw = searchParams.get("params");
+        if (raw) parsed = JSON.parse(raw) as Record<string, ParamValue>;
+      } catch {
+        parsed = {};
+      }
+      const tf = searchParams.get("timeframe");
+      return {
+        strategy: incoming,
+        symbol: searchParams.get("symbol") ?? undefined,
+        timeframe:
+          tf && (TIMEFRAMES as readonly string[]).includes(tf)
+            ? (tf as (typeof TIMEFRAMES)[number])
+            : undefined,
+        params: parsed,
+      };
+    })(),
+  );
+  const [strategy, setStrategy] = useState(handoff.current?.strategy ?? "sma_cross");
+  const [symbol, setSymbol] = useState(handoff.current?.symbol ?? "BTCUSDT");
+  const [timeframe, setTimeframe] = useState<(typeof TIMEFRAMES)[number]>(
+    handoff.current?.timeframe ?? "1h",
+  );
   const [bars, setBars] = useState("1500");
   const [capital, setCapital] = useState("100000");
   const [positionPct, setPositionPct] = useState("95");
   const [stopLoss, setStopLoss] = useState("0");
   const [takeProfit, setTakeProfit] = useState("0");
-  const [params, setParams] = useState<Record<string, ParamValue>>({});
+  // Seeded from the handoff (empty otherwise) and merged with schema defaults
+  // once the catalog resolves.
+  const [params, setParams] = useState<Record<string, ParamValue>>(
+    handoff.current?.params ?? {},
+  );
   const [selectedRun, setSelectedRun] = useState<BacktestRun | null>(null);
   const [tab, setTab] = useState<"run" | "optimise" | "walkforward">("run");
 
   const meta = catalog.data?.find((item) => item.key === strategy) ?? null;
 
+  const metaKeyRef = useRef<string | null>(null);
   useEffect(() => {
-    setParams(initialParams(meta));
+    if (!meta) return;
+    // Reset only on a real strategy change; StrictMode's double effect pass
+    // must stay idempotent or it wipes the handed-over parameters.
+    const switched = metaKeyRef.current !== null && metaKeyRef.current !== meta.key;
+    metaKeyRef.current = meta.key;
+    setParams((prev) =>
+      switched ? initialParams(meta) : { ...initialParams(meta), ...prev },
+    );
   }, [meta]);
+
+  useEffect(() => {
+    // Strip the query so a refresh or a later strategy switch does not
+    // re-apply stale parameters over the user's edits.
+    if (!handoff.current) return;
+    handoff.current = null;
+    setSearchParams({}, { replace: true });
+  }, [setSearchParams]);
 
   const run = useMutation({
     mutationFn: () => {

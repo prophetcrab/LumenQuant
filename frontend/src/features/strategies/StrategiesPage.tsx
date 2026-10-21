@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
+import { useNavigate } from "react-router-dom";
 import { Chart, type EChartsOption } from "../../shared/echarts";
 import { useMutation, useQuery } from "@tanstack/react-query";
 import { api } from "../../shared/api";
@@ -12,6 +13,7 @@ import { buildParams, initialParams, type ParamValue } from "../../shared/strate
 const TIMEFRAMES = ["15m", "30m", "1h", "4h", "1d"] as const;
 
 export function StrategiesPage() {
+  const navigate = useNavigate();
   const catalog = useQuery({ queryKey: ["strategies"], queryFn: api.strategies });
   const [selected, setSelected] = useState<string | null>(null);
   const [params, setParams] = useState<Record<string, ParamValue>>({});
@@ -140,9 +142,27 @@ export function StrategiesPage() {
               </div>
               <div className="row" style={{ marginTop: 16, justifyContent: "space-between" }}>
                 <div className="helper">参数变更即时生效，用于研究不同市场状态下的表现。</div>
-                <ButtonField disabled={preview.isPending} onClick={() => preview.mutate()}>
-                  {preview.isPending ? "计算中…" : "运行信号预览"}
-                </ButtonField>
+                <div className="row" style={{ gap: 8 }}>
+                  <ButtonField
+                    variant="default"
+                    onClick={() => {
+                      // Carry the tuned parameters into the backtest page instead of
+                      // making the user retype them.
+                      const query = new URLSearchParams({
+                        strategy: meta.key,
+                        symbol,
+                        timeframe,
+                        params: JSON.stringify(buildParams(meta, params)),
+                      });
+                      navigate(`/backtest?${query.toString()}`);
+                    }}
+                  >
+                    带去回测
+                  </ButtonField>
+                  <ButtonField disabled={preview.isPending} onClick={() => preview.mutate()}>
+                    {preview.isPending ? "计算中…" : "运行信号预览"}
+                  </ButtonField>
+                </div>
               </div>
               {preview.error ? <div className="error-text" style={{ marginTop: 8 }}>{(preview.error as Error).message}</div> : null}
             </Card>
