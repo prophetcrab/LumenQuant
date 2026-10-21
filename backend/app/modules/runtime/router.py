@@ -96,9 +96,18 @@ def instance_logs(
 
 @router.post("/tick")
 def tick(request: Request, session: Session = Depends(get_session)):
-    """Manual evaluation pass, used by the UI refresh and by tests."""
+    """Manual evaluation pass, used by the UI refresh and by tests.
+
+    Mirrors the scheduler's order exactly — protective exits first, then
+    signals — so a manual pass can be used to verify a stop actually fires.
+    Skipping the sweep here made "立即评估" quietly disagree with production.
+    """
     service = build_service(request, session)
     results = {}
+    try:
+        results.update(service.protect_positions())
+    except Exception:  # a broken stop check must not block signal evaluation
+        pass
     for row in service.running_instances():
         results[row.id] = service.evaluate_instance(row)
     return {"evaluated": results}

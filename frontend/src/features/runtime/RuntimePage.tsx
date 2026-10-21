@@ -1,7 +1,8 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
+import { useSearchParams } from "react-router-dom";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { api } from "../../shared/api";
-import type { StrategyMeta } from "../../shared/api";
+import type { StrategyInstance, StrategyMeta } from "../../shared/api";
 import { useAccount } from "../../shared/account-context";
 import { useToast } from "../../shared/toast";
 import { dateTimeLabel, timeLabel, timeframeLabel } from "../../shared/format";
@@ -15,17 +16,56 @@ export function RuntimePage() {
   const { account, accountId } = useAccount();
   const toast = useToast();
   const queryClient = useQueryClient();
-  const [createOpen, setCreateOpen] = useState(false);
+  const [searchParams, setSearchParams] = useSearchParams();
+  // Handoff from the strategy library ("建成自动实例"). Read once at mount so
+  // the creation dialog opens on the tuned configuration.
+  const handoff = useRef(
+    (() => {
+      const incoming = searchParams.get("strategy");
+      if (!incoming) return null;
+      let parsed: Record<string, ParamValue> = {};
+      try {
+        const raw = searchParams.get("params");
+        if (raw) parsed = JSON.parse(raw) as Record<string, ParamValue>;
+      } catch {
+        parsed = {};
+      }
+      const tf = searchParams.get("timeframe");
+      return {
+        strategy: incoming,
+        symbol: searchParams.get("symbol") ?? undefined,
+        timeframe:
+          tf && (TIMEFRAMES as readonly string[]).includes(tf)
+            ? (tf as (typeof TIMEFRAMES)[number])
+            : undefined,
+        params: parsed,
+      };
+    })(),
+  );
+  const [createOpen, setCreateOpen] = useState(handoff.current !== null);
   const [selectedId, setSelectedId] = useState<string | null>(null);
-  const [strategyKey, setStrategyKey] = useState("sma_cross");
-  const [symbol, setSymbol] = useState("BTCUSDT");
-  const [timeframe, setTimeframe] = useState<(typeof TIMEFRAMES)[number]>("1h");
+  const [strategyKey, setStrategyKey] = useState(handoff.current?.strategy ?? "sma_cross");
+  const [symbol, setSymbol] = useState(handoff.current?.symbol ?? "BTCUSDT");
+  const [timeframe, setTimeframe] = useState<(typeof TIMEFRAMES)[number]>(
+    handoff.current?.timeframe ?? "1h",
+  );
   const [positionPct, setPositionPct] = useState("20");
   const [maxNotional, setMaxNotional] = useState("20000");
   const [stopLoss, setStopLoss] = useState("0");
   const [takeProfit, setTakeProfit] = useState("0");
   const [trailingStop, setTrailingStop] = useState("0");
-  const [params, setParams] = useState<Record<string, ParamValue>>({});
+  const [params, setParams] = useState<Record<string, ParamValue>>(
+    handoff.current?.params ?? {},
+  );
+  // Editing an existing instance: the backend accepts param/risk changes, but
+  // strategy, symbol and timeframe stay fixed so the running history keeps meaning.
+  const [editing, setEditing] = useState<StrategyInstance | null>(null);
+  const [editParams, setEditParams] = useState<Record<string, ParamValue>>({});
+  const [editPositionPct, setEditPositionPct] = useState("0");
+  const [editMaxNotional, setEditMaxNotional] = useState("0");
+  const [editStopLoss, setEditStopLoss] = useState("0");
+  const [editTakeProfit, setEditTakeProfit] = useState("0");
+  const [editTrailingStop, setEditTrailingStop] = useState("0");
 
   const catalog = useQuery({ queryKey: ["strategies"], queryFn: api.strategies });
   const symbols = useQuery({ queryKey: ["symbols", "all"], queryFn: () => api.symbols() });
@@ -50,9 +90,23 @@ export function RuntimePage() {
 
   const meta: StrategyMeta | undefined = catalog.data?.find((item) => item.key === strategyKey);
 
+  const metaKeyRef = useRef<string | null>(null);
   useEffect(() => {
-    setParams(initialParams(meta));
+    if (!meta) return;
+    // Merge schema defaults without clobbering handed-over values; reset only
+    // when the user actually switches strategy.
+    const switched = metaKeyRef.current !== null && metaKeyRef.current !== meta.key;
+    metaKeyRef.current = meta.key;
+    setParams((prev) =>
+      switched ? initialParams(meta) : { ...initialParams(meta), ...prev },
+    );
   }, [meta]);
+
+  useEffect(() => {
+    if (!handoff.current) return;
+    handoff.current = null;
+    setSearchParams({}, { replace: true });
+  }, [setSearchParams]);
 
   useEffect(() => {
     if (!selectedId && instances.data && instances.data.length > 0) {
@@ -96,6 +150,39 @@ export function RuntimePage() {
     onError: (error: Error) => toast.push(error.message, "error"),
   });
 
+  const openEdit = (instance: StrategyInstance) => {
+    setEditing(instance);
+    const editMeta = catalog.data?.find((item) => item.key === instance.strategy_key);
+    // Schema defaults cover params added after the instance was created.
+    setEditParams({ ...initialParams(editMeta), ...instance.params });
+    setEditPositionPct(String(Math.round(instance.position_pct * 100)));
+    setEditMaxNotional(String(instance.max_order_notional));
+    setEditStopLoss(String(+(instance.stop_loss_pct * 100).toFixed(4)));
+    setEditTakeProfit(String(+(instance.take_profit_pct * 100).toFixed(4)));
+    setEditTrailingStop(String(+(instance.trailing_stop_pct * 100).toFixed(4)));
+  };
+
+  const saveEdit = useMutation({
+    mutationFn: () => {
+      if (!editing) throw new Error("没有待编辑的实例");
+      const editMeta = catalog.data?.find((item) => item.key === editing.strategy_key);
+      return api.updateRuntimeInstance(editing.id, {
+        params: buildParams(editMeta, editParams),
+        position_pct: Number(editPositionPct) / 100,
+        max_order_notional: Number(editMaxNotional),
+        stop_loss_pct: Number(editStopLoss),
+        take_profit_pct: Number(editTakeProfit),
+        trailing_stop_pct: Number(editTrailingStop),
+      });
+    },
+    onSuccess: () => {
+      toast.push("实例配置已更新");
+      setEditing(null);
+      queryClient.invalidateQueries({ queryKey: ["runtime-instances"] });
+    },
+    onError: (error: Error) => toast.push(error.message, "error"),
+  });
+
   const remove = useMutation({
     mutationFn: (id: string) => api.deleteRuntimeInstance(id),
     onSuccess: () => {
@@ -116,6 +203,20 @@ export function RuntimePage() {
     },
     onError: (error: Error) => toast.push(error.message, "error"),
   });
+
+  // An instance can only trade the account's own market; offering the other
+  // market in the picker produces a 422 only after the user fills the dialog.
+  const marketSymbols = useMemo(
+    () => (symbols.data ?? []).filter((item) => !account || item.market === account.market),
+    [symbols.data, account],
+  );
+
+  useEffect(() => {
+    if (marketSymbols.length === 0) return;
+    if (!marketSymbols.some((item) => item.code === symbol)) {
+      setSymbol(marketSymbols[0].code);
+    }
+  }, [marketSymbols, symbol]);
 
   const stats = useMemo(() => {
     const list = instances.data ?? [];
@@ -239,6 +340,15 @@ export function RuntimePage() {
                           className="button small ghost"
                           onClick={(event) => {
                             event.stopPropagation();
+                            openEdit(instance);
+                          }}
+                        >
+                          编辑
+                        </button>
+                        <button
+                          className="button small ghost"
+                          onClick={(event) => {
+                            event.stopPropagation();
                             remove.mutate(instance.id);
                           }}
                         >
@@ -334,9 +444,9 @@ export function RuntimePage() {
               ))}
             </select>
           </Field>
-          <Field label="标的">
+          <Field label="标的" hint={`仅显示 ${account.market === "cn_stock" ? "A 股" : "加密"} 标的`}>
             <select className="select" value={symbol} onChange={(event) => setSymbol(event.target.value)}>
-              {(symbols.data ?? []).map((item) => (
+              {marketSymbols.map((item) => (
                 <option key={item.code} value={item.code}>
                   {item.code}
                 </option>
@@ -404,6 +514,117 @@ export function RuntimePage() {
           ))}
         </div>
         <div className="helper">实例启动后会在下一根已收盘 K 线触发首次评估，并遵守账户级风控。</div>
+      </Modal>
+
+      <Modal
+        open={editing !== null}
+        title={editing ? `编辑实例 · ${editing.strategy_name}` : "编辑实例"}
+        onClose={() => setEditing(null)}
+        footer={
+          <>
+            <button className="button" onClick={() => setEditing(null)}>
+              取消
+            </button>
+            <button
+              className="button primary"
+              disabled={saveEdit.isPending}
+              onClick={() => saveEdit.mutate()}
+            >
+              {saveEdit.isPending ? "保存中…" : "保存"}
+            </button>
+          </>
+        }
+      >
+        {editing ? (
+          <>
+            <div className="grid grid-2" style={{ gap: 12 }}>
+              <Field label="策略">
+                <input className="input" value={editing.strategy_name} readOnly />
+              </Field>
+              <Field label="标的 / 周期">
+                <input className="input" value={`${editing.symbol} · ${editing.timeframe}`} readOnly />
+              </Field>
+              <Field label="单次仓位 %" hint="按可用现金比例开仓">
+                <input
+                  className="input num"
+                  type="number"
+                  value={editPositionPct}
+                  onChange={(event) => setEditPositionPct(event.target.value)}
+                />
+              </Field>
+              <Field label="单笔名义上限" hint="风控硬上限">
+                <input
+                  className="input num"
+                  type="number"
+                  value={editMaxNotional}
+                  onChange={(event) => setEditMaxNotional(event.target.value)}
+                />
+              </Field>
+              <Field label="止损 %" hint="0 表示不启用；触发即平仓">
+                <input
+                  className="input num"
+                  type="number"
+                  min={0}
+                  max={50}
+                  value={editStopLoss}
+                  onChange={(event) => setEditStopLoss(event.target.value)}
+                />
+              </Field>
+              <Field label="止盈 %" hint="0 表示不启用">
+                <input
+                  className="input num"
+                  type="number"
+                  min={0}
+                  max={500}
+                  value={editTakeProfit}
+                  onChange={(event) => setEditTakeProfit(event.target.value)}
+                />
+              </Field>
+              <Field label="移动止损 %" hint="自峰值回撤该比例离场；0 关闭">
+                <input
+                  className="input num"
+                  type="number"
+                  min={0}
+                  max={50}
+                  value={editTrailingStop}
+                  onChange={(event) => setEditTrailingStop(event.target.value)}
+                />
+              </Field>
+              {Object.entries(
+                catalog.data?.find((item) => item.key === editing.strategy_key)?.params_schema
+                  .properties ?? {},
+              ).map(([key, schema]) => (
+                <Field key={key} label={schema.title ?? key}>
+                  {schema.type === "boolean" ? (
+                    <label className="row" style={{ gap: 8, height: 36 }}>
+                      <input
+                        type="checkbox"
+                        checked={Boolean(editParams[key])}
+                        onChange={(event) =>
+                          setEditParams((prev) => ({ ...prev, [key]: event.target.checked }))
+                        }
+                      />
+                      <span className="helper">启用</span>
+                    </label>
+                  ) : (
+                    <input
+                      className="input num"
+                      type="number"
+                      value={String(editParams[key] ?? "")}
+                      onChange={(event) =>
+                        setEditParams((prev) => ({ ...prev, [key]: event.target.value }))
+                      }
+                    />
+                  )}
+                </Field>
+              ))}
+            </div>
+            <div className="helper">
+              策略、标的与周期不可修改：改了就不再是同一个实例，请停止后新建。
+              止损与止盈立即生效；参数改动在下一根已收盘 K 线生效。
+            </div>
+          </>
+        ) : null}
       </Modal>
     </div>
   );

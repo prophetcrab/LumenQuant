@@ -107,3 +107,61 @@ def test_runtime_validation(runtime_client):
         json={"account_id": "nope", "strategy_key": "sma_cross", "symbol": "BTCUSDT"},
     )
     assert bad_account.status_code == 404
+
+
+def test_manual_tick_runs_the_protective_sweep(runtime_client, monkeypatch):
+    """「立即评估」must run the same protective pass as the scheduler.
+
+    It used to evaluate signals only, so a stop that the background scheduler
+    would have fired never triggered during manual testing — the UI disagreed
+    with production in exactly the situation users check it.
+    """
+    from app.modules.runtime.service import RuntimeService
+
+    calls: list[bool] = []
+    original = RuntimeService.protect_positions
+
+    def spy(self):
+        calls.append(True)
+        return {"probe": "swept"}
+
+    monkeypatch.setattr(RuntimeService, "protect_positions", spy)
+    tick = runtime_client.post("/api/runtime/tick")
+    assert tick.status_code == 200
+    assert calls, "manual tick skipped the protective sweep"
+    assert tick.json()["evaluated"]["probe"] == "swept"
+    monkeypatch.setattr(RuntimeService, "protect_positions", original)
+
+
+def test_update_accepts_stops_and_rejects_invalid_sizing(runtime_client):
+    account = runtime_client.post(
+        "/api/accounts", json={"name": "Auto Edit", "initial_balance": 100_000}
+    ).json()
+    instance = runtime_client.post(
+        "/api/runtime/instances",
+        json={
+            "account_id": account["id"],
+            "strategy_key": "sma_cross",
+            "symbol": "BTCUSDT",
+            "timeframe": "1h",
+            "params": {"fast": 10, "slow": 30},
+            "position_pct": 0.2,
+            "max_order_notional": 20_000,
+            "start": False,
+        },
+    ).json()
+
+    updated = runtime_client.patch(
+        f"/api/runtime/instances/{instance['id']}",
+        json={"stop_loss_pct": 5, "take_profit_pct": 10, "trailing_stop_pct": 3},
+    )
+    assert updated.status_code == 200, updated.text
+    body = updated.json()
+    assert body["stop_loss_pct"] == pytest.approx(0.05)
+    assert body["take_profit_pct"] == pytest.approx(0.10)
+    assert body["trailing_stop_pct"] == pytest.approx(0.03)
+
+    bad = runtime_client.patch(
+        f"/api/runtime/instances/{instance['id']}", json={"position_pct": 3}
+    )
+    assert bad.status_code == 422

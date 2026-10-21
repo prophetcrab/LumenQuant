@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
+import { useAccount } from "../../shared/account-context";
 import { Chart, type EChartsOption } from "../../shared/echarts";
 import { useMutation, useQuery } from "@tanstack/react-query";
 import { api } from "../../shared/api";
@@ -14,12 +15,28 @@ const TIMEFRAMES = ["15m", "30m", "1h", "4h", "1d"] as const;
 
 export function StrategiesPage() {
   const navigate = useNavigate();
+  const { account } = useAccount();
   const catalog = useQuery({ queryKey: ["strategies"], queryFn: api.strategies });
   const [selected, setSelected] = useState<string | null>(null);
   const [params, setParams] = useState<Record<string, ParamValue>>({});
   const [symbol, setSymbol] = useState("BTCUSDT");
   const [timeframe, setTimeframe] = useState<(typeof TIMEFRAMES)[number]>("1h");
   const symbols = useQuery({ queryKey: ["symbols", "all"], queryFn: () => api.symbols() });
+
+  // The research target should default to the selected account's market: a
+  // crypto default on an A-share account produces previews that can never be
+  // executed, and carries a useless symbol into the backtest/runtime handoffs.
+  const marketSymbols = useMemo(
+    () => (symbols.data ?? []).filter((item) => !account || item.market === account.market),
+    [symbols.data, account],
+  );
+
+  useEffect(() => {
+    if (marketSymbols.length === 0) return;
+    if (!marketSymbols.some((item) => item.code === symbol)) {
+      setSymbol(marketSymbols[0].code);
+    }
+  }, [marketSymbols, symbol]);
 
   const meta = useMemo(
     () => catalog.data?.find((item) => item.key === selected) ?? null,
@@ -88,7 +105,7 @@ export function StrategiesPage() {
               <div className="grid" style={{ gridTemplateColumns: "repeat(auto-fit, minmax(150px, 1fr))" }}>
                 <Field label="标的">
                   <select className="select" value={symbol} onChange={(event) => setSymbol(event.target.value)}>
-                    {(symbols.data ?? []).map((item) => (
+                    {marketSymbols.map((item) => (
                       <option key={item.code} value={item.code}>
                         {item.code}
                       </option>
@@ -158,6 +175,22 @@ export function StrategiesPage() {
                     }}
                   >
                     带去回测
+                  </ButtonField>
+                  <ButtonField
+                    variant="default"
+                    onClick={() => {
+                      // Same handoff, but the runtime page opens its creation
+                      // dialog prefilled instead of starting a backtest.
+                      const query = new URLSearchParams({
+                        strategy: meta.key,
+                        symbol,
+                        timeframe,
+                        params: JSON.stringify(buildParams(meta, params)),
+                      });
+                      navigate(`/runtime?${query.toString()}`);
+                    }}
+                  >
+                    建成自动实例
                   </ButtonField>
                   <ButtonField disabled={preview.isPending} onClick={() => preview.mutate()}>
                     {preview.isPending ? "计算中…" : "运行信号预览"}

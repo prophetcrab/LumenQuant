@@ -283,3 +283,54 @@ def test_price_failure_is_reported_not_silent(env):
     logs = service.logs(view.id)
     assert any(log.event == "price_unavailable" for log in logs)
     assert "feed offline" in service._require(view.id).last_error
+
+
+def test_update_normalises_stops_and_rejects_bad_params(env):
+    """Editing an instance must go through the same validation as creation."""
+    from app.core.errors import ValidationError
+
+    service, accounts, _, account, _ = env
+    view = service.create(
+        account_id=account.id, strategy_key="test_buy_now", symbol="BTCUSDT",
+        timeframe="1h", params={}, position_pct=0.2, max_order_notional=5_000,
+    )
+    updated = service.update(
+        view.id, stop_loss_pct=5, take_profit_pct=12, trailing_stop_pct=3,
+        position_pct=0.35, max_order_notional=8_000,
+    )
+    # Percent form (5) is normalised to a fraction (0.05), same as create().
+    assert updated.stop_loss_pct == pytest.approx(0.05)
+    assert updated.take_profit_pct == pytest.approx(0.12)
+    assert updated.trailing_stop_pct == pytest.approx(0.03)
+    assert updated.position_pct == pytest.approx(0.35)
+    assert updated.max_order_notional == pytest.approx(8_000)
+
+    with pytest.raises(ValidationError):
+        service.update(view.id, position_pct=1.5)
+    with pytest.raises(ValidationError):
+        service.update(view.id, max_order_notional=0)
+    # Invalid parameter sets must not silently stick to the row.
+    assert service._require(view.id).position_pct == pytest.approx(0.35)
+
+
+def test_adding_a_stop_to_a_live_instance_protects_the_open_position(env):
+    """Editing protection must apply to a position that is already open."""
+    service, accounts, trading, account, market = env
+    accounts.deposit(account.id, 900_000)
+    view = service.create(
+        account_id=account.id, strategy_key="test_buy_now", symbol="BTCUSDT",
+        timeframe="1h", params={}, position_pct=0.5, max_order_notional=50_000,
+        start=True,
+    )
+    service.evaluate_instance(service._require(view.id))
+    position = trading.positions(account.id)[0]
+    entry = position.avg_price
+
+    # No rules yet: a 15% drop must leave the position alone.
+    market.current = entry * 0.85
+    assert service.protect_positions() == {}
+
+    service.update(view.id, stop_loss_pct=10)
+    outcomes = service.protect_positions()
+    assert outcomes.get(view.id) == "stop_loss"
+    assert trading.positions(account.id) == []
