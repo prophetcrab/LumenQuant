@@ -22,6 +22,7 @@ looks.
 
 from __future__ import annotations
 
+import itertools
 import logging
 import math
 import statistics
@@ -150,11 +151,7 @@ class WalkForwardService:
         # enough to clear the warmup on their own — otherwise the window is
         # silently skipped and the run looks shorter than requested.
         base_for_warmup = dict(base_params or {})
-        try:
-            probe = strategy.validate_params({**base_for_warmup, **{k: v[0] for k, v in space.items() if v}})
-            warmup = strategy.warmup(probe)
-        except Exception:
-            warmup = 0
+        warmup = self._max_warmup(strategy, space, base_for_warmup)
         min_test = max(MIN_TEST_BARS, warmup + 10)
         if train_bars <= 0 or test_bars <= 0:
             train_bars, test_bars = self._auto_split(total, windows, min_test=min_test)
@@ -204,8 +201,8 @@ class WalkForwardService:
             if len(train_slice) < max(MIN_TRAIN_BARS, warmup + 10):
                 break
             if len(test_slice) < min_test:
-                # Slide forward: a short tail window is better skipped than
-                # silently evaluated with a half-warmed strategy.
+                # A short tail window is better skipped than evaluated with a
+                # half-warmed strategy; the skipped count is reported at the end.
                 continue
 
             window = WindowResult(
@@ -260,16 +257,54 @@ class WalkForwardService:
         report.aggregate = self._aggregate(report.windows)
         report.aggregate["requested_windows"] = requested_windows
         report.aggregate["skipped_windows"] = requested_windows - len(report.windows)
+        # Build the structural messages, then prepend them. _warnings() used to be
+        # assigned over report.warnings, which discarded every message added here —
+        # so "only N windows fit" and "M windows were dropped" never reached the user.
+        structural: list[str] = []
         if windows < requested_windows:
-            report.warnings.insert(
-                0,
+            structural.append(
                 f"数据只够完成 {windows} 个窗口（原请求 {requested_windows} 个），"
-                "已自动缩减；如需更多窗口请增加 K 线数量",
+                "已自动缩减；如需更多窗口请增加 K 线数量"
             )
-        report.warnings = self._warnings(report)
+        dropped = requested_windows - len(report.windows)
+        if dropped > 0 and windows == requested_windows:
+            # Windows were lost after sizing succeeded — e.g. the optimiser chose
+            # parameters the test slice could not warm up. Report it instead of
+            # returning a shorter report that looks complete.
+            structural.append(
+                f"有 {dropped} 个窗口未能完成验证（样本外区间不足以暖机），"
+                f"实际只验证了 {len(report.windows)}/{requested_windows} 个窗口；"
+                "结论的统计意义相应减弱"
+            )
+        report.warnings = structural + self._warnings(report)
         return report
 
     # --------------------------------------------------------------- helpers
+    @staticmethod
+    def _max_warmup(strategy: Strategy, space: dict[str, list[Any]], base: dict[str, Any]) -> int:
+        """Longest warmup the optimiser could select, across the whole grid.
+
+        Sizing the test window from the *first* combination is wrong: the grid may
+        contain a slow moving average whose warmup is twice as long, and when the
+        optimiser picks it the test window can no longer warm up. That window was
+        then dropped silently, and the report looked shorter than requested.
+        """
+        worst = 0
+        keys = [key for key, values in space.items() if values]
+        if not keys:
+            try:
+                return strategy.warmup(strategy.validate_params(base))
+            except Exception:
+                return 0
+        # Cartesian product, bounded by the same cap as the search itself.
+        for combo in itertools.product(*(space[key] for key in keys)):
+            try:
+                params = strategy.validate_params({**base, **dict(zip(keys, combo))})
+                worst = max(worst, strategy.warmup(params))
+            except Exception:
+                continue
+        return worst
+
     @staticmethod
     def _auto_split(total: int, windows: int, *, min_test: int = MIN_TEST_BARS) -> tuple[int, int]:
         """Choose train/test sizes that fit `windows` sliding windows in `total`.

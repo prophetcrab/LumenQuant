@@ -43,6 +43,9 @@ MIN_BARS_BY_STRATEGY = 250
 MAX_BARS = 5000
 OUT_OF_SAMPLE_RATIO = 0.3
 MIN_OOS_BARS = 60
+# Percentage points of in-sample advantage that, if lost out of sample, deserve a
+# warning. Matches the walk-forward degradation threshold so both tools agree.
+DEGRADATION_WARN_PP = 10.0
 
 
 @dataclass(frozen=True)
@@ -351,6 +354,18 @@ class OptimiserService:
                 f"样本内 {best.in_sample_return_pct:+.2f}% 但样本外 "
                 f"{best.out_of_sample_return_pct:+.2f}%，是典型的过拟合信号"
             )
+        # A positive-but-tiny out-of-sample result after a strong in-sample run is
+        # the same story with a less dramatic ending. Walk-forward already warns at
+        # a 10-point degradation; the optimiser stayed silent, so 16% in-sample /
+        # 1% out-of-sample came back with an empty warnings list.
+        if enough_oos and best.in_sample_return_pct > 0:
+            degradation = best.in_sample_return_pct - best.out_of_sample_return_pct
+            if degradation >= DEGRADATION_WARN_PP:
+                warnings.append(
+                    f"样本内 {best.in_sample_return_pct:+.2f}% vs 样本外 "
+                    f"{best.out_of_sample_return_pct:+.2f}%，衰减 {degradation:.2f} 个百分点；"
+                    "最优参数在未见过的数据上大部分优势消失"
+                )
         return warnings
 
     @staticmethod

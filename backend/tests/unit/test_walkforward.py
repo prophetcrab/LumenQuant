@@ -212,3 +212,104 @@ def test_manual_window_sizes_are_honoured():
 
 def test_min_test_bars_is_respected():
     assert MIN_TEST_BARS >= 40
+
+
+def test_test_window_is_sized_for_the_slowest_grid_member():
+    """Warmup must be measured across the whole grid, not one sample.
+
+    Regression (real data, 600036.SH daily, 800 bars): the test window was sized
+    from {"fast": 5, "slow": 30} (warmup 31), so it came out at MIN_TEST_BARS = 50.
+    The optimiser then picked slow=60 (warmup 61), the test slice could not warm
+    up, and that window was dropped entirely — the report returned 3 windows while
+    claiming 4 were requested, with no warning explaining the gap.
+    """
+    service = WalkForwardService()
+    space = {"fast": [5, 10], "slow": [30, 60]}
+    warmup = service._max_warmup(SmaCross(), space, {})
+    assert warmup == SmaCross().warmup(SmaCross.Params(fast=5, slow=60))
+
+    report = service.run(
+        SmaCross(),
+        series(800),
+        space=space,
+        symbol="TEST",
+        timeframe="1d",
+        config=cfg(),
+        windows=4,
+        data_source="real",
+    )
+    # Every requested window must survive: the split now reserves enough bars.
+    assert report.aggregate["requested_windows"] == 4
+    assert report.aggregate["windows_completed"] == 4
+    for window in report.windows:
+        assert window.test_end - window.test_start >= warmup + 3
+    assert not any("未能完成验证" in warning for warning in report.warnings)
+
+
+def test_max_warmup_handles_an_empty_space():
+    service = WalkForwardService()
+    assert service._max_warmup(SmaCross(), {}, {}) == SmaCross().warmup(
+        SmaCross.Params()
+    )
+
+
+def test_skipped_windows_are_reported_when_they_happen(monkeypatch):
+    """If a window is dropped anyway, the report must say so.
+
+    Auto-sizing can still lose a window when the grid contains a combination that
+    fails validation (so its warmup was never counted). Silence would make a
+    partial validation look complete.
+    """
+    from app.modules.backtest.walkforward import WindowResult
+
+    service = WalkForwardService()
+    original = service.optimiser.optimise
+    calls = {"n": 0}
+
+    def flaky(*args, **kwargs):
+        calls["n"] += 1
+        result = original(*args, **kwargs)
+        if result.best is not None and calls["n"] == 1:
+            # First window optimises fine but its test slice cannot run.
+            result.best.params = {"fast": 5, "slow": 60}
+        return result
+
+    monkeypatch.setattr(service.optimiser, "optimise", flaky)
+    # Force a test window that warms up for slow=30 but not slow=60.
+    report = service.run(
+        SmaCross(),
+        series(800),
+        space=SPACE,
+        symbol="TEST",
+        timeframe="1d",
+        config=cfg(),
+        windows=3,
+        train_bars=500,
+        test_bars=52,   # enough for warmup 32, not for warmup 61
+        data_source="real",
+    )
+    assert report.aggregate["windows_completed"] == 2
+    assert report.aggregate["requested_windows"] == 3
+    assert any("未能完成验证" in warning for warning in report.warnings)
+
+
+def test_window_reduction_is_reported_to_the_caller():
+    """A shortened run must say so; the message used to be overwritten."""
+    service = WalkForwardService()
+    # 800 bars with a fixed 300+90 layout fits 5 windows, not 6; the service
+    # reduces the count and must say so.
+    report = service.run(
+        SmaCross(),
+        series(800),
+        space=SPACE,
+        symbol="TEST",
+        timeframe="1d",
+        config=cfg(),
+        windows=6,
+        train_bars=300,
+        test_bars=90,
+        data_source="real",
+    )
+    assert report.aggregate["requested_windows"] == 6
+    assert report.aggregate["windows_completed"] < 6
+    assert any("数据只够完成" in warning for warning in report.warnings)

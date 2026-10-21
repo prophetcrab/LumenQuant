@@ -284,3 +284,55 @@ def test_real_data_has_no_synthetic_warning():
         data_source="real",
     )
     assert not any("合成行情" in warning for warning in report.warnings)
+
+
+def test_large_in_sample_advantage_triggers_a_degradation_warning():
+    """A positive out-of-sample result can still be a failure.
+
+    Real data (600036.SH daily, 800 bars): best params scored +16.07% in-sample
+    and +1.15% out-of-sample. The overfit check only fired when OOS was negative,
+    so this 15-point collapse produced an empty warnings list while walk-forward
+    would have flagged the same numbers.
+    """
+    from app.modules.backtest.optimiser import CandidateResult
+
+    best = CandidateResult(
+        params={"fast": 20, "slow": 60},
+        total_return_pct=15.0,
+        max_drawdown_pct=15.3,
+        sharpe=0.4,
+        trade_count=7,
+        win_rate_pct=57.1,
+        profit_factor=2.6,
+        final_equity=230_000,
+        score=1.18,
+        in_sample_return_pct=16.07,
+        out_of_sample_return_pct=1.15,
+    )
+    from app.modules.backtest.optimiser import OptimisationReport
+
+    report = OptimisationReport(
+        strategy="sma_cross", symbol="600036.SH", timeframe="1d", objective="return",
+        bars=800, tested=6, valid=6, rejected=0,
+    )
+    warnings = OptimiserService._warnings(report, [best], enough_oos=True)
+    joined = " ".join(warnings)
+    assert "衰减" in joined
+    assert "14.92" in joined
+
+
+def test_small_degradation_does_not_warn():
+    from app.modules.backtest.optimiser import CandidateResult, OptimisationReport
+
+    best = CandidateResult(
+        params={"fast": 5, "slow": 20}, total_return_pct=8.0, max_drawdown_pct=5.0,
+        sharpe=0.9, trade_count=12, win_rate_pct=58.0, profit_factor=1.8,
+        final_equity=108_000, score=1.6, in_sample_return_pct=10.0,
+        out_of_sample_return_pct=6.0,
+    )
+    report = OptimisationReport(
+        strategy="sma_cross", symbol="TEST", timeframe="1d", objective="return",
+        bars=800, tested=6, valid=6, rejected=0,
+    )
+    warnings = OptimiserService._warnings(report, [best], enough_oos=True)
+    assert not any("衰减" in warning for warning in warnings)
