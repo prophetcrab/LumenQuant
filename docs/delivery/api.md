@@ -102,3 +102,7 @@ Base URL：`http://127.0.0.1:8000/api`　完整交互式文档：`/docs`
 - `GET /api/assistant/tools`
 - `POST /api/assistant/chat` — `{message, account_id?}`
 - `POST /api/assistant/tools/{name}` — `{tool, arguments}`
+
+可用工具：`list_accounts`、`account_overview`、`risk_overview`、`list_positions`、
+`recent_orders`、`market_snapshot`、`list_strategies`、`strategy_signals`、
+`run_backtest`、`list_runtime_instances`。全部只读。

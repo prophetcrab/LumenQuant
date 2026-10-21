@@ -74,3 +74,57 @@ def test_chat_validation(assistant_client):
         "/api/assistant/tools/nope", json={"tool": "nope", "arguments": {}}
     )
     assert unknown.status_code == 404
+
+
+def test_risk_intent_answers_with_the_same_snapshot_as_the_risk_centre(assistant_client):
+    account = assistant_client.post(
+        "/api/accounts", json={"name": "Risk Book", "initial_balance": 200_000}
+    ).json()
+
+    reply = assistant_client.post(
+        "/api/assistant/chat",
+        json={"message": "我现在能开仓吗？风控状态怎么样", "account_id": account["id"]},
+    )
+    assert reply.status_code == 200, reply.text
+    body = reply.json()
+    assert body["tool_calls"][0]["tool"] == "risk_overview"
+    assert "交易闸门正常" in body["answer"]
+    assert "单笔上限" in body["answer"]
+
+    # The assistant must report the same exposure the risk centre renders.
+    overview = assistant_client.get(
+        "/api/risk/overview", params={"account_id": account["id"]}
+    ).json()
+    tool_result = body["tool_calls"][0]["result"]
+    assert tool_result["exposure"]["equity"] == pytest.approx(
+        overview["exposure"]["equity"], abs=0.01
+    )
+    assert tool_result["limits"] == overview["limits"]
+
+
+def test_risk_intent_reports_unprotected_instances(assistant_client):
+    account = assistant_client.post(
+        "/api/accounts", json={"name": "Risk Gap", "initial_balance": 100_000}
+    ).json()
+    assistant_client.post(
+        "/api/runtime/instances",
+        json={
+            "account_id": account["id"],
+            "strategy_key": "sma_cross",
+            "symbol": "BTCUSDT",
+            "timeframe": "1h",
+            "params": {},
+            "position_pct": 0.1,
+            "max_order_notional": 5000,
+            "start": True,
+        },
+    )
+    reply = assistant_client.post(
+        "/api/assistant/chat",
+        json={"message": "有哪些实例没有止损", "account_id": account["id"]},
+    )
+    body = reply.json()
+    assert body["tool_calls"][0]["tool"] == "risk_overview"
+    tool_result = body["tool_calls"][0]["result"]
+    assert tool_result["warnings"], "unprotected running instance must be surfaced"
+    assert "止损" in body["answer"]

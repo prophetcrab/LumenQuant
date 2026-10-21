@@ -16,6 +16,8 @@ from app.modules.accounts.service import AccountService
 from app.modules.backtest.service import BacktestService
 from app.modules.market.service import MarketService
 from app.modules.portfolio.service import PortfolioService
+from app.modules.risk.policy import RiskLimits
+from app.modules.risk.service import RiskService
 from app.modules.strategies.registry import catalog, get
 from app.modules.trading.service import TradingService
 
@@ -45,6 +47,7 @@ class ToolBox:
         trading: TradingService,
         portfolio: PortfolioService,
         backtests: BacktestService,
+        risk_limits: RiskLimits | None = None,
     ) -> None:
         self.session = session
         self.accounts = accounts
@@ -52,6 +55,7 @@ class ToolBox:
         self.trading = trading
         self.portfolio = portfolio
         self.backtests = backtests
+        self.risk_limits = risk_limits
         self._tools: dict[str, Tool] = {}
         self._register()
 
@@ -123,6 +127,15 @@ class ToolBox:
                     "bars": "int?",
                 },
                 self._backtest,
+            )
+        )
+        self._add(
+            Tool(
+                "risk_overview",
+                "获取账户风险快照：熔断状态、限额、敞口、逐仓浮盈、自动实例的止损保护情况。"
+                "回答\"现在能不能开仓\"/\"哪些实例没有止损\"这类问题用它。",
+                {"account_id": "string?"},
+                self._risk_overview,
             )
         )
         self._add(
@@ -323,6 +336,53 @@ class ToolBox:
             }
             for i in service.list(account_id=account_id)
         ]
+
+    def _risk_overview(self, account_id: str | None = None) -> dict:
+        """Same snapshot the risk centre renders — one definition, two callers."""
+        from app.modules.risk.overview import build_overview
+        from app.modules.runtime.service import RuntimeService
+
+        cleaned = (account_id or "").strip() or self._default_account()
+        service = RiskService(self.session)
+        runtime = RuntimeService(
+            self.session,
+            accounts_service=self.accounts,
+            market=self.market,
+            trading=self.trading,
+        )
+        payload = build_overview(
+            account_id=cleaned,
+            accounts=self.accounts,
+            market=self.market,
+            portfolio=self.portfolio,
+            trading=self.trading,
+            runtime=runtime,
+            limits=self.risk_limits or RiskLimits(),
+            service=service,
+        )
+        # Assistant answers are read aloud; trim to what a question needs and
+        # keep the full instance list out of the context window.
+        return {
+            "account": payload["account"],
+            "breaker_active": payload["state"]["breaker_active"],
+            "breaker_reason": payload["state"]["breaker_reason"],
+            "day_start_equity": payload["state"]["day_start_equity"],
+            "peak_equity": payload["state"]["peak_equity"],
+            "limits": payload["limits"],
+            "exposure": payload["exposure"],
+            "positions": payload["positions"],
+            "instances": [
+                {
+                    "strategy": item["strategy"],
+                    "symbol": item["symbol"],
+                    "running": item["running"],
+                    "protected": item["protected"],
+                    "executions": item["executions"],
+                }
+                for item in payload["instances"]
+            ],
+            "warnings": payload["warnings"],
+        }
 
     def _default_account(self) -> str:
         accounts = self.accounts.list(include_archived=False)

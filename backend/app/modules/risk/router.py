@@ -73,95 +73,25 @@ def overview(
     account_id: str,
     session: Session = Depends(get_session),
 ):
-    """Everything the risk centre needs in one call.
-
-    Aggregating server-side keeps the page consistent (all figures from one
-    transaction) and avoids five parallel requests on every refresh.
-    """
+    """Everything the risk centre needs in one call."""
     from app.api.wiring import build_accounts, build_market, build_portfolio, build_trading
+    from app.modules.risk.overview import build_overview
+    from app.modules.runtime.service import RuntimeService
 
     accounts = build_accounts(request, session)
-    account = accounts.require(account_id)
     market = build_market(request, session)
     portfolio = build_portfolio(request, session, accounts=accounts)
     trading = build_trading(request, session, accounts=accounts, market=market)
-    service = RiskService(session)
-
-    state = service.state(account_id)
-    limits = _limits(request)
-    book = portfolio.overview(account_id, record=False)
-    positions = trading.positions(account_id)
-    reserved = trading.reserved_cash(account_id)
-
-    # Per-symbol share locks from resting sells.
-    from app.modules.runtime.service import RuntimeService
-
     runtime = RuntimeService(
         session, accounts_service=accounts, market=market, trading=trading
     )
-    instances = [
-        {
-            "id": item.id,
-            "strategy": item.strategy_name,
-            "symbol": item.symbol,
-            "running": item.running,
-            "stop_loss_pct": item.stop_loss_pct,
-            "take_profit_pct": item.take_profit_pct,
-            "trailing_stop_pct": item.trailing_stop_pct,
-            "peak_price": item.peak_price,
-            "executions": item.executions,
-            "last_error": item.last_error,
-            "protected": bool(
-                item.stop_loss_pct or item.take_profit_pct or item.trailing_stop_pct
-            ),
-        }
-        for item in runtime.list(account_id=account_id)
-    ]
-
-    unprotected = [item["strategy"] + "·" + item["symbol"] for item in instances if item["running"] and not item["protected"]]
-
-    return {
-        "account": {
-            "id": account.id,
-            "name": account.name,
-            "market": account.market,
-            "base_currency": account.base_currency,
-            "kind": account.kind,
-        },
-        "state": asdict(state),
-        "limits": asdict(limits),
-        "exposure": {
-            "equity": book.equity,
-            "cash": book.cash,
-            "available_cash": book.available_cash,
-            "reserved_cash": reserved,
-            "positions_value": book.positions_value,
-            "exposure_pct": book.exposure_pct,
-            "position_count": book.position_count,
-            "largest_position_pct": max(
-                (item.weight_pct for item in book.allocations), default=0.0
-            ),
-        },
-        "positions": [
-            {
-                "symbol": p.symbol,
-                "quantity": p.quantity,
-                "available_quantity": p.available_quantity,
-                "avg_price": p.avg_price,
-                "market_price": p.market_price,
-                "market_value": p.market_value,
-                "unrealized_pnl": p.unrealized_pnl,
-                "unrealized_pct": round(
-                    (p.unrealized_pnl / (p.avg_price * p.quantity) * 100)
-                    if p.avg_price and p.quantity
-                    else 0.0,
-                    4,
-                ),
-            }
-            for p in positions
-        ],
-        "instances": instances,
-        "warnings": [
-            f"自动运行实例未设置任何止损保护：{name}" for name in unprotected
-        ],
-    }
+    return build_overview(
+        account_id=account_id,
+        accounts=accounts,
+        market=market,
+        portfolio=portfolio,
+        trading=trading,
+        runtime=runtime,
+        limits=_limits(request),
+        service=RiskService(session),
+    )

@@ -134,3 +134,19 @@ def test_verdict_outperformance_uses_percent_units():
     result = compare(strategy_equity=equity, prices=prices, periods_per_year=252)
     assert result.excess_return_pct == pytest.approx(11.0, abs=0.5)
     assert "跑赢基准" in result.verdict, result.verdict
+
+
+def test_verdict_does_not_claim_exposure_when_flat():
+    """A never-traded strategy beating a falling benchmark is not skill.
+
+    Real-data case: 600519 daily, 400 bars, capital 100k, one board lot costs
+    132k -> zero trades, 0% return, benchmark -11.58%. alpha and beta are both 0.
+    The old wording said the excess came from 更高暴露 (higher exposure) while the
+    strategy was 100% cash.
+    """
+    verdict = _verdict(11.58, 0.0, 0.0, 0.26)
+    assert "空仓" in verdict
+    assert "更高暴露" not in verdict
+
+    # A genuinely levered-but-skill-less strategy keeps the old message.
+    assert "更高暴露" in _verdict(8.0, -2.0, 1.4, 0.2)

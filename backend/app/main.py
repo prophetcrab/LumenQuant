@@ -77,10 +77,17 @@ def create_app(settings: Settings | None = None, database: Database | None = Non
         from app.modules.market.engine import MarketEngine
 
         market_engine = MarketEngine(db, settings)
-    if settings.seed_market and settings.cn_symbols_enabled:
+    if settings.cn_symbols_enabled:
         from app.modules.cn.engine import CnMarketEngine
 
-        cn_market_engine = CnMarketEngine(db, settings)
+        # The A-share symbol catalog is registry data, not synthetic market data.
+        # Keeping it tied to seed_market meant a real-data-only deployment
+        # (seed_market=false, cn_data_source=tencent) had no symbols at all, and
+        # every sync failed with "本地未登记标的" before it could fetch a quote.
+        if settings.seed_market:
+            cn_market_engine = CnMarketEngine(db, settings)
+        else:
+            CnMarketEngine(db, settings).ensure_symbols()
     from app.modules.cn.provider import CompositeLiveProvider
 
     live_provider = CompositeLiveProvider(crypto=market_engine, cn=cn_market_engine)

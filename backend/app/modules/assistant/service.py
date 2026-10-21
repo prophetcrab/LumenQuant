@@ -31,6 +31,13 @@ class AssistantReply:
 
 
 INTENTS: list[tuple[re.Pattern, str, dict]] = [
+    # Risk first: "止损"/"开仓" questions mention accounts and positions too, and
+    # the generic patterns below would otherwise claim them.
+    (
+        re.compile(r"(风控|风险|开仓|建仓|止损|熔断|回撤|risk|drawdown|stop.?loss)", re.I),
+        "risk_overview",
+        {},
+    ),
     (re.compile(r"(持仓|仓位|position)", re.I), "list_positions", {}),
     (re.compile(r"(订单|委托|order)", re.I), "recent_orders", {}),
     (
@@ -139,7 +146,13 @@ class AssistantService:
             if not pattern.search(message):
                 continue
             arguments: dict[str, Any] = {}
-            if tool in {"list_positions", "recent_orders", "account_overview", "list_runtime_instances"}:
+            if tool in {
+                "list_positions",
+                "recent_orders",
+                "account_overview",
+                "list_runtime_instances",
+                "risk_overview",
+            }:
                 arguments["account_id"] = account_id
             if tool == "market_snapshot" and symbol:
                 arguments["symbol"] = symbol
@@ -153,7 +166,7 @@ class AssistantService:
 
         return AssistantReply(
             answer=(
-                "我可以帮你查看账户总览、持仓、订单、行情快照、策略列表、策略信号、自动运行实例，"
+                "我可以帮你查看账户总览、风险与止损状态、持仓、订单、行情快照、策略列表、策略信号、自动运行实例，"
                 "也能直接跑一次回测。例如：“看看我的持仓”“BTC 现在什么价”“双均线在 ETH 1h 的信号”"
                 "“回测 MACD 最近 800 根”。"
             ),
@@ -200,6 +213,28 @@ class AssistantService:
             )
         if tool == "list_strategies":
             return "内置策略：" + "、".join(f"{s['name']}({s['key']})" for s in result)
+        if tool == "risk_overview" and isinstance(result, dict):
+            exposure = result["exposure"]
+            head = (
+                f"账户「{result['account']['name']}」权益 {exposure['equity']:,.2f}，"
+                f"可用现金 {exposure['available_cash']:,.2f}，"
+                f"持仓市值 {exposure['positions_value']:,.2f}（敞口 {exposure['exposure_pct']:.1f}%）。"
+            )
+            breaker = (
+                f"熔断已触发：{result['breaker_reason']}"
+                if result["breaker_active"]
+                else "交易闸门正常，允许新开仓。"
+            )
+            limits = result["limits"]
+            guard = (
+                f"单笔上限 {limits['max_order_notional']:,.0f}，"
+                f"单标的上限 {limits['max_position_notional']:,.0f}，"
+                f"每分钟最多 {limits['max_orders_per_minute']} 单。"
+            )
+            body = head + breaker + guard
+            if result["warnings"]:
+                body += "\n需要注意：\n" + "\n".join(result["warnings"])
+            return body
         if tool == "list_runtime_instances":
             if not result:
                 return "还没有自动运行实例。"

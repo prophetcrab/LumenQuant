@@ -197,6 +197,14 @@ def _verdict(excess: float, alpha: float, beta: float, information_ratio: float)
             )
         return "跑输基准且alpha为负，策略未创造价值"
     if excess >= 5:
+        if abs(beta) < 0.2:
+            # Near-zero beta means the strategy was essentially never in the
+            # market. Beating a falling benchmark that way is not skill, and the
+            # old wording ("超额主要来自更高暴露") said the exact opposite.
+            return (
+                "几乎全程空仓：超额来自回避下跌，不是选股或择时能力；"
+                "请先确认策略是否真的产生过交易"
+            )
         if alpha > 0 and information_ratio > 0.3:
             return "跑赢基准且alpha为正，超额收益相对稳定"
         if alpha <= 0:

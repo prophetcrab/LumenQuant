@@ -461,3 +461,30 @@ def test_cn_signal_preview_uses_live_provider(cn_client):
     body = response.json()
     assert body["symbol"] == symbols[0]["code"]
     assert len(body["overlays"]["fast"]) == len(body["overlays"]["slow"])
+
+
+def test_cn_symbols_registered_without_synthetic_market(tmp_path):
+    """Real-data-only deployment must still know the A-share catalog.
+
+    With seed_market=False the crypto engine is absent, and the CN engine used to
+    be created only alongside it. Result: an empty symbol table, so every real
+    sync failed with "本地未登记标的" before it could even fetch a quote.
+    """
+    settings = Settings(
+        database_url=f"sqlite:///{(tmp_path / 'cn-real.sqlite').as_posix()}",
+        seed_market=False,
+        cn_symbols_enabled=True,
+        cn_data_source="tencent",
+        cn_sync_on_start=False,
+        runtime_enabled=False,
+    )
+    db = Database(settings.database_url)
+    db.create_schema()
+    app = create_app(settings, db)
+    with TestClient(app) as client:
+        symbols = client.get("/api/market/symbols", params={"market": "cn_stock"}).json()
+        codes = {item["code"] for item in symbols}
+        assert "600519.SH" in codes
+        assert all(item["market"] == "cn_stock" for item in symbols)
+        assert all(item["enabled"] for item in symbols)
+    db.dispose()

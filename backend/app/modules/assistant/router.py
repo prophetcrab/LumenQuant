@@ -11,6 +11,7 @@ from app.api.wiring import build_accounts, build_backtests, build_market, build_
 from app.modules.assistant.schemas import ChatRequest, ToolCallRequest
 from app.modules.assistant.service import AssistantService
 from app.modules.assistant.tools import ToolBox
+from app.modules.risk.policy import RiskLimits
 
 
 router = APIRouter(prefix="/assistant", tags=["assistant"])
@@ -30,6 +31,14 @@ def build_service(request: Request, session: Session) -> AssistantService:
         trading=trading,
         portfolio=portfolio,
         backtests=backtests,
+        risk_limits=RiskLimits(
+            max_order_notional=settings.risk_max_order_notional,
+            max_position_notional=settings.risk_max_position_notional,
+            min_order_notional=settings.risk_min_order_notional,
+            max_orders_per_minute=settings.risk_max_orders_per_minute,
+            max_daily_loss_pct=settings.risk_max_daily_loss_pct,
+            max_drawdown_pct=settings.risk_max_drawdown_pct,
+        ),
     )
     return AssistantService(toolbox, settings)
 
