@@ -29,6 +29,11 @@ export function DashboardPage() {
   const symbols = useSymbols();
   const backtests = useQuery({ queryKey: ["backtests", 5], queryFn: () => api.backtests(5) });
 
+  // An A-share user's "看行情" must not land on the crypto-only markets page.
+  const isCnAccount = account?.market === "cn_stock";
+  const marketsPath = isCnAccount ? "/cn" : "/markets";
+  const marketsLabel = isCnAccount ? "看 A 股" : "看行情";
+
   const equityOptionData = useMemo(
     () => (history.data ?? []).map((point) => ({ time: point.time, equity: point.equity })),
     [history.data],
@@ -223,12 +228,22 @@ export function DashboardPage() {
           )}
         </Card>
 
-        <Card title="市场快照" subtitle="24 小时涨跌" actions={<Link to="/markets" className="button small ghost">看行情</Link>} padded={false}>
+        <Card
+          title="市场快照"
+          subtitle={isCnAccount ? "A 股 24 小时涨跌" : "24 小时涨跌"}
+          actions={<Link to={marketsPath} className="button small ghost">{marketsLabel}</Link>}
+          padded={false}
+        >
           {snapshots.isLoading ? (
             <Loader />
           ) : (
             <div className="stack" style={{ gap: 0 }}>
-              {(snapshots.data ?? []).map((item, index, list) => (
+              {[...(snapshots.data ?? [])]
+                .sort((a, b) =>
+                  a.market === b.market ? 0 : a.market === account?.market ? -1 : 1,
+                )
+                .slice(0, 6)
+                .map((item, index, list) => (
                 <div
                   key={item.symbol}
                   className="row"
