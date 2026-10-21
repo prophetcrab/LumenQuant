@@ -518,6 +518,50 @@ class TradingService:
         self.session.refresh(order)
         return self._order_view(order)
 
+    def _record_gateway_failure(
+        self,
+        *,
+        account_id: str,
+        symbol: str,
+        side: str,
+        order_type: str,
+        quantity: float,
+        limit_price: float | None,
+        source: str,
+        client_order_id: str | None,
+        reason: str,
+    ) -> None:
+        """Persist a rejected order so the attempt is auditable.
+
+        The outcome is genuinely ambiguous — the request may or may not have
+        reached the broker — so the row says `rejected` with a reason that
+        admits it, rather than implying nothing happened.
+        """
+        order = Order(
+            id=new_id(),
+            account_id=account_id,
+            symbol=symbol,
+            side=side,
+            order_type=order_type,
+            quantity=quantity,
+            limit_price=limit_price,
+            status="rejected",
+            source=f"live:{source}",
+            client_order_id=client_order_id,
+            reject_reason=f"gateway error before ack: {reason}"[:240],
+        )
+        self.session.add(order)
+        record_audit(
+            self.session,
+            action="order.gateway_failed",
+            entity="order",
+            entity_id=order.id,
+            detail=json.dumps(
+                {"account_id": account_id, "symbol": symbol, "reason": reason[:240]}
+            ),
+        )
+        self.session.commit()
+
     def _place_live_order(
         self,
         *,
@@ -550,16 +594,37 @@ class TradingService:
                 "live account requires broker credentials; set LQ_BINANCE_API_KEY/SECRET "
                 "and enable live trading"
             )
-        result = gateway.place_order(
-            BrokerOrderRequest(
+        try:
+            result = gateway.place_order(
+                BrokerOrderRequest(
+                    symbol=symbol,
+                    side=side,
+                    order_type=order_type,
+                    quantity=quantity,
+                    limit_price=limit_price,
+                    client_order_id=client_order_id,
+                )
+            )
+        except Exception as exc:
+            # The gateway is an external system: unreachable, unauthorised, or
+            # returning garbage. An unhandled exception became a 500 with no
+            # trace in the order table, so the user could not tell whether the
+            # broker had received anything. Record the failure as a rejected
+            # order and surface a message that says nothing was known to be sent.
+            self._record_gateway_failure(
+                account_id=account_id,
                 symbol=symbol,
                 side=side,
                 order_type=order_type,
                 quantity=quantity,
                 limit_price=limit_price,
+                source=source,
                 client_order_id=client_order_id,
+                reason=str(exc),
             )
-        )
+            raise ConflictError(
+                f"下单网关调用失败，订单未确认提交：{exc}"
+            ) from exc
         order = Order(
             id=new_id(),
             account_id=account_id,
@@ -775,14 +840,24 @@ class TradingService:
             )
             if gateway is None:
                 raise ConflictError("gateway unavailable; cannot cancel live order")
-            gateway.cancel_order(order.symbol, order.broker_order_id)
+            try:
+                gateway.cancel_order(order.symbol, order.broker_order_id)
+            except Exception as exc:
+                # The local row must stay `open`: the broker may still have the
+                # order live. Reporting success here would hide a position the
+                # user believes is cancelled.
+                raise ConflictError(
+                    f"撤单请求失败，委托可能仍在券商侧有效：{exc}"
+                ) from exc
         order.status = "cancelled"
         record_audit(
             self.session,
             action="order.cancelled",
             entity="order",
             entity_id=order.id,
-            detail=json.dumps({"account_id": order.account_id}),
+            detail=json.dumps(
+                {"account_id": order.account_id, "broker_order_id": order.broker_order_id}
+            ),
         )
         self.session.commit()
         self.session.refresh(order)
