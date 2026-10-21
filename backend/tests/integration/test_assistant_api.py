@@ -128,3 +128,27 @@ def test_risk_intent_reports_unprotected_instances(assistant_client):
     tool_result = body["tool_calls"][0]["result"]
     assert tool_result["warnings"], "unprotected running instance must be surfaced"
     assert "止损" in body["answer"]
+
+
+def test_no_account_yields_guidance_not_an_error(assistant_client):
+    """Asking for account data with no accounts is a valid question.
+
+    It used to answer 404 for `account_overview` and raise an unhandled
+    ValueError (HTTP 500) for `risk_overview` — the assistant looked broken on a
+    fresh install, which is exactly the first thing a new user tries.
+    """
+    for message in ("账户总览", "我现在能开仓吗", "看看我的持仓", "有哪些实例没有止损"):
+        reply = assistant_client.post("/api/assistant/chat", json={"message": message})
+        assert reply.status_code == 200, (message, reply.text)
+        body = reply.json()
+        assert "创建一个模拟账户" in body["answer"], (message, body["answer"])
+        assert body["tool_calls"][0].get("error")
+
+
+def test_unknown_symbol_is_explained(assistant_client):
+    reply = assistant_client.post(
+        "/api/assistant/chat", json={"message": "NOPE 现在什么价"}
+    )
+    # No symbol regex match -> falls back to the market snapshot of everything,
+    # which must still succeed rather than 500.
+    assert reply.status_code == 200, reply.text

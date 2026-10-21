@@ -17,7 +17,7 @@ from typing import Any
 import httpx
 
 from app.core.config import Settings
-from app.core.errors import ValidationError
+from app.core.errors import AppError, ValidationError
 from app.modules.assistant.tools import ToolBox
 
 logger = logging.getLogger(__name__)
@@ -156,7 +156,24 @@ class AssistantService:
                 arguments["account_id"] = account_id
             if tool == "market_snapshot" and symbol:
                 arguments["symbol"] = symbol
-            result = self.toolbox.call(tool, arguments)
+            try:
+                result = self.toolbox.call(tool, arguments)
+            except AppError as exc:
+                # A read that cannot be satisfied (no account yet, unknown symbol)
+                # is an answer, not a server fault. Returning 404/500 for "what is
+                # my exposure?" with no accounts created leaves the user staring at
+                # an error with no next step.
+                calls.append(
+                    {"tool": tool, "arguments": arguments, "error": exc.message}
+                )
+                return AssistantReply(
+                    answer=self._explain(exc),
+                    mode="local",
+                    tool_calls=calls,
+                )
+            except ValueError as exc:
+                calls.append({"tool": tool, "arguments": arguments, "error": str(exc)})
+                return AssistantReply(answer=self._explain(exc), mode="local", tool_calls=calls)
             calls.append({"tool": tool, "arguments": arguments, "result": result})
             return AssistantReply(
                 answer=self._render(tool, result),
@@ -173,6 +190,19 @@ class AssistantService:
             mode="local",
             tool_calls=[],
         )
+
+    @staticmethod
+    def _explain(error: Exception) -> str:
+        """Turn a tool failure into a sentence with an actionable next step."""
+        message = getattr(error, "message", str(error))
+        if "no active account" in message or "账户" in message and "不存在" in message:
+            return (
+                "还没有可用的交易账户，所以查不到持仓、风险或订单。"
+                "请先在「账户」页创建一个模拟账户，然后回来问我。"
+            )
+        if "not found" in message.lower():
+            return f"查不到这条数据：{message}。请确认标的或账户是否正确。"
+        return f"这一步没能完成：{message}"
 
     def _match_strategy(self, message: str) -> str | None:
         lowered = message.lower()
