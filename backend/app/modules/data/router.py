@@ -17,6 +17,29 @@ router = APIRouter(prefix="/data", tags=["data"])
 MAX_UPLOAD_BYTES = 20 * 1024 * 1024
 
 
+def _invalidate_symbol_caches(request: Request, symbol: str) -> None:
+    """Drop every cached view of a symbol's data after a write.
+
+    Three caches hold derived copies: `stats_cache` (coverage/quality, 30s),
+    `candle_cache` (candles, 2s) and `market_cache` (snapshots, 1.5s). Missing
+    any of them means a write is invisible for its TTL, which is long enough for
+    a user to run a backtest on the previous series.
+    """
+    code = symbol.upper()
+    stats = getattr(request.app.state, "stats_cache", None)
+    if stats is not None:
+        stats.invalidate("coverage")
+        stats.invalidate(f"quality:{code}:")
+    candles = getattr(request.app.state, "candle_cache", None)
+    if candles is not None:
+        candles.invalidate(f"{code}:")
+    market = getattr(request.app.state, "market_cache", None)
+    if market is not None:
+        # Snapshot entries are keyed by market ("snapshots:all"), not by symbol,
+        # so the whole family has to go — there is no per-symbol key to target.
+        market.invalidate("snapshots:")
+
+
 @router.get("/coverage")
 def coverage(request: Request, session: Session = Depends(get_session)):
     cache = getattr(request.app.state, "stats_cache", None)
@@ -71,10 +94,7 @@ def delete_series(
     bar count that will be removed before calling this.
     """
     removed = DataService(session).delete_series(symbol, timeframe=timeframe)
-    cache = getattr(request.app.state, "stats_cache", None)
-    if cache is not None:
-        cache.invalidate("coverage")
-        cache.invalidate(f"quality:{symbol.upper()}:")
+    _invalidate_symbol_caches(request, symbol)
     return {"symbol": symbol.upper(), "timeframe": timeframe, "deleted": removed}
 
 
@@ -97,10 +117,9 @@ async def import_csv(
     report = DataService(session).import_csv(
         symbol, timeframe=timeframe, content=content, replace=replace
     )
-    # Coverage and quality are cached for 30s; without this the dashboard keeps
-    # showing the pre-import numbers right after a successful upload.
-    cache = getattr(request.app.state, "stats_cache", None)
-    if cache is not None:
-        cache.invalidate("coverage")
-        cache.invalidate(f"quality:{symbol.upper()}:")
+    # Coverage, quality and the candle series are all cached; without this the
+    # dashboard keeps showing pre-import numbers, and `/api/market/candles` keeps
+    # returning the old series — a freshly imported CSV then produces a backtest
+    # on data the user never supplied.
+    _invalidate_symbol_caches(request, symbol)
     return asdict(report)
