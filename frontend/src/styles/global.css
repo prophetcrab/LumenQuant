@@ -176,6 +176,22 @@ a {
   opacity: 0.85;
 }
 
+/* Unread count on a nav item: pushed to the right edge so the label stays put
+   when the number appears or disappears. */
+.nav-badge {
+  margin-left: auto;
+  min-width: 18px;
+  height: 18px;
+  padding: 0 5px;
+  border-radius: 9px;
+  background: var(--negative);
+  color: #fff;
+  font-size: 11px;
+  font-weight: 600;
+  line-height: 18px;
+  text-align: center;
+}
+
 .sidebar-footer {
   margin-top: auto;
   padding: 12px;

@@ -1,12 +1,12 @@
 import type { ReactNode } from "react";
 import { NavLink, useLocation } from "react-router-dom";
 import { useQuery } from "@tanstack/react-query";
-import { health } from "../shared/api";
+import { api, health } from "../shared/api";
 import { useAccount } from "../shared/account-context";
 import { useMarketClock } from "../shared/hooks";
 import { timeLabel } from "../shared/format";
 
-type NavItem = { to: string; label: string; icon: ReactNode };
+type NavItem = { to: string; label: string; icon: ReactNode; badge?: "alerts" };
 
 function Icon({ path }: { path: string }) {
   return (
@@ -33,7 +33,14 @@ const NAV: { group: string; items: NavItem[] }[] = [
       { to: "/strategies", label: "策略库", icon: <Icon path="M9 3h6v4H9V3Zm-5 7h6v4H4v-4Zm10 0h6v4h-6v-4ZM9 17h6v4H9v-4ZM7 7v3m10 0V7M7 14v3m10 0v-3" /> },
       { to: "/backtest", label: "回测", icon: <Icon path="M4 20V10m5 10V4m5 16v-7m5 7V7" /> },
       { to: "/risk", label: "风控", icon: <Icon path="M12 3l8 4v5c0 5-3.5 8-8 9-4.5-1-8-4-8-9V7l8-4Z" /> },
-      { to: "/alerts", label: "告警", icon: <Icon path="M12 3a6 6 0 0 0-6 6v4l-2 4h16l-2-4V9a6 6 0 0 0-6-6Zm0 18a2.5 2.5 0 0 0 2.45-2h-4.9A2.5 2.5 0 0 0 12 21Z" /> },
+      {
+        to: "/alerts",
+        label: "告警",
+        icon: <Icon path="M12 3a6 6 0 0 0-6 6v4l-2 4h16l-2-4V9a6 6 0 0 0-6-6Zm0 18a2.5 2.5 0 0 0 2.45-2h-4.9A2.5 2.5 0 0 0 12 21Z" />,
+        // The whole point of an alert is that you do not have to open the page
+        // to learn it exists.
+        badge: "alerts",
+      },
       { to: "/portfolio", label: "组合", icon: <Icon path="M12 3v18M5 8h14M5 16h14M8 5l-3 3 3 3M16 13l3 3-3 3" /> },
     ],
   },
@@ -72,6 +79,13 @@ export function Layout({ children }: { children: ReactNode }) {
   const clock = useMarketClock();
   const status = useQuery({ queryKey: ["health"], queryFn: health, refetchInterval: 20_000, retry: 1 });
   const online = status.data?.status === "ok";
+  const alertSummary = useQuery({
+    queryKey: ["alert-summary", accountId],
+    queryFn: () => api.alertSummary(accountId),
+    enabled: Boolean(accountId),
+    refetchInterval: 15_000,
+  });
+  const unacked = alertSummary.data?.unacknowledged ?? 0;
 
   return (
     <div className="app-shell">
@@ -96,6 +110,11 @@ export function Layout({ children }: { children: ReactNode }) {
                 >
                   {item.icon}
                   <span>{item.label}</span>
+                  {item.badge === "alerts" && unacked > 0 ? (
+                    <span className="nav-badge" aria-label={`${unacked} 条待确认`}>
+                      {unacked > 99 ? "99+" : unacked}
+                    </span>
+                  ) : null}
                 </NavLink>
               ))}
             </div>
