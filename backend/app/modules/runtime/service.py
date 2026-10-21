@@ -370,6 +370,18 @@ class RuntimeService:
         try:
             if signal.action == "buy" and position <= 0:
                 self._place_entry(row, last.close)
+            elif signal.action == "buy" and position > 0:
+                # Another instance (or a manual trade) already holds this symbol.
+                # Without this note the row keeps logging "signal: buy" and looks
+                # like it is trading, while nothing happens — and two instances on
+                # one symbol silently collapse into whichever ran first.
+                self._log(
+                    row.id,
+                    "warn",
+                    "position_already_open",
+                    f"已有 {row.symbol} 持仓，跳过买入（同一标的的多个实例不会叠加仓位）",
+                    bar_time=last.time,
+                )
             elif signal.action == "sell" and position > 0:
                 order = self.trading.close_position(row.account_id, row.symbol)
                 if order is not None:

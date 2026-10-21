@@ -64,6 +64,18 @@ def build_overview(
         for item in instances
         if item["running"] and not item["protected"]
     ]
+    # Two running instances on the same symbol never stack positions: whichever
+    # evaluates first opens it and the other's buy signals are ignored. That is
+    # safe but surprising, so it is surfaced rather than left to the logs.
+    running_by_symbol: dict[str, list[str]] = {}
+    for item in instances:
+        if item["running"]:
+            running_by_symbol.setdefault(item["symbol"], []).append(item["strategy"])
+    duplicated = [
+        f"{symbol}：{'、'.join(names)} 同时运行，只有最先开仓的实例会实际持仓"
+        for symbol, names in running_by_symbol.items()
+        if len(names) > 1
+    ]
 
     return {
         "account": {
@@ -108,5 +120,6 @@ def build_overview(
         "instances": instances,
         "warnings": [
             f"自动运行实例未设置任何止损保护：{name}" for name in unprotected
-        ],
+        ]
+        + duplicated,
     }

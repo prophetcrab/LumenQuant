@@ -284,3 +284,67 @@ def test_entry_sizes_against_available_cash_not_book_balance(runtime_client):
     # book balance.
     assert eth[0]["market_value"] < overview["cash"] * 0.5
     assert eth[0]["market_value"] == pytest.approx(available * 0.5, rel=0.05)
+
+
+def test_second_instance_on_the_same_symbol_reports_why_it_is_idle(runtime_client):
+    """Two instances on one symbol never stack positions; say so.
+
+    The first to evaluate opens the position, the rest see an existing holding
+    and skip. Without a log line the idle instance kept writing "signal: buy"
+    every bar and looked like it was trading.
+    """
+    account = runtime_client.post(
+        "/api/accounts", json={"name": "Dup Symbol", "initial_balance": 100_000}
+    ).json()
+    body = {
+        "account_id": account["id"],
+        "strategy_key": "buy_and_hold",
+        "symbol": "BTCUSDT",
+        "timeframe": "1h",
+        "params": {},
+        "position_pct": 0.3,
+        "max_order_notional": 50_000,
+        "start": True,
+    }
+    first = runtime_client.post("/api/runtime/instances", json=body).json()
+    second = runtime_client.post("/api/runtime/instances", json=body).json()
+
+    for _ in range(2):
+        runtime_client.post("/api/runtime/tick")
+
+    logs = runtime_client.get(f"/api/runtime/instances/{second['id']}/logs").json()
+    assert any(item["event"] == "position_already_open" for item in logs)
+
+    # Positions never double up.
+    positions = runtime_client.get(
+        "/api/trading/positions", params={"account_id": account["id"]}
+    ).json()
+    assert len(positions) == 1
+    assert positions[0]["symbol"] == "BTCUSDT"
+
+
+def test_risk_overview_flags_duplicate_instances(runtime_client):
+    account = runtime_client.post(
+        "/api/accounts", json={"name": "Dup Risk", "initial_balance": 100_000}
+    ).json()
+    for _ in range(2):
+        runtime_client.post(
+            "/api/runtime/instances",
+            json={
+                "account_id": account["id"],
+                "strategy_key": "buy_and_hold",
+                "symbol": "BTCUSDT",
+                "timeframe": "1h",
+                "params": {},
+                "position_pct": 0.2,
+                "max_order_notional": 20_000,
+                "stop_loss_pct": 5,
+                "start": True,
+            },
+        )
+    risk = runtime_client.get(
+        "/api/risk/overview", params={"account_id": account["id"]}
+    ).json()
+    joined = " ".join(risk["warnings"])
+    assert "同时运行" in joined
+    assert "BTCUSDT" in joined
