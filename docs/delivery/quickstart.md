@@ -79,7 +79,7 @@ powershell -ExecutionPolicy Bypass -File .\scripts\run-tests.ps1
 
 ```powershell
 cd D:\LumenQuant\backend
-..\.venv\Scripts\python.exe -m pytest -q             # 406 项
+..\.venv\Scripts\python.exe -m pytest -q             # 412 项
 ```
 
 前端：
