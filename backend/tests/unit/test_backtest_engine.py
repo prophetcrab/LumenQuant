@@ -147,3 +147,40 @@ def test_warmup_insufficient_data():
     candles = flat_candles([100.0] * 10)
     with pytest.raises(ValueError):
         BacktestEngine().run(SmaCross(), SmaCross.Params(fast=5, slow=30), candles, "1h")
+
+
+def test_implausible_bar_movement_is_reported():
+    """Aggregate metrics only look at the endpoints; a mid-series collapse hides.
+
+    Regression class: a settling-cash accounting error made equity drop ~95% on a
+    sale bar and recover on release. Total return was unchanged, so nothing
+    surfaced it until the per-bar series was inspected.
+    """
+    from app.modules.backtest.engine import _extreme_bar_return
+
+    assert _extreme_bar_return([100.0, 101.0, 100.5, 102.0]) is None
+    flagged = _extreme_bar_return([100.0, 5.0, 100.0])
+    assert flagged is not None
+    index, pct = flagged
+    assert index == 1
+    assert pct == pytest.approx(-95.0, abs=0.1)
+
+
+def test_backtest_warns_when_equity_jumps_implausibly():
+    from app.modules.backtest.engine import BacktestConfig, BacktestEngine
+    from app.modules.strategies.library.classics import BuyAndHold
+
+    candles = [
+        CandlePoint(
+            time=i * 86_400_000,
+            open=10.0, high=10.2, low=9.8, close=10.0, volume=1_000_000,
+        )
+        for i in range(30)
+    ]
+    cfg = BacktestConfig(
+        initial_capital=100_000, fee_bps=0, slippage_bps=0, position_pct=0.5,
+        market="crypto", tick_size=0.01, lot_size=0.0, t_plus_one=False,
+    )
+    result = BacktestEngine(cfg).run(BuyAndHold(), BuyAndHold.Params(), candles, "1d")
+    # Flat prices and a 50% position: nothing implausible should be flagged.
+    assert not any("超出正常价格波动" in warning for warning in result.metrics["warnings"])

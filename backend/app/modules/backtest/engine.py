@@ -330,6 +330,16 @@ class BacktestEngine:
             )
         if not trades and not warnings:
             warnings.append("区间内没有产生可执行交易（策略未触发或被规则拦截）。")
+        # Aggregate metrics only compare the first and last equity points, so a
+        # curve that collapses and recovers mid-series looks healthy. Flag any
+        # single bar whose return could not plausibly come from price movement.
+        extreme = _extreme_bar_return(equity_values)
+        if extreme is not None:
+            index, ret = extreme
+            warnings.append(
+                f"第 {index + 1} 根 K 线的权益变动 {ret:+.1f}%，超出正常价格波动范围；"
+                "可能是数据缺口或资金计算错误，请核对后再使用该结果"
+            )
         metrics["blocked_orders"] = blocked
         metrics["warnings"] = warnings
         return BacktestResult(
@@ -365,3 +375,21 @@ class BacktestEngine:
             reason=reason,
         )
         return new_cash, trade
+
+
+# A single bar moving more than this cannot come from price alone on a long-only
+# cash account: the position is at most `position_pct` of equity. 50% leaves room
+# for gap opens on volatile instruments while still catching accounting errors.
+IMPLAUSIBLE_BAR_RETURN = 0.50
+
+
+def _extreme_bar_return(equity: list[float]) -> tuple[int, float] | None:
+    """First bar whose equity change is implausible, as (index, percent)."""
+    for index in range(1, len(equity)):
+        previous = equity[index - 1]
+        if previous <= 0:
+            continue
+        change = (equity[index] - previous) / previous
+        if abs(change) >= IMPLAUSIBLE_BAR_RETURN:
+            return index, change * 100
+    return None
