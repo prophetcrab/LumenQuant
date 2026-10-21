@@ -10,6 +10,7 @@
 | `strategy_load.py` | ❌（进程内） | 9 个策略 × 2 标的 × N 轮的回测耗时分布 |
 | `soak_cn_engine.py` | ❌（进程内） | 跨月/跨年连续运行后的数据不变量 |
 | `verify_calendar.py` | ❌（需外网） | 手工维护的节假日表是否与真实交易所数据一致 |
+| `real_data_e2e.py` | ❌（需外网） | 真实数据下从同步到归档的 10 项端到端验收 |
 
 ## 运行 system_load / cn_load / load_api
 
@@ -60,6 +61,14 @@ python tests/stress/verify_calendar.py --bars 400
 
 退出码非 0 表示日历与真实数据不符，需要更新 `_HOLIDAYS` 或用
 `LQ_CN_EXTRA_HOLIDAYS` 补充。
+
+`real_data_e2e.py` 在临时库上跑完整链路，覆盖：真实同步、日线质量、
+建账户、回测、真实价下单与 T+1 拦截、自动实例执行、风控保护可见、
+权益恒等式、助手市场隔离、归档停止实例。退出码非 0 表示某一步失败。
+
+```bash
+python tests/stress/real_data_e2e.py --code 600036.SH --daily 300
+```
 
 ## 已知的性能边界
 
