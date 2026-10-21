@@ -9,7 +9,6 @@ import { allocationOption, equityOption } from "../../shared/charts";
 import {
   cash,
   cashSigned,
-  compact,
   dateTimeLabel,
   orderStatusLabel,
   orderStatusTone,
@@ -74,7 +73,11 @@ export function DashboardPage() {
           label="账户权益"
           value={data ? cash(data.equity, account.base_currency) : "—"}
           delta={data?.total_return_pct}
-          meta={<span className="muted">净投入 ${compact(data?.net_contributions)}</span>}
+          meta={
+            <span className="muted">
+              净投入 {cash(data?.net_contributions, account.base_currency)}
+            </span>
+          }
         />
         <Stat
           label="可用现金"

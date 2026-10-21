@@ -154,7 +154,15 @@ export function MarketsPage() {
               <Row label="24h 涨跌" value={pct(active.change_24h_pct)} tone={active.change_24h_pct >= 0 ? "up" : "down"} />
               <Row label="24h 最高" value={price(active.high_24h)} />
               <Row label="24h 最低" value={price(active.low_24h)} />
-              <Row label="24h 成交额" value={compact(active.volume_24h)} />
+              {/* The backend sums bar volume, which is a base-asset quantity
+                  (shares or coins), not a notional amount in quote currency.
+                  Labelling it 成交额 told users the number was money. */}
+              <Row
+                label="24h 成交量"
+                value={`${compact(active.volume_24h)} ${
+                  active.market === "cn_stock" ? "股" : active.symbol.replace(/USDT$/, "")
+                }`}
+              />
             </div>
           ) : (
             <Loader />
