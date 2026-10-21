@@ -30,3 +30,34 @@ class BacktestRun(Base):
     started_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, index=True)
     finished_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
     duration_ms: Mapped[float] = mapped_column(Float, default=0.0)
+
+
+class MultiBacktestRun(Base):
+    """A basket backtest: one strategy, several symbols, one combined curve.
+
+    Kept in its own table rather than reusing `BacktestRun` with a comma-joined
+    symbol: the portfolio analysis joins runs by aligned timestamps and expects
+    one instrument per row, so mixing shapes would corrupt it.
+    """
+
+    __tablename__ = "multi_backtest_runs"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
+    strategy: Mapped[str] = mapped_column(String(48), index=True)
+    symbols_json: Mapped[str] = mapped_column(Text, default="[]")
+    timeframe: Mapped[str] = mapped_column(String(8), default="1d")
+    market: Mapped[str] = mapped_column(String(16), default="crypto")
+    params_json: Mapped[str] = mapped_column(Text, default="{}")
+    config_json: Mapped[str] = mapped_column(Text, default="{}")
+    weights_json: Mapped[str] = mapped_column(Text, default="[]")
+    rebalance_bars: Mapped[int] = mapped_column(Integer, default=0)
+    metrics_json: Mapped[str] = mapped_column(Text, default="{}")
+    equity_json: Mapped[str] = mapped_column(Text, default="[]")
+    comparison_json: Mapped[str] = mapped_column(Text, default="[]")
+    components_json: Mapped[str] = mapped_column(Text, default="[]")
+    warnings_json: Mapped[str] = mapped_column(Text, default="[]")
+    initial_capital: Mapped[float] = mapped_column(Float, default=100_000.0)
+    final_equity: Mapped[float] = mapped_column(Float, default=0.0)
+    bars: Mapped[int] = mapped_column(Integer, default=0)
+    started_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, index=True)
+    duration_ms: Mapped[float] = mapped_column(Float, default=0.0)

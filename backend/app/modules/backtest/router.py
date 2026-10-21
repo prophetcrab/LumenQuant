@@ -193,6 +193,7 @@ def multi_symbol(payload: MultiBacktestRequest, request: Request, session: Sessi
     market = build_market(request, session, live=False)
     service = MultiSymbolBacktester(
         market,
+        session=session,
         fee_bps=settings.fee_bps,
         slippage_bps=settings.slippage_bps,
         cn_fees=CnFeeSchedule(
@@ -212,6 +213,37 @@ def multi_symbol(payload: MultiBacktestRequest, request: Request, session: Sessi
         weights=payload.weights,
         rebalance_bars=payload.rebalance_bars,
     )
+
+
+@router.get("/multi")
+def list_multi(
+    request: Request,
+    limit: int = Query(default=30, ge=1, le=200),
+    session: Session = Depends(get_session),
+):
+    from app.api.wiring import build_market
+
+    return MultiSymbolBacktester(
+        build_market(request, session, live=False), session=session
+    ).list_runs(limit=limit)
+
+
+@router.get("/multi/{run_id}")
+def get_multi(run_id: str, request: Request, session: Session = Depends(get_session)):
+    from app.api.wiring import build_market
+
+    return MultiSymbolBacktester(
+        build_market(request, session, live=False), session=session
+    ).get_run(run_id)
+
+
+@router.delete("/multi/{run_id}", status_code=204)
+def delete_multi(run_id: str, request: Request, session: Session = Depends(get_session)):
+    from app.api.wiring import build_market
+
+    MultiSymbolBacktester(
+        build_market(request, session, live=False), session=session
+    ).delete_run(run_id)
 
 
 @router.post("/portfolio")

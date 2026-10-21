@@ -50,7 +50,9 @@ Base URL：`http://127.0.0.1:8000/api`　完整交互式文档：`/docs`
 - `POST /api/backtests/multi` — `{strategy, symbols[], timeframe, bars, params, config, weights?, rebalance_bars?}`
   同一策略跑一篮子标的：资金按权重拆分，各 sleeve 独立回测后合并成一条曲线；
   要求标的同市场、同周期。`rebalance_bars>0` 时每 N 根恢复目标权重
-  （假设份额可分割，不计调仓费用）。
+  （假设份额可分割，不计调仓费用）。运行结果自动保存。
+- `GET /api/backtests/multi?limit=`、`GET /api/backtests/multi/{id}`、`DELETE /api/backtests/multi/{id}`
+  — 多标的回测的历史、完整结果与删除。
 - `POST /api/backtests/portfolio` — `{run_ids[], weights?, initial_capital?}`
   合并已保存回测：对齐权益曲线、计算合并指标、成分贡献、相关性矩阵与分散效果。
   要求周期与市场一致，重叠区间至少 50 根。

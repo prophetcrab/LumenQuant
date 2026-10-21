@@ -199,3 +199,50 @@ def test_rebalancing_preserves_sleeve_attribution(client):
     assert [c["return_pct"] for c in plain["components"]] == pytest.approx(
         [c["return_pct"] for c in rebalanced["components"]]
     )
+
+
+def test_runs_are_persisted_and_listed(client):
+    """A basket run must be retrievable later, like a single-symbol run."""
+    created = run(client).json()
+    assert created["id"]
+    assert created["duration_ms"] > 0
+
+    listing = client.get("/api/backtests/multi").json()
+    match = [item for item in listing if item["id"] == created["id"]]
+    assert match, "run missing from the history list"
+    entry = match[0]
+    assert entry["symbols"] == ["BTCUSDT", "ETHUSDT", "SOLUSDT"]
+    assert entry["weights"] and len(entry["weights"]) == 3
+    assert entry["metrics"]["total_return_pct"] == pytest.approx(
+        created["metrics"]["total_return_pct"], abs=0.01
+    )
+
+
+def test_persisted_run_can_be_reloaded_in_full(client):
+    created = run(client, rebalance_bars=20).json()
+    loaded = client.get(f"/api/backtests/multi/{created['id']}").json()
+    assert loaded["rebalance_bars"] == 20
+    assert loaded["aligned_bars"] == created["aligned_bars"]
+    assert loaded["equity"] == created["equity"]
+    assert loaded["components"] == created["components"]
+    assert loaded["currency"] == created["currency"]
+
+
+def test_persisted_run_can_be_deleted(client):
+    created = run(client).json()
+    assert client.delete(f"/api/backtests/multi/{created['id']}").status_code == 204
+    assert client.get(f"/api/backtests/multi/{created['id']}").status_code == 404
+    remaining = client.get("/api/backtests/multi").json()
+    assert all(item["id"] != created["id"] for item in remaining)
+
+
+def test_unknown_run_is_404(client):
+    assert client.get("/api/backtests/multi/nope").status_code == 404
+    assert client.delete("/api/backtests/multi/nope").status_code == 404
+
+
+def test_failed_run_is_not_persisted(client):
+    """A rejected basket must not leave a stub in the history."""
+    before = len(client.get("/api/backtests/multi").json())
+    assert run(client, symbols=["BTCUSDT", "600036.SH"]).status_code == 422
+    assert len(client.get("/api/backtests/multi").json()) == before

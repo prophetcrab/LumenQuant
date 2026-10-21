@@ -19,8 +19,11 @@ the report says how much was dropped.
 
 from __future__ import annotations
 
+import json
 import math
+import time
 
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.core.errors import ValidationError
@@ -41,11 +44,14 @@ class MultiSymbolBacktester:
         self,
         market: MarketService,
         *,
+        session=None,
         fee_bps: float = 10.0,
         slippage_bps: float = 3.0,
         cn_fees: CnFeeSchedule | None = None,
     ) -> None:
         self.market = market
+        # Optional: tests and one-off analysis can run without persistence.
+        self.session = session
         self.default_fee_bps = fee_bps
         self.default_slippage_bps = slippage_bps
         self.cn_fees = cn_fees or CnFeeSchedule()
@@ -71,6 +77,7 @@ class MultiSymbolBacktester:
         """
         if rebalance_bars < 0:
             raise ValidationError("rebalance_bars 必须为非负数")
+        started = time.perf_counter()
         if timeframe not in SUPPORTED_TIMEFRAMES:
             raise ValidationError(f"unsupported timeframe {timeframe}")
         if bars < 50:
@@ -155,7 +162,7 @@ class MultiSymbolBacktester:
                 }
             )
 
-        return self._assemble(
+        report = self._assemble(
             strategy_key=strategy_key,
             timeframe=timeframe,
             market=market,
@@ -164,6 +171,110 @@ class MultiSymbolBacktester:
             params=parsed.model_dump(),
             rebalance_bars=rebalance_bars,
         )
+        # Measured across the whole basket, not just the merge step.
+        report["duration_ms"] = round((time.perf_counter() - started) * 1000, 2)
+        if self.session is not None:
+            report["id"] = self._persist(report, shares)
+        return report
+
+    # ----------------------------------------------------------- persistence
+    def _persist(self, report: dict, shares: list[float]) -> str:
+        from app.modules.backtest.models import MultiBacktestRun
+
+        row = MultiBacktestRun(
+            strategy=report["strategy"],
+            symbols_json=json.dumps([c["symbol"] for c in report["components"]]),
+            timeframe=report["timeframe"],
+            market=report["market"],
+            params_json=json.dumps(report["params"]),
+            config_json=json.dumps(
+                {
+                    "initial_capital": report["initial_capital"],
+                    "rebalance_bars": report["rebalance_bars"],
+                }
+            ),
+            weights_json=json.dumps([round(s, 6) for s in shares]),
+            rebalance_bars=report["rebalance_bars"],
+            metrics_json=json.dumps(report["metrics"]),
+            equity_json=json.dumps(report["equity"]),
+            comparison_json=json.dumps(report["comparison"]),
+            components_json=json.dumps(report["components"]),
+            warnings_json=json.dumps(report["warnings"]),
+            initial_capital=report["initial_capital"],
+            final_equity=report["equity"][-1]["equity"],
+            bars=report["aligned_bars"],
+            duration_ms=report.get("duration_ms", 0.0),
+        )
+        self.session.add(row)
+        self.session.commit()
+        self.session.refresh(row)
+        return row.id
+
+    def list_runs(self, *, limit: int = 30) -> list[dict]:
+        from app.modules.backtest.models import MultiBacktestRun
+
+        rows = self.session.scalars(
+            select(MultiBacktestRun)
+            .order_by(MultiBacktestRun.started_at.desc())
+            .limit(max(1, min(limit, 200)))
+        ).all()
+        return [
+            {
+                "id": row.id,
+                "strategy": row.strategy,
+                "symbols": json.loads(row.symbols_json),
+                "timeframe": row.timeframe,
+                "market": row.market,
+                "weights": json.loads(row.weights_json),
+                "rebalance_bars": row.rebalance_bars,
+                "initial_capital": row.initial_capital,
+                "final_equity": row.final_equity,
+                "bars": row.bars,
+                "metrics": json.loads(row.metrics_json),
+                "started_at": row.started_at.isoformat() if row.started_at else "",
+                "duration_ms": round(row.duration_ms, 2),
+            }
+            for row in rows
+        ]
+
+    def get_run(self, run_id: str) -> dict:
+        from app.core.errors import NotFoundError
+        from app.modules.backtest.models import MultiBacktestRun
+
+        row = self.session.get(MultiBacktestRun, run_id)
+        if row is None:
+            raise NotFoundError(f"multi backtest {run_id} not found")
+        return {
+            "id": row.id,
+            "strategy": row.strategy,
+            "symbols": json.loads(row.symbols_json),
+            "timeframe": row.timeframe,
+            "market": row.market,
+            "currency": "CNY" if row.market == "cn_stock" else "USDT",
+            "params": json.loads(row.params_json),
+            "config": json.loads(row.config_json),
+            "weights": json.loads(row.weights_json),
+            "rebalance_bars": row.rebalance_bars,
+            "initial_capital": row.initial_capital,
+            "aligned_bars": row.bars,
+            "metrics": json.loads(row.metrics_json),
+            "equity": json.loads(row.equity_json),
+            "comparison": json.loads(row.comparison_json),
+            "components": json.loads(row.components_json),
+            "warnings": json.loads(row.warnings_json),
+            "started_at": row.started_at.isoformat() if row.started_at else "",
+            "duration_ms": round(row.duration_ms, 2),
+        }
+
+    def delete_run(self, run_id: str) -> None:
+        from app.core.errors import NotFoundError
+        from app.modules.backtest.models import MultiBacktestRun
+
+        row = self.session.get(MultiBacktestRun, run_id)
+        if row is None:
+            raise NotFoundError(f"multi backtest {run_id} not found")
+        self.session.delete(row)
+        self.session.commit()
 
     # ------------------------------------------------------------- helpers
     @staticmethod

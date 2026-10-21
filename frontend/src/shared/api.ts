@@ -271,6 +271,22 @@ export type MultiBacktestReport = {
   warnings: string[];
 };
 
+export type MultiBacktestSummary = {
+  id: string;
+  strategy: string;
+  symbols: string[];
+  timeframe: string;
+  market: "crypto" | "cn_stock";
+  weights: number[];
+  rebalance_bars: number;
+  initial_capital: number;
+  final_equity: number;
+  bars: number;
+  metrics: BacktestMetrics;
+  started_at: string;
+  duration_ms: number;
+};
+
 export type PortfolioComponent = {
   run_id: string;
   strategy: string;
@@ -848,6 +864,12 @@ export const api = {
     config: Record<string, unknown>;
   }) => request<BacktestRun>("/backtests", { method: "POST", body: JSON.stringify(body) }),
   deleteBacktest: (id: string) => request<void>(`/backtests/${id}`, { method: "DELETE" }),
+  multiBacktests: (limit = 30) =>
+    request<MultiBacktestSummary[]>(`/backtests/multi${qs({ limit })}`),
+  multiBacktestRun: (id: string) =>
+    request<MultiBacktestReport & { id: string }>(`/backtests/multi/${id}`),
+  deleteMultiBacktest: (id: string) =>
+    request<void>(`/backtests/multi/${id}`, { method: "DELETE" }),
   multiBacktest: (body: {
     strategy: string;
     symbols: string[];

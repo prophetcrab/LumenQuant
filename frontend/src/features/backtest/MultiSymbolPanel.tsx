@@ -1,11 +1,11 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { useMutation, useQuery } from "@tanstack/react-query";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Chart } from "../../shared/echarts";
 import { api } from "../../shared/api";
 import type { MultiBacktestReport, StrategyMeta } from "../../shared/api";
 import { backtestEquityOption } from "../../shared/charts";
 import { cash, pct } from "../../shared/format";
-import { Badge, Card, EmptyState, Field, Stat } from "../../components/ui";
+import { Badge, Card, EmptyState, Field, Loader, Stat } from "../../components/ui";
 import { ButtonField } from "../../components/form";
 import { buildParams, initialParams, type ParamValue } from "../../shared/strategy-params";
 import type { Timeframe } from "../../shared/timeframes";
@@ -31,7 +31,13 @@ export function MultiSymbolPanel({
   onTimeframeChange,
   timeframeOptions,
 }: Props) {
+  const queryClient = useQueryClient();
   const catalog = useQuery({ queryKey: ["strategies"], queryFn: api.strategies });
+  const history = useQuery({
+    queryKey: ["multi-backtests", 20],
+    queryFn: () => api.multiBacktests(20),
+  });
+  const [loaded, setLoaded] = useState<(MultiBacktestReport & { id: string }) | null>(null);
   const symbols = useQuery({ queryKey: ["symbols", "all"], queryFn: () => api.symbols() });
   const [selected, setSelected] = useState<string[]>([]);
   const [weights, setWeights] = useState<Record<string, string>>({});
@@ -90,9 +96,27 @@ export function MultiSymbolPanel({
         rebalance_bars: Math.max(0, Number(rebalance) || 0),
       });
     },
+    onSuccess: (result) => {
+      setLoaded(null);
+      void queryClient.invalidateQueries({ queryKey: ["multi-backtests"] });
+      void result;
+    },
   });
 
-  const report = run.data ?? null;
+  const openRun = useMutation({
+    mutationFn: (id: string) => api.multiBacktestRun(id),
+    onSuccess: (result) => setLoaded(result),
+  });
+
+  const removeRun = useMutation({
+    mutationFn: (id: string) => api.deleteMultiBacktest(id),
+    onSuccess: () => {
+      setLoaded(null);
+      void queryClient.invalidateQueries({ queryKey: ["multi-backtests"] });
+    },
+  });
+
+  const report = (loaded ?? run.data) as MultiBacktestReport | null;
   const currency = report?.currency ?? "USDT";
   const equityOption = useMemo(
     () =>
@@ -282,6 +306,65 @@ export function MultiSymbolPanel({
           />
         </Card>
       )}
+
+      <Card title="多标的回测历史" subtitle="点击载入结果" padded={false}>
+        {history.isLoading ? (
+          <Loader />
+        ) : history.data && history.data.length > 0 ? (
+          <div className="table-wrap" style={{ maxHeight: 320 }}>
+            <table className="table">
+              <thead>
+                <tr>
+                  <th>时间</th>
+                  <th>策略</th>
+                  <th>标的</th>
+                  <th>周期</th>
+                  <th className="numeric">收益</th>
+                  <th className="numeric">回撤</th>
+                  <th className="numeric">再平衡</th>
+                  <th />
+                </tr>
+              </thead>
+              <tbody>
+                {history.data.map((item) => (
+                  <tr
+                    key={item.id}
+                    style={{ cursor: "pointer" }}
+                    onClick={() => openRun.mutate(item.id)}
+                  >
+                    <td className="mono muted">{item.started_at.slice(5, 16).replace("T", " ")}</td>
+                    <td style={{ fontWeight: 600 }}>{item.strategy}</td>
+                    <td className="muted" style={{ maxWidth: 220, overflow: "hidden", textOverflow: "ellipsis" }}>
+                      {item.symbols.join(" / ")}
+                    </td>
+                    <td className="muted">{item.timeframe}</td>
+                    <td className={`numeric ${item.metrics.total_return_pct >= 0 ? "up" : "down"}`}>
+                      {pct(item.metrics.total_return_pct)}
+                    </td>
+                    <td className="numeric muted">{mag(item.metrics.max_drawdown_pct)}</td>
+                    <td className="numeric muted">
+                      {item.rebalance_bars > 0 ? `每 ${item.rebalance_bars} 根` : "不再平衡"}
+                    </td>
+                    <td>
+                      <button
+                        className="button small ghost"
+                        onClick={(event) => {
+                          event.stopPropagation();
+                          removeRun.mutate(item.id);
+                        }}
+                      >
+                        删除
+                      </button>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        ) : (
+          <EmptyState title="暂无记录" text="运行一次多标的回测后会保存到这里。" />
+        )}
+      </Card>
     </div>
   );
 }
