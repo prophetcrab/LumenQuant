@@ -605,3 +605,30 @@ def test_backtest_reports_the_traded_currency(cn_client):
         json={"strategy": "sma_cross", "symbol": "BTCUSDT", "timeframe": "1h", "bars": 100},
     ).json()
     assert crypto["currency"] == "USDT"
+
+
+def test_delete_series_removes_bars_and_reports_the_count(cn_client):
+    symbol = "600036.SH"
+    before = cn_client.get(
+        "/api/data/quality", params={"symbol": symbol, "timeframe": "1d"}
+    ).json()
+    assert before["bars"] > 0
+
+    response = cn_client.request(
+        "DELETE", "/api/data/series", params={"symbol": symbol, "timeframe": "1d"}
+    )
+    assert response.status_code == 200, response.text
+    assert response.json()["deleted"] == before["bars"]
+
+    after = cn_client.get(
+        "/api/data/quality", params={"symbol": symbol, "timeframe": "1d"}
+    ).json()
+    assert after["bars"] == 0
+
+
+def test_delete_series_rejects_a_bad_timeframe(cn_client):
+    response = cn_client.request(
+        "DELETE", "/api/data/series", params={"symbol": "600036.SH", "timeframe": "3m"}
+    )
+    assert response.status_code == 422
+    assert "timeframe" in response.json()["error"]["message"]

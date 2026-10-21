@@ -80,6 +80,7 @@ Base URL：`http://127.0.0.1:8000/api`　完整交互式文档：`/docs`
 - `GET /api/data/quality?symbol=&timeframe=`
 - `GET /api/data/export?symbol=&timeframe=&limit=` → `text/csv`
 - `POST /api/data/import`（multipart：`symbol`, `timeframe`, `replace`, `file`）
+- `DELETE /api/data/series?symbol=&timeframe=` — 删除某标的某周期的全部 K 线，返回实际条数
 
 ## A股
 - `GET /api/cn/rules` — 手数、板块涨跌停、费率、T+1、时段

@@ -2,7 +2,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { api } from "../../shared/api";
 import { timeLabel } from "../../shared/format";
-import { Badge, Card, EmptyState, Field, Loader } from "../../components/ui";
+import { Badge, Card, EmptyState, Field, Loader, Modal } from "../../components/ui";
 import { ButtonField } from "../../components/form";
 import { useToast } from "../../shared/toast";
 
@@ -44,6 +44,27 @@ export function DataPage() {
     queryKey: ["data-quality", symbol, timeframe],
     queryFn: () => api.dataQuality(symbol, timeframe),
     enabled: Boolean(symbol),
+  });
+
+  // Deleting is irreversible; hold the pending target so the dialog can state
+  // exactly which series and how many bars are about to disappear.
+  const [pendingDelete, setPendingDelete] = useState<{
+    symbol: string;
+    timeframe: string;
+    bars: number;
+  } | null>(null);
+
+  const remove = useMutation({
+    mutationFn: (target: { symbol: string; timeframe: string }) =>
+      api.deleteSeries(target.symbol, target.timeframe),
+    onSuccess: (result) => {
+      toast.push(`${result.symbol} ${result.timeframe} 已删除 ${result.deleted} 根 K 线`);
+      setPendingDelete(null);
+      queryClient.invalidateQueries({ queryKey: ["data-coverage"] });
+      queryClient.invalidateQueries({ queryKey: ["data-quality"] });
+      queryClient.invalidateQueries({ queryKey: ["candles"] });
+    },
+    onError: (error: Error) => toast.push(error.message, "error"),
   });
 
   const upload = useMutation({
@@ -187,9 +208,23 @@ export function DataPage() {
                     <td className="mono muted">{timeLabel(item.first_time)}</td>
                     <td className="mono muted">{timeLabel(item.last_time)}</td>
                     <td>
-                      <a className="button small ghost" href={`/api/data/export?symbol=${item.symbol}&timeframe=${item.timeframe}&limit=20000`}>
-                        导出 CSV
-                      </a>
+                      <div className="row" style={{ gap: 6, justifyContent: "flex-end" }}>
+                        <a className="button small ghost" href={`/api/data/export?symbol=${item.symbol}&timeframe=${item.timeframe}&limit=20000`}>
+                          导出 CSV
+                        </a>
+                        <button
+                          className="button small ghost"
+                          onClick={() =>
+                            setPendingDelete({
+                              symbol: item.symbol,
+                              timeframe: item.timeframe,
+                              bars: item.bars,
+                            })
+                          }
+                        >
+                          删除
+                        </button>
+                      </div>
                     </td>
                   </tr>
                 ))}
@@ -200,6 +235,42 @@ export function DataPage() {
           <EmptyState title="暂无数据" text="行情引擎首次启动时会自动生成历史，也可以用 CSV 导入。" />
         )}
       </Card>
+
+      <Modal
+        open={pendingDelete !== null}
+        title="删除 K 线数据"
+        onClose={() => setPendingDelete(null)}
+        footer={
+          <>
+            <button className="button" onClick={() => setPendingDelete(null)}>
+              取消
+            </button>
+            <button
+              className="button danger"
+              disabled={remove.isPending}
+              onClick={() => pendingDelete && remove.mutate(pendingDelete)}
+            >
+              {remove.isPending ? "删除中…" : "确认删除"}
+            </button>
+          </>
+        }
+      >
+        {pendingDelete ? (
+          <div className="stack" style={{ gap: 10, fontSize: 13 }}>
+            <div>
+              将删除{" "}
+              <strong>
+                {pendingDelete.symbol} · {pendingDelete.timeframe}
+              </strong>{" "}
+              的 <strong>{pendingDelete.bars.toLocaleString("en-US")}</strong> 根 K 线。
+            </div>
+            <div className="muted">
+              此操作不可撤销。依赖该数据的回测与自动运行会因缺少历史而失败或信号不足；
+              如果要修复数据，通常应当重新导入覆盖而不是删除。
+            </div>
+          </div>
+        ) : null}
+      </Modal>
     </div>
   );
 }

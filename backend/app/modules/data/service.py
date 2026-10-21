@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import csv
 import io
+import json
 from dataclasses import dataclass
 
 from sqlalchemy import delete, func, insert, select
@@ -265,6 +266,49 @@ class DataService:
             expected = max(0, sum((end - start) // step for start, end in sessions(day)))
             missing += max(0, expected - per_day[day_iso])
         return missing
+
+    def delete_series(self, symbol: str, *, timeframe: str) -> int:
+        """Drop every stored bar for one (symbol, timeframe).
+
+        The only way to fix a bad import was to overwrite it with a good one. When
+        the data is simply wrong (wrong symbol, unwanted period), there was no way
+        to remove it — and a stale series keeps feeding backtests and the A-share
+        daily close (prev_close) that price limits are computed from.
+        """
+        code = symbol.upper().strip()
+        if not code:
+            raise ValidationError("symbol is required")
+        if timeframe not in SUPPORTED_TIMEFRAMES:
+            raise ValidationError(
+                f"timeframe must be one of {', '.join(SUPPORTED_TIMEFRAMES)}"
+            )
+        result = self.session.execute(
+            delete(Candle).where(Candle.symbol == code, Candle.timeframe == timeframe)
+        )
+        removed = int(result.rowcount or 0)
+        if removed:
+            # prev_close and limit bands are derived from the daily series; a
+            # deleted series must not leave the symbol quoting against a bar that
+            # no longer exists.
+            row = self.session.scalar(select(Symbol).where(Symbol.code == code))
+            if row is not None and timeframe == "1d":
+                latest = self.session.scalar(
+                    select(Candle.close)
+                    .where(Candle.symbol == code, Candle.timeframe == "1d")
+                    .order_by(Candle.open_time.desc())
+                    .limit(1)
+                )
+                if latest:
+                    row.prev_close = float(latest)
+            record_audit(
+                self.session,
+                action="data.series_deleted",
+                entity="symbol",
+                entity_id=code,
+                detail=json.dumps({"timeframe": timeframe, "bars": removed}),
+            )
+        self.session.commit()
+        return removed
 
     def coverage(self) -> list[dict]:
         rows = self.session.execute(

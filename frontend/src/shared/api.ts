@@ -882,6 +882,11 @@ export const api = {
       gaps: number;
       expected_step: number;
     }>(`/data/quality${qs({ symbol, timeframe })}`),
+  deleteSeries: (symbol: string, timeframe: string) =>
+    request<{ symbol: string; timeframe: string; deleted: number }>(
+      `/data/series${qs({ symbol, timeframe })}`,
+      { method: "DELETE" },
+    ),
   importCsv: async (symbol: string, file: File, replace: boolean, timeframe = "15m") => {
     const form = new FormData();
     form.set("symbol", symbol);

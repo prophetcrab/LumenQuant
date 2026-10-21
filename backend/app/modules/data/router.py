@@ -58,6 +58,26 @@ def export_csv(
     )
 
 
+@router.delete("/series")
+def delete_series(
+    request: Request,
+    symbol: str,
+    timeframe: str = BASE_TIMEFRAME,
+    session: Session = Depends(get_session),
+):
+    """Delete one symbol's stored bars for a timeframe.
+
+    Destructive and irreversible, so the UI asks for confirmation and shows the
+    bar count that will be removed before calling this.
+    """
+    removed = DataService(session).delete_series(symbol, timeframe=timeframe)
+    cache = getattr(request.app.state, "stats_cache", None)
+    if cache is not None:
+        cache.invalidate("coverage")
+        cache.invalidate(f"quality:{symbol.upper()}:")
+    return {"symbol": symbol.upper(), "timeframe": timeframe, "deleted": removed}
+
+
 @router.post("/import", status_code=201)
 async def import_csv(
     request: Request,
