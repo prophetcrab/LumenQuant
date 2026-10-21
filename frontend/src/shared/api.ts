@@ -260,6 +260,8 @@ export type MultiBacktestReport = {
   params: Record<string, number | string>;
   initial_capital: number;
   aligned_bars: number;
+  rebalance_bars: number;
+  rebalance_count: number;
   start_time: number;
   end_time: number;
   metrics: BacktestMetrics;
@@ -854,6 +856,7 @@ export const api = {
     params: Record<string, unknown>;
     config: Record<string, unknown>;
     weights?: number[];
+    rebalance_bars?: number;
   }) =>
     request<MultiBacktestReport>("/backtests/multi", {
       method: "POST",

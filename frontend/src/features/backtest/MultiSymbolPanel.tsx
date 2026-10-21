@@ -37,6 +37,8 @@ export function MultiSymbolPanel({
   const [weights, setWeights] = useState<Record<string, string>>({});
   const [bars, setBars] = useState("300");
   const [capital, setCapital] = useState("300000");
+  // 0 = let each sleeve compound on its own; >0 = restore target weights.
+  const [rebalance, setRebalance] = useState("0");
   const [params, setParams] = useState<Record<string, ParamValue>>(() =>
     initialParams(meta),
   );
@@ -85,6 +87,7 @@ export function MultiSymbolPanel({
         params: buildParams(meta, params),
         config: { initial_capital: Number(capital) },
         weights: uniform ? undefined : payloadWeights,
+        rebalance_bars: Math.max(0, Number(rebalance) || 0),
       });
     },
   });
@@ -152,6 +155,18 @@ export function MultiSymbolPanel({
           </Field>
           <Field label="组合总资金" hint="按权重拆分到各标的">
             <input className="input num" type="number" value={capital} onChange={(e) => setCapital(e.target.value)} />
+          </Field>
+          <Field
+            label="再平衡周期"
+            hint="每 N 根 K 线恢复目标权重；0 表示不再平衡"
+          >
+            <input
+              className="input num"
+              type="number"
+              min={0}
+              value={rebalance}
+              onChange={(e) => setRebalance(e.target.value)}
+            />
           </Field>
           <Field label="已选" hint={`最多 ${MAX_SYMBOLS} 个，需同一市场`}>
             <div className="row" style={{ gap: 8, height: 36, flexWrap: "wrap" }}>
@@ -331,7 +346,12 @@ function MultiResult({
 
       <Card
         title="组合权益曲线"
-        subtitle={`${report.strategy} · ${report.aligned_bars} 根对齐区间 · 虚线为等权买入持有`}
+        subtitle={
+          `${report.strategy} · ${report.aligned_bars} 根对齐区间 · 虚线为等权买入持有` +
+          (report.rebalance_bars > 0
+            ? ` · 每 ${report.rebalance_bars} 根再平衡（共 ${report.rebalance_count} 次）`
+            : " · 不再平衡")
+        }
       >
         {equityOption ? <Chart option={equityOption} height={300} /> : null}
       </Card>

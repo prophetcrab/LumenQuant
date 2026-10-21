@@ -44,6 +44,9 @@ class MultiBacktestRequest(BaseModel):
     weights: list[float] | None = Field(
         default=None, description="与 symbols 一一对应；省略则等权"
     )
+    rebalance_bars: int = Field(
+        default=0, ge=0, le=2000, description="每 N 根 K 线恢复到目标权重；0 表示不再平衡"
+    )
 
 
 class PortfolioRequest(BaseModel):

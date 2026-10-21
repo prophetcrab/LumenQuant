@@ -210,6 +210,7 @@ def multi_symbol(payload: MultiBacktestRequest, request: Request, session: Sessi
         params=payload.params,
         config=payload.config,
         weights=payload.weights,
+        rebalance_bars=payload.rebalance_bars,
     )
 
 

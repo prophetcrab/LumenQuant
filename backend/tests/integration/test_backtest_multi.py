@@ -154,3 +154,48 @@ def test_a_share_basket_is_supported(tmp_path):
         )
         assert bad.status_code == 422
     db.dispose()
+
+
+def test_rebalancing_changes_the_curve(client):
+    """Periodic rebalancing must actually change risk and return.
+
+    Without it the sleeves compound independently, so whichever asset ran furthest
+    dominates the basket by the end. Snapping back to target weights every N bars
+    trims the winner and tops up the laggard — lower return, lower drawdown.
+    """
+    base = run(client).json()
+    assert base["rebalance_bars"] == 0
+    assert base["rebalance_count"] == 0
+
+    rebalanced = run(client, rebalance_bars=20).json()
+    assert rebalanced["rebalance_bars"] == 20
+    assert rebalanced["rebalance_count"] == (rebalanced["aligned_bars"] - 1) // 20
+    assert rebalanced["equity"][-1]["equity"] != pytest.approx(
+        base["equity"][-1]["equity"], rel=1e-6
+    )
+    # Same starting capital and same sleeves: only the mix differs.
+    assert rebalanced["equity"][0]["equity"] == pytest.approx(
+        base["equity"][0]["equity"], abs=1
+    )
+
+
+def test_rebalance_schedule_is_reported(client):
+    body = run(client, rebalance_bars=50).json()
+    expected = (body["aligned_bars"] - 1) // 50
+    assert body["rebalance_count"] == expected
+
+
+def test_negative_rebalance_is_rejected(client):
+    response = run(client, rebalance_bars=-1)
+    assert response.status_code == 422
+
+
+def test_rebalancing_preserves_sleeve_attribution(client):
+    """Component returns describe the sleeves, not the rebalanced mix."""
+    plain = run(client).json()
+    rebalanced = run(client, rebalance_bars=20).json()
+    # Per-symbol performance is a property of the strategy on that symbol, so it
+    # must be identical whether or not the portfolio rebalances.
+    assert [c["return_pct"] for c in plain["components"]] == pytest.approx(
+        [c["return_pct"] for c in rebalanced["components"]]
+    )
