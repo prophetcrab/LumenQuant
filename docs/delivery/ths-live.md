@@ -36,8 +36,11 @@
 ## 配置
 
 ```env
-# 开启实盘总开关
+# 开启实盘总开关（只允许手动下单）
 LQ_LIVE_TRADING_ENABLED=true
+
+# 允许策略实例自动下实盘单（默认 false，需在此基础上再显式开启）
+LQ_LIVE_AUTO_TRADING_ENABLED=false
 
 # 指向已授权的同花顺下单网关
 LQ_THS_GATEWAY_URL=http://127.0.0.1:9001
@@ -114,13 +117,24 @@ curl "http://127.0.0.1:8000/api/brokers/ths/reconcile?account_id=<id>" | jq
 
 ## 三重安全条件
 
-实盘下单必须同时满足：
+**手动**实盘下单必须同时满足：
 
 1. `LQ_LIVE_TRADING_ENABLED=true`（服务端总开关）；
 2. 网关已配置且 `ready`；
 3. 请求头 `X-Live-Confirm: true`（防误触）。
 
 任一不满足即 403/409，且原因写在错误消息里。
+
+**自动运行**（策略实例）走的是服务层，不经过 HTTP 请求头，因此另有独立开关：
+
+4. `LQ_LIVE_AUTO_TRADING_ENABLED=true`
+
+只开 `LQ_LIVE_TRADING_ENABLED` 时，实盘账户无法创建自动运行实例（403）。
+这个开关**每次调度都重新检查**，关闭后已存在的实例立即停止下单，
+日志记录一次 `live_auto_disabled` 告警。
+
+> 止损等保护性离场不受该开关限制：关闭自动开仓不应该让已有实盘持仓失去止损保护。
+> 这是刻意的——禁止止损比允许它更危险。
 
 ## 常见问题
 

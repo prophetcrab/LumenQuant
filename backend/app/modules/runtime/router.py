@@ -18,8 +18,13 @@ def build_service(request: Request, session: Session) -> RuntimeService:
     accounts = build_accounts(request, session)
     market = build_market(request, session)
     trading = build_trading(request, session, accounts=accounts, market=market, with_brokers=True)
+    settings = request.app.state.settings
     return RuntimeService(
-        session, accounts_service=accounts, market=market, trading=trading
+        session,
+        accounts_service=accounts,
+        market=market,
+        trading=trading,
+        live_auto_trading_enabled=settings.live_auto_trading_enabled,
     )
 
 

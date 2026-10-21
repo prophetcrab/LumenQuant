@@ -15,7 +15,13 @@ from sqlalchemy import delete, select
 from sqlalchemy.orm import Session
 
 from app.core.audit import record_audit
-from app.core.errors import AppError, ConflictError, NotFoundError, ValidationError
+from app.core.errors import (
+    AppError,
+    ConflictError,
+    ForbiddenError,
+    NotFoundError,
+    ValidationError,
+)
 from app.core.timeutil import ensure_utc, iso, utcnow
 from app.modules.market.service import SUPPORTED_TIMEFRAMES, MarketService
 from app.modules.runtime.models import RuntimeLog, StrategyInstance, new_id
@@ -76,12 +82,16 @@ class RuntimeService:
         market: MarketService,
         trading: TradingService,
         execution_price=None,
+        live_auto_trading_enabled: bool = False,
     ) -> None:
         self.session = session
         self.accounts = accounts_service
         self.market = market
         self.trading = trading
         self.execution_price = execution_price
+        # Automated orders on a live account need their own opt-in; manual live
+        # orders are gated separately by the X-Live-Confirm header.
+        self.live_auto_trading_enabled = live_auto_trading_enabled
 
     # ------------------------------------------------------------------ read
     def _require(self, instance_id: str) -> StrategyInstance:
@@ -181,6 +191,16 @@ class RuntimeService:
         if account.market != symbol_view.market:
             raise ValidationError(
                 f"{symbol_view.code} 属于 {symbol_view.market} 市场，与账户市场 {account.market} 不一致"
+            )
+        # An automated instance on a live account places real orders with no human
+        # in the loop, so it must not be creatable without the same explicit
+        # opt-in that a manual live order requires. Before this check, a live
+        # account plus a started instance was enough to send real orders — the
+        # X-Live-Confirm header only guarded the manual endpoint.
+        if account.kind == "live" and not self.live_auto_trading_enabled:
+            raise ForbiddenError(
+                "实盘账户的自动运行需要 LQ_LIVE_AUTO_TRADING_ENABLED=true；"
+                "仅开启 LQ_LIVE_TRADING_ENABLED 只允许手动下单"
             )
         rules = parse_rules(
             stop_loss_pct=stop_loss_pct,
@@ -295,6 +315,13 @@ class RuntimeService:
         """Evaluate the latest closed bar once; returns a short outcome string."""
         strategy = get(row.strategy_key)
         params = strategy.validate_params(json.loads(row.params_json))
+        # Re-check the live opt-in on every evaluation, not only at creation.
+        # Flipping LQ_LIVE_AUTO_TRADING_ENABLED off must take effect immediately;
+        # an instance created while it was on would otherwise keep sending real
+        # orders after the operator believed they had disabled automation.
+        balance = self._live_guard(row)
+        if balance is not None:
+            return balance
         # Never act on an in-progress candle: only closed bars drive live signals.
         candles = self.market.candles(
             row.symbol, timeframe=row.timeframe, limit=600, closed_only=True
@@ -352,6 +379,10 @@ class RuntimeService:
         """
         outcomes: dict[str, str] = {}
         for row in self.running_instances():
+            # Deliberately NOT gated on live_auto_trading_enabled: turning off new
+            # automated entries must not also disable protective exits. Blocking a
+            # stop would leave a real position unprotected, which is strictly worse
+            # than the exposure the operator was trying to avoid.
             rules = StopRules(
                 stop_loss_pct=row.stop_loss_pct,
                 take_profit_pct=row.take_profit_pct,
@@ -421,6 +452,22 @@ class RuntimeService:
                 Position.account_id == account_id, Position.symbol == symbol.upper()
             )
         )
+
+    def _live_guard(self, row: StrategyInstance) -> str | None:
+        """Block automated orders on a live account when the opt-in is off.
+
+        Returns the outcome string to report, or None when trading may proceed.
+        Logged once per dedupe window rather than every tick.
+        """
+        account = self.accounts.require(row.account_id)
+        if account.kind != "live" or self.live_auto_trading_enabled:
+            return None
+        message = (
+            "实盘自动运行已关闭（LQ_LIVE_AUTO_TRADING_ENABLED=false），跳过执行"
+        )
+        self._log(row.id, "warn", "live_auto_disabled", message, bar_time=row.last_bar_time)
+        self.session.commit()
+        return "live_auto_disabled"
 
     def _place_entry(self, row: StrategyInstance, price: float) -> None:
         account = self.accounts.get(row.account_id)

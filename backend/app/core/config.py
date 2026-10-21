@@ -87,6 +87,11 @@ class Settings(BaseSettings):
 
     # Safety switches.
     live_trading_enabled: bool = False
+    # Separate opt-in for *automated* live orders. live_trading_enabled alone only
+    # permits manual orders (which also require the X-Live-Confirm header). An
+    # auto-running strategy places orders with nobody watching, so enabling it is
+    # a materially different decision and must be made explicitly.
+    live_auto_trading_enabled: bool = False
     auth_enabled: bool = False
     auth_token: str = ""
     rate_limit_per_minute: int = 600

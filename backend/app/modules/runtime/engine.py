@@ -86,7 +86,11 @@ class StrategyRuntimeEngine:
                 live_market=self.market_engine,
             )
             service = RuntimeService(
-                session, accounts_service=accounts, market=market, trading=trading
+                session,
+                accounts_service=accounts,
+                market=market,
+                trading=trading,
+                live_auto_trading_enabled=self.settings.live_auto_trading_enabled,
             )
             results: dict[str, str] = {}
             # Protective exits run first: a stop must fire even when no new bar
