@@ -15,7 +15,7 @@
 
 ```bash
 cd frontend
-npm test          # vitest run，54 项
+npm test          # vitest run，58 项
 npx tsc --noEmit  # 含测试文件
 npx vite build
 ```
@@ -31,11 +31,11 @@ npx vite build
 | 后端单元 | 235 |
 | 后端集成 | 124 |
 | 后端系统（端到端） | 3 |
-| 前端组件/单元 | 48 |
+| 前端组件/单元 | 58 |
 
 完整回归：
 
 ```bash
-cd backend && ../.venv/Scripts/python.exe -m pytest -q   # 378 passed
+cd backend && ../.venv/Scripts/python.exe -m pytest -q   # 380 passed
 cd frontend && npm test && npx tsc --noEmit && npx vite build
 ```

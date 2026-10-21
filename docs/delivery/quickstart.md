@@ -79,14 +79,14 @@ powershell -ExecutionPolicy Bypass -File .\scripts\run-tests.ps1
 
 ```powershell
 cd D:\LumenQuant\backend
-..\.venv\Scripts\python.exe -m pytest -q             # 378 项
+..\.venv\Scripts\python.exe -m pytest -q             # 380 项
 ```
 
 前端：
 
 ```powershell
 cd D:\LumenQuant\frontend
-npm test                # Vitest，54 项
+npm test                # Vitest，58 项
 npx tsc --noEmit        # 含测试文件
 npx vite build
 ```
