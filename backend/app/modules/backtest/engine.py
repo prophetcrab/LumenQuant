@@ -16,7 +16,7 @@ from __future__ import annotations
 
 import math
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Any
 
 from app.core.money import round_money, round_price, round_qty
@@ -103,6 +103,16 @@ class BacktestEngine:
     def _day(self, ts_ms: int) -> str:
         return datetime.fromtimestamp(ts_ms / 1000, timezone.utc).strftime("%Y-%m-%d")
 
+    def _next_day(self, ts_ms: int) -> str:
+        """Day on which A-share sale proceeds become spendable.
+
+        Offsets by one calendar day; bars only exist on trading days, so the next
+        bar's key is always greater and the release happens on its own schedule
+        without needing the exchange calendar here.
+        """
+        day = datetime.fromtimestamp(ts_ms / 1000, timezone.utc) + timedelta(days=1)
+        return day.strftime("%Y-%m-%d")
+
     # ------------------------------------------------------------------- run
     def run(
         self,
@@ -116,6 +126,10 @@ class BacktestEngine:
         state = strategy.prepare(candles, params)
         cfg = self.config
         cash = cfg.initial_capital
+        # A-share proceeds settle T+1: sale money is in the ledger but cannot fund
+        # a new purchase until the next trading day. `settling` holds
+        # (release_day, amount) pairs; `spendable` is what entries may use.
+        settling: list[tuple[str, float]] = []
         position: _OpenPosition | None = None
         pending: str | None = None
         trades: list[TradeRecord] = []
@@ -147,6 +161,15 @@ class BacktestEngine:
             return round_price(price * (1 - cfg.slippage_bps / 10_000))
 
         for index, candle in enumerate(candles):
+            today_key = self._day(candle.time)
+            if settling and cfg.t_plus_one:
+                still_held = []
+                for release_day, amount in settling:
+                    if release_day <= today_key:
+                        cash = round_money(cash + amount)
+                    else:
+                        still_held.append((release_day, amount))
+                settling = still_held
             prev_bar = candles[index - 1] if index > 0 else candle
             band = self._band(prev_bar.close)
             at_limit_up = band is not None and candle.open >= band.up - cfg.tick_size / 2
@@ -158,7 +181,14 @@ class BacktestEngine:
                     blocked["limit_up"] += 1  # cannot buy a locked limit-up open
                 else:
                     price = buy_price(candle.open)
-                    budget = cash * cfg.position_pct
+                    spendable = round_money(
+                        cash - sum(amount for _day, amount in settling)
+                    )
+                    if spendable <= 0:
+                        blocked["insufficient_capital"] += 1
+                        pending = None
+                        continue
+                    budget = spendable * cfg.position_pct
                     # Reserve the fee (which may be a fixed minimum) before sizing.
                     gross = budget / price
                     gross = (budget - self._fee("buy", gross * price)) / price
@@ -190,11 +220,17 @@ class BacktestEngine:
                 elif cfg.t_plus_one and position.entry_day == self._day(candle.time):
                     blocked["t_plus_one"] += 1  # same-day sell not allowed
                 else:
+                    proceeds_before = cash
                     cash, trade = self._close(
                         position, sell_price(candle.open), candle.time, cash, "signal"
                     )
                     trades.append(trade)
                     position = None
+                    if cfg.t_plus_one:
+                        # Park the proceeds until the next trading day.
+                        settled = round_money(cash - proceeds_before)
+                        cash = proceeds_before
+                        settling.append((self._next_day(candle.time), settled))
             pending = None
 
             # 2) Intrabar protective exits (fixed stop, trailing stop, target).
@@ -215,6 +251,7 @@ class BacktestEngine:
                 else:
                     position.peak_price = decision.new_peak
                     if decision.triggered:
+                        proceeds_before = cash
                         cash, trade = self._close(
                             position, sell_price(decision.exit_price), candle.time, cash,
                             decision.reason,
@@ -222,6 +259,10 @@ class BacktestEngine:
                         trades.append(trade)
                         position = None
                         pending = None
+                        if cfg.t_plus_one:
+                            settled = round_money(cash - proceeds_before)
+                            cash = proceeds_before
+                            settling.append((self._next_day(candle.time), settled))
 
             # 3) Mark to market and collect the new signal.
             equity = cash + (position.quantity * candle.close if position else 0.0)

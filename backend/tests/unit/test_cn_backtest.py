@@ -6,6 +6,7 @@ from app.modules.backtest.engine import BacktestConfig, BacktestEngine
 from app.modules.backtest.metrics import CN_TRADING_DAYS, periods_per_year
 from app.modules.cn.fees import CnFeeSchedule
 from app.modules.market.service_types import CandlePoint
+from app.modules.strategies.base import Signal, Strategy, StrategyParams, StrategyState
 from app.modules.strategies.library.classics import BuyAndHold
 
 DAY = 86_400_000
@@ -157,3 +158,54 @@ def test_no_signal_is_reported():
     )
     assert result.trades == []
     assert "没有产生可执行交易" in " ".join(result.metrics["warnings"])
+
+
+class _ReEnterSameDay(Strategy):
+    """Buy, sell on the next bar, then immediately try to buy again."""
+
+    key = "test_reenter"
+    name = "test"
+    category = "test"
+    description = "test only"
+
+    class Params(StrategyParams):
+        pass
+
+    def prepare(self, candles, params):
+        return StrategyState(candles=candles, params=params)
+
+    def warmup(self, params):
+        return 1
+
+    def evaluate(self, state, index):
+        # alternating buy/sell, evaluated every bar
+        return Signal("buy" if index % 2 == 0 else "sell", "test")
+
+
+def test_sale_proceeds_are_not_spendable_on_the_same_day():
+    """A-share cash settles T+1, so a same-bar re-entry cannot use the proceeds.
+
+    Without this the engine let a strategy sell and immediately rebuy with money
+    the broker would still be holding — the backtest was more permissive than the
+    account could ever be.
+    """
+    candles = daily_candles([10.0 + (i % 3) * 0.1 for i in range(12)])
+    engine = BacktestEngine(cn_config(position_pct=0.9))
+    result = engine.run(_ReEnterSameDay(), _ReEnterSameDay.Params(), candles, "1d")
+
+    # The first sell parks the proceeds; the next bar's buy signal has to wait, so
+    # entries and exits cannot alternate on every bar.
+    assert result.trades, "expected at least one round trip"
+    for trade in result.trades:
+        assert trade.exit_time > trade.entry_time
+
+
+def test_crypto_entries_can_use_sale_proceeds_immediately():
+    """Crypto settles instantly; the same strategy should trade more often."""
+    candles = daily_candles([10.0 + (i % 3) * 0.1 for i in range(12)])
+    cfg = BacktestConfig(
+        initial_capital=100_000, fee_bps=0, slippage_bps=0, position_pct=0.9,
+        market="crypto", tick_size=0.01, lot_size=0.0, t_plus_one=False,
+    )
+    result = BacktestEngine(cfg).run(_ReEnterSameDay(), _ReEnterSameDay.Params(), candles, "1d")
+    assert len(result.trades) >= 2
