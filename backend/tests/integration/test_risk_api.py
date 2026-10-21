@@ -78,3 +78,76 @@ def test_daily_loss_trips_and_blocks_orders(risk_client):
         },
     )
     assert allowed.status_code == 201
+
+
+def test_risk_overview_aggregates_everything(risk_client):
+    account = risk_client.post(
+        "/api/accounts", json={"name": "风控中心", "initial_balance": 300_000}
+    ).json()
+    risk_client.post(
+        "/api/trading/orders",
+        json={
+            "account_id": account["id"],
+            "symbol": "BTCUSDT",
+            "side": "buy",
+            "order_type": "market",
+            "quantity": 0.5,
+        },
+    )
+    response = risk_client.get(
+        "/api/risk/overview", params={"account_id": account["id"]}
+    )
+    assert response.status_code == 200, response.text
+    body = response.json()
+
+    assert body["account"]["name"] == "风控中心"
+    assert body["account"]["base_currency"] == "USDT"
+    assert body["state"]["breaker_active"] is False
+    assert body["limits"]["max_daily_loss_pct"] == 0.05
+    assert body["exposure"]["position_count"] == 1
+    assert body["exposure"]["exposure_pct"] > 0
+    assert body["exposure"]["largest_position_pct"] > 0
+    assert len(body["positions"]) == 1
+    assert body["positions"][0]["symbol"] == "BTCUSDT"
+    assert isinstance(body["instances"], list)
+    assert isinstance(body["warnings"], list)
+
+
+def test_risk_overview_warns_about_unprotected_instances(risk_client):
+    account = risk_client.post(
+        "/api/accounts", json={"name": "无保护账户", "initial_balance": 200_000}
+    ).json()
+    created = risk_client.post(
+        "/api/runtime/instances",
+        json={
+            "account_id": account["id"],
+            "strategy_key": "sma_cross",
+            "symbol": "BTCUSDT",
+            "timeframe": "1h",
+            "params": {},
+            "position_pct": 0.2,
+            "max_order_notional": 20_000,
+            "start": True,
+        },
+    )
+    assert created.status_code == 201, created.text
+
+    body = risk_client.get(
+        "/api/risk/overview", params={"account_id": account["id"]}
+    ).json()
+    instance = body["instances"][0]
+    assert instance["protected"] is False
+    assert any("未设置任何止损" in warning for warning in body["warnings"])
+
+    # Now set a stop and confirm the warning clears.
+    patched = risk_client.patch(
+        f"/api/runtime/instances/{instance['id']}", json={"stop_loss_pct": 3}
+    )
+    assert patched.status_code == 200
+    assert patched.json()["stop_loss_pct"] == pytest.approx(0.03)
+
+    body = risk_client.get(
+        "/api/risk/overview", params={"account_id": account["id"]}
+    ).json()
+    assert body["instances"][0]["protected"] is True
+    assert not body["warnings"]

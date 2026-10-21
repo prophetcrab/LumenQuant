@@ -32,6 +32,7 @@ const NAV: { group: string; items: NavItem[] }[] = [
     items: [
       { to: "/strategies", label: "策略库", icon: <Icon path="M9 3h6v4H9V3Zm-5 7h6v4H4v-4Zm10 0h6v4h-6v-4ZM9 17h6v4H9v-4ZM7 7v3m10 0V7M7 14v3m10 0v-3" /> },
       { to: "/backtest", label: "回测", icon: <Icon path="M4 20V10m5 10V4m5 16v-7m5 7V7" /> },
+      { to: "/risk", label: "风控", icon: <Icon path="M12 3l8 4v5c0 5-3.5 8-8 9-4.5-1-8-4-8-9V7l8-4Z" /> },
       { to: "/portfolio", label: "组合", icon: <Icon path="M12 3v18M5 8h14M5 16h14M8 5l-3 3 3 3M16 13l3 3-3 3" /> },
     ],
   },
@@ -54,6 +55,7 @@ const TITLES: Record<string, { title: string; subtitle: string }> = {
   "/runtime": { title: "自动运行", subtitle: "策略实例调度、自动下单与运行日志" },
   "/strategies": { title: "策略库", subtitle: "经典策略模板与参数调试" },
   "/backtest": { title: "回测", subtitle: "事件驱动回测与绩效分析" },
+  "/risk": { title: "风控", subtitle: "熔断状态、下单限额、持仓与实例保护" },
   "/portfolio": { title: "组合", subtitle: "权益曲线、回撤与风险敞口" },
   "/accounts": { title: "账户", subtitle: "资金、账本与账户设置" },
   "/assistant": { title: "AI 助手", subtitle: "用自然语言查询账户与策略" },

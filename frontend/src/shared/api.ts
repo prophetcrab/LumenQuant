@@ -389,6 +389,46 @@ export type RiskState = {
   halt_kind: "" | "daily" | "drawdown";
 };
 
+export type RiskOverview = {
+  account: { id: string; name: string; market: string; base_currency: string; kind: string };
+  state: RiskState;
+  limits: RiskLimits;
+  exposure: {
+    equity: number;
+    cash: number;
+    available_cash: number;
+    reserved_cash: number;
+    positions_value: number;
+    exposure_pct: number;
+    position_count: number;
+    largest_position_pct: number;
+  };
+  positions: {
+    symbol: string;
+    quantity: number;
+    available_quantity: number;
+    avg_price: number;
+    market_price: number;
+    market_value: number;
+    unrealized_pnl: number;
+    unrealized_pct: number;
+  }[];
+  instances: {
+    id: string;
+    strategy: string;
+    symbol: string;
+    running: boolean;
+    stop_loss_pct: number;
+    take_profit_pct: number;
+    trailing_stop_pct: number;
+    peak_price: number;
+    executions: number;
+    last_error: string;
+    protected: boolean;
+  }[];
+  warnings: string[];
+};
+
 export type BrokerStatus = {
   live_trading_enabled: boolean;
   broker: string;
@@ -762,6 +802,8 @@ export const api = {
   riskLimits: () => request<RiskLimits>("/risk/limits"),
   riskState: (accountId: string) =>
     request<RiskState>(`/risk/state${qs({ account_id: accountId })}`),
+  riskOverview: (accountId: string) =>
+    request<RiskOverview>(`/risk/overview${qs({ account_id: accountId })}`),
   resetRisk: (accountId: string) =>
     request<RiskState>(`/risk/reset${qs({ account_id: accountId })}`, { method: "POST" }),
   brokerStatus: () => request<BrokerStatus>("/brokers/status"),
