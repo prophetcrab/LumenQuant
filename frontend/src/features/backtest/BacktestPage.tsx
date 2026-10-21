@@ -13,6 +13,7 @@ import { WalkForwardPanel } from "./WalkForwardPanel";
 import { PortfolioPanel } from "./PortfolioPanel";
 import { Segmented } from "../../components/ui";
 import { buildParams, initialParams, type ParamValue } from "../../shared/strategy-params";
+import { parseStrategyHandoff } from "../../shared/handoff";
 
 const TIMEFRAMES = ["15m", "30m", "1h", "4h", "1d"] as const;
 
@@ -24,33 +25,11 @@ export function BacktestPage() {
   const [searchParams, setSearchParams] = useSearchParams();
   // Read the handoff once, before any state is initialised, so the page opens
   // directly on the strategy and parameters chosen in the strategy library.
-  const handoff = useRef(
-    (() => {
-      const incoming = searchParams.get("strategy");
-      if (!incoming) return null;
-      let parsed: Record<string, ParamValue> = {};
-      try {
-        const raw = searchParams.get("params");
-        if (raw) parsed = JSON.parse(raw) as Record<string, ParamValue>;
-      } catch {
-        parsed = {};
-      }
-      const tf = searchParams.get("timeframe");
-      return {
-        strategy: incoming,
-        symbol: searchParams.get("symbol") ?? undefined,
-        timeframe:
-          tf && (TIMEFRAMES as readonly string[]).includes(tf)
-            ? (tf as (typeof TIMEFRAMES)[number])
-            : undefined,
-        params: parsed,
-      };
-    })(),
-  );
+  const handoff = useRef(parseStrategyHandoff(searchParams, TIMEFRAMES));
   const [strategy, setStrategy] = useState(handoff.current?.strategy ?? "sma_cross");
   const [symbol, setSymbol] = useState(handoff.current?.symbol ?? "BTCUSDT");
   const [timeframe, setTimeframe] = useState<(typeof TIMEFRAMES)[number]>(
-    handoff.current?.timeframe ?? "1h",
+    (handoff.current?.timeframe as (typeof TIMEFRAMES)[number] | undefined) ?? "1h",
   );
   const [bars, setBars] = useState("1500");
   const [capital, setCapital] = useState("100000");

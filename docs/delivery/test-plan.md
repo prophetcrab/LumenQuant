@@ -9,3 +9,16 @@
 | 前端检查 | tsc + vite build + 浏览器截图 | 2K 布局与交互 | 构建零错误，无溢出/遮挡 |
 
 每次迭代执行模块 + 集成；R05/R10/R15/R19/R20 追加系统与压力测试记录。
+
+
+## 前端测试
+
+```bash
+cd frontend
+npm test          # vitest run，37 项
+npx tsc --noEmit  # 含测试文件
+npx vite build
+```
+
+覆盖：策略参数类型转换、交接解析、金额/百分比格式化、回测页在 StrictMode 下的
+参数预填与重置行为。图表与真实渲染仍由人工截图核对。
