@@ -129,7 +129,11 @@ export function Layout({ children }: { children: ReactNode }) {
               >
                 {accounts.map((item) => (
                   <option key={item.id} value={item.id}>
-                    {item.name} · {item.kind === "paper" ? "模拟" : "实盘"}
+                    {/* Market matters: currency, trading rules and the available
+                        symbols all change with it, and two accounts can otherwise
+                        differ only by a name the user chose. */}
+                    {item.name} · {item.kind === "paper" ? "模拟" : "实盘"} ·{" "}
+                    {item.market === "cn_stock" ? "A股" : "加密"}
                   </option>
                 ))}
               </select>

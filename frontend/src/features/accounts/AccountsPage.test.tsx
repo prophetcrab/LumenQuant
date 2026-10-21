@@ -11,6 +11,21 @@ const apiMock = vi.hoisted(() => ({
   withdraw: vi.fn(),
 }));
 
+const secondAccount: Account = {
+  id: "acc-2",
+  name: "A股账户",
+  kind: "paper",
+  market: "cn_stock",
+  broker: "paper",
+  base_currency: "CNY",
+  initial_balance: 500_000,
+  leverage: 1,
+  status: "active",
+  cash_balance: 500_000,
+  created_at: "2026-10-21T00:00:00Z",
+  updated_at: "2026-10-21T00:00:00Z",
+};
+
 const account: Account = {
   id: "acc-1",
   name: "归档测试",
@@ -28,11 +43,13 @@ const account: Account = {
 
 vi.mock("../../shared/api", () => ({ api: apiMock }));
 vi.mock("../../shared/toast", () => ({ useToast: () => ({ push: vi.fn() }) }));
+let currentAccounts: Account[] = [account];
+
 vi.mock("../../shared/account-context", () => ({
   useAccount: () => ({
-    accounts: [account],
-    account,
-    accountId: account.id,
+    accounts: currentAccounts,
+    account: currentAccounts[0],
+    accountId: currentAccounts[0]?.id,
     setAccountId: vi.fn(),
     refresh: async () => undefined,
   }),
@@ -48,6 +65,23 @@ function renderPage() {
     </QueryClientProvider>,
   );
 }
+
+describe("AccountsPage multi-currency totals", () => {
+  it("totals each currency separately instead of summing them", async () => {
+    // Adding CNY to USDT has no meaning without a rate; the page must not invent
+    // one, and must not show a single blended number.
+    currentAccounts = [account, secondAccount];
+    apiMock.ledger.mockResolvedValue([]);
+    renderPage();
+
+    await waitFor(() => expect(screen.getByText("合计")).toBeTruthy());
+    const summary = document.body.textContent ?? "";
+    // Two groups, each with its own symbol: one CNY total, one USDT total.
+    expect(summary).toContain("¥500,000.00");
+    expect(summary).toContain("$100,000.00");
+    currentAccounts = [account];
+  });
+});
 
 describe("AccountsPage archive flow", () => {
   it("warns that archiving stops instances before doing it", async () => {

@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { api } from "../../shared/api";
 import { useAccount } from "../../shared/account-context";
@@ -16,6 +16,23 @@ export function AccountsPage() {
   const [fundOpen, setFundOpen] = useState<"deposit" | "withdraw" | null>(null);
   const [amount, setAmount] = useState("10000");
   const [note, setNote] = useState("");
+
+  // Group by currency instead of converting: there is no rate in the system, and
+  // a made-up rate would silently misstate the user's total.
+  const currencyTotals = useMemo(() => {
+    const totals = new Map<string, { currency: string; total: number; count: number }>();
+    for (const item of accounts) {
+      const entry = totals.get(item.base_currency) ?? {
+        currency: item.base_currency,
+        total: 0,
+        count: 0,
+      };
+      entry.total += item.cash_balance;
+      entry.count += 1;
+      totals.set(item.base_currency, entry);
+    }
+    return [...totals.values()].sort((a, b) => b.total - a.total);
+  }, [accounts]);
 
   const ledger = useQuery({
     queryKey: ["ledger", accountId],
@@ -107,6 +124,29 @@ export function AccountsPage() {
           </Card>
 
           <Card title="账户列表" subtitle="切换活跃账户" padded={false}>
+            <div
+              className="row"
+              style={{
+                gap: 16,
+                padding: "10px 18px",
+                borderBottom: "1px solid var(--border)",
+                fontSize: 12.5,
+                flexWrap: "wrap",
+              }}
+            >
+              <span className="helper">合计</span>
+              {/* Currencies are never summed together: adding CNY to USDT with no
+                  exchange rate would produce a meaningless number. */}
+              {currencyTotals.map((entry) => (
+                <span key={entry.currency} className="num" style={{ fontWeight: 600 }}>
+                  {cash(entry.total, entry.currency)}
+                  <span className="muted" style={{ fontWeight: 400 }}>
+                    {" "}
+                    · {entry.count} 个账户
+                  </span>
+                </span>
+              ))}
+            </div>
             <div>
               {accounts.map((item, index, list) => (
                 <button
