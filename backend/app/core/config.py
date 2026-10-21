@@ -92,6 +92,9 @@ class Settings(BaseSettings):
     # auto-running strategy places orders with nobody watching, so enabling it is
     # a materially different decision and must be made explicitly.
     live_auto_trading_enabled: bool = False
+    # Acknowledged alerts older than this are pruned. Unacknowledged ones are
+    # kept forever: nobody has acted on them yet.
+    alert_retention_days: int = 30
     auth_enabled: bool = False
     auth_token: str = ""
     rate_limit_per_minute: int = 600

@@ -35,11 +35,18 @@ export function AlertsPage() {
   const toast = useToast();
   const queryClient = useQueryClient();
   const [filter, setFilter] = useState<"open" | "all">("open");
+  const [category, setCategory] = useState("");
 
+  const categories = useQuery({
+    queryKey: ["alert-categories", accountId],
+    queryFn: () => api.alertCategories(accountId),
+    enabled: Boolean(accountId),
+    refetchInterval: 30_000,
+  });
   const alerts = useQuery({
-    queryKey: ["alerts", accountId, filter],
+    queryKey: ["alerts", accountId, filter, category],
     queryFn: () =>
-      api.alerts(accountId, filter === "open", 200),
+      api.alerts(accountId, filter === "open", 200, undefined, category || undefined),
     enabled: Boolean(accountId),
     refetchInterval: 10_000,
   });
@@ -116,6 +123,19 @@ export function AlertsPage() {
               ]}
               onChange={(value) => setFilter(value)}
             />
+            <select
+              className="select"
+              style={{ width: 150, height: 30 }}
+              value={category}
+              onChange={(event) => setCategory(event.target.value)}
+            >
+              <option value="">全部类型</option>
+              {(categories.data ?? []).map((item) => (
+                <option key={item.category} value={item.category}>
+                  {CATEGORY_LABEL[item.category] ?? item.category}（{item.count}）
+                </option>
+              ))}
+            </select>
             <ButtonField
               variant="default"
               size="small"

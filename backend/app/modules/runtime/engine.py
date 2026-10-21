@@ -30,6 +30,9 @@ class StrategyRuntimeEngine:
         self._task: asyncio.Task | None = None
         self._stopping = asyncio.Event()
         self._last_prune = 0.0
+        self.alert_retention_days = int(
+            getattr(settings, "alert_retention_days", 30)
+        )
 
     async def start(self) -> None:
         self._stopping.clear()
@@ -118,4 +121,14 @@ class StrategyRuntimeEngine:
                         logger.info("pruned %s runtime log rows", removed)
                 except Exception:
                     logger.exception("runtime log pruning failed")
+                try:
+                    # Acknowledged alerts are history; unacknowledged ones are
+                    # open questions and are never pruned by age.
+                    from app.modules.alerts.service import AlertService
+
+                    purged = AlertService(session).prune(keep_days=self.alert_retention_days)
+                    if purged:
+                        logger.info("pruned %s acknowledged alerts", purged)
+                except Exception:
+                    logger.exception("alert pruning failed")
             return results

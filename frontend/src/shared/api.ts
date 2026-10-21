@@ -886,14 +886,25 @@ export const api = {
   // Positional parameters like every other list endpoint (`orders`, `fills`,
   // `backtests`). An options object here was the odd one out and made both the
   // call sites and their mocks harder to read.
-  alerts: (accountId?: string, unacknowledgedOnly = false, limit = 100, level?: string) =>
+  alerts: (
+    accountId?: string,
+    unacknowledgedOnly = false,
+    limit = 100,
+    level?: string,
+    category?: string,
+  ) =>
     request<Alert[]>(
       `/alerts${qs({
         account_id: accountId,
         unacknowledged_only: unacknowledgedOnly,
         level,
+        category,
         limit,
       })}`,
+    ),
+  alertCategories: (accountId?: string) =>
+    request<{ category: string; count: number }[]>(
+      `/alerts/categories${qs({ account_id: accountId })}`,
     ),
   alertSummary: (accountId?: string) =>
     request<AlertSummary>(`/alerts/summary${qs({ account_id: accountId })}`),

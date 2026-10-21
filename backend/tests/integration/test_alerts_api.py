@@ -161,3 +161,86 @@ def test_stop_loss_creates_an_alert(client):
 
 def test_unknown_alert_is_404(client):
     assert client.post("/api/alerts/nope/ack").status_code == 404
+
+
+def test_category_filter(client):
+    account = client.post(
+        "/api/accounts", json={"name": "分类账户", "initial_balance": 100_000}
+    ).json()
+    client.post("/api/risk/observe", params={"account_id": account["id"], "equity": 100_000})
+    client.post("/api/risk/observe", params={"account_id": account["id"], "equity": 90_000})
+
+    breaker = client.get(
+        "/api/alerts", params={"account_id": account["id"], "category": "breaker"}
+    ).json()
+    assert breaker and all(item["category"] == "breaker" for item in breaker)
+
+    other = client.get(
+        "/api/alerts", params={"account_id": account["id"], "category": "gateway_failure"}
+    ).json()
+    assert other == []
+
+    categories = client.get(
+        "/api/alerts/categories", params={"account_id": account["id"]}
+    ).json()
+    assert any(item["category"] == "breaker" and item["count"] >= 1 for item in categories)
+
+
+def test_prune_removes_only_old_acknowledged_alerts(client):
+    """Unacknowledged alerts are open questions and must survive any pruning."""
+    from datetime import timedelta
+
+    from sqlalchemy import select
+
+    from app.core.timeutil import utcnow
+    from app.modules.alerts.models import Alert
+
+    settings = client.app.state.settings
+    db = Database(settings.database_url)
+    with db.session() as session:
+        old_acked = Alert(
+            account_id="acc",
+            level="warning",
+            category="breaker",
+            title="旧告警",
+            acknowledged=True,
+            acknowledged_at=utcnow() - timedelta(days=60),
+            created_at=utcnow() - timedelta(days=60),
+        )
+        old_open = Alert(
+            account_id="acc",
+            level="critical",
+            category="breaker",
+            title="未处理的旧告警",
+            acknowledged=False,
+            created_at=utcnow() - timedelta(days=60),
+        )
+        fresh_acked = Alert(
+            account_id="acc",
+            level="info",
+            category="breaker",
+            title="新告警",
+            acknowledged=True,
+            acknowledged_at=utcnow(),
+            created_at=utcnow(),
+        )
+        session.add_all([old_acked, old_open, fresh_acked])
+        session.commit()
+    db.dispose()
+
+    removed = client.post(
+        "/api/alerts/prune", params={"keep_days": 30, "account_id": "acc"}
+    ).json()
+    assert removed["deleted"] == 1
+
+    titles = {
+        item["title"]
+        for item in client.get("/api/alerts", params={"account_id": "acc"}).json()
+    }
+    assert "旧告警" not in titles
+    assert "未处理的旧告警" in titles
+    assert "新告警" in titles
+
+
+def test_prune_rejects_negative_days(client):
+    assert client.post("/api/alerts/prune", params={"keep_days": -1}).status_code == 422

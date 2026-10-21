@@ -4,7 +4,9 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from sqlalchemy import func, select, update
+from datetime import timedelta
+
+from sqlalchemy import delete, func, select, update
 from sqlalchemy.orm import Session
 
 from app.core.errors import NotFoundError, ValidationError
@@ -114,6 +116,7 @@ class AlertService:
         account_id: str | None = None,
         unacknowledged_only: bool = False,
         level: str | None = None,
+        category: str | None = None,
         limit: int = 100,
     ) -> list[AlertView]:
         stmt = select(Alert).order_by(Alert.created_at.desc())
@@ -123,8 +126,39 @@ class AlertService:
             stmt = stmt.where(Alert.acknowledged.is_(False))
         if level:
             stmt = stmt.where(Alert.level == level)
+        if category:
+            stmt = stmt.where(Alert.category == category)
         rows = self.session.scalars(stmt.limit(max(1, min(limit, 500)))).all()
         return [self._view(row) for row in rows]
+
+    def categories(self, *, account_id: str | None = None) -> list[dict]:
+        """Distinct categories with counts, for building a filter control."""
+        stmt = select(Alert.category, func.count(Alert.id))
+        if account_id:
+            stmt = stmt.where(Alert.account_id == account_id)
+        rows = self.session.execute(
+            stmt.group_by(Alert.category).order_by(Alert.category)
+        ).all()
+        return [{"category": category, "count": int(count)} for category, count in rows]
+
+    def prune(self, *, keep_days: int = 30, account_id: str | None = None) -> int:
+        """Delete acknowledged alerts older than `keep_days`.
+
+        Unacknowledged rows are never removed: an alert nobody looked at is still
+        an open question, however old. Acknowledged ones are history — useful for
+        a while, then just table growth.
+        """
+        if keep_days < 0:
+            raise ValidationError("keep_days 必须为非负数")
+        cutoff = utcnow() - timedelta(days=keep_days)
+        stmt = delete(Alert).where(
+            Alert.acknowledged.is_(True), Alert.created_at < cutoff
+        )
+        if account_id:
+            stmt = stmt.where(Alert.account_id == account_id)
+        result = self.session.execute(stmt)
+        self.session.commit()
+        return int(result.rowcount or 0)
 
     def summary(self, *, account_id: str | None = None) -> dict:
         stmt = select(Alert.level, func.count(Alert.id)).where(
