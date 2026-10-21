@@ -491,7 +491,12 @@ class RuntimeService:
     def _place_entry(self, row: StrategyInstance, price: float) -> None:
         account = self.accounts.get(row.account_id)
         symbol = self.market.require_symbol(row.symbol)
-        cash_budget = account.cash_balance * row.position_pct
+        # Size against *available* cash, not the book balance: resting limit orders
+        # have already committed part of the balance. Using cash_balance let an
+        # instance open a position with money that was frozen elsewhere — with 30k
+        # reserved, a 50% instance on a 100k account still tried to spend 50k.
+        available = self.trading.available_cash(row.account_id)
+        cash_budget = max(0.0, available * row.position_pct)
         budget = min(cash_budget, row.max_order_notional)
         raw = budget / price if price else 0.0
         # Orders must respect the exchange lot step, so floor to a whole step.

@@ -68,7 +68,10 @@ class PortfolioService:
         account = self.accounts.get(account_id)
         cash = round_money(account.cash_balance)
         reserved = self.trading.reserved_cash(account_id)
-        available_cash = round_money(cash - reserved)
+        # Delegated rather than recomputed: `available_cash` also subtracts sale
+        # proceeds still inside their T+1 hold. Recomputing `cash - reserved` here
+        # made this page disagree with the trading layer about what was spendable.
+        available_cash = self.trading.available_cash(account_id)
         positions: list[PositionView] = self.trading.positions(account_id)
         positions_value = round_money(sum(p.market_value for p in positions))
         unrealized = round_money(sum(p.unrealized_pnl for p in positions))

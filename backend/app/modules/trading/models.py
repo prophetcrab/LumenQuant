@@ -80,3 +80,26 @@ class Position(Base):
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=utcnow, onupdate=utcnow
     )
+
+
+class CashHold(Base):
+    """Proceeds that are booked but not yet spendable.
+
+    A-share sales settle T+1: the cash appears in the ledger immediately (the
+    trade happened), but the exchange does not release it for new purchases until
+    the next trading day. Without this hold, a same-session sell-then-buy sequence
+    spends money the broker would not have made available yet.
+    """
+
+    __tablename__ = "cash_holds"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
+    account_id: Mapped[str] = mapped_column(
+        String(36), ForeignKey("accounts.id", ondelete="CASCADE"), index=True
+    )
+    amount: Mapped[float] = mapped_column(Float)
+    reason: Mapped[str] = mapped_column(String(32), default="t1_proceeds")
+    # Trading day (Beijing) on which the amount becomes spendable.
+    release_day: Mapped[str] = mapped_column(String(10), index=True)
+    ref: Mapped[str] = mapped_column(String(64), default="")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)

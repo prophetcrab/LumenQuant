@@ -16,7 +16,7 @@ import json
 from dataclasses import dataclass
 from datetime import timedelta
 
-from sqlalchemy import func, select
+from sqlalchemy import delete, func, select
 from sqlalchemy.orm import Session
 
 from app.core.audit import record_audit
@@ -35,7 +35,7 @@ from app.modules.cn.rules import (
 )
 from app.modules.risk.policy import OrderIntent, RiskContext, RiskPolicy
 from app.modules.risk.service import RiskService
-from app.modules.trading.models import Fill, Order, Position, new_id
+from app.modules.trading.models import CashHold, Fill, Order, Position, new_id
 from app.modules.trading.ports import CashPort, PricePort
 
 OPEN_STATUSES = ("new", "open", "partially_filled")
@@ -217,8 +217,47 @@ class TradingService:
         return round_money(reserved)
 
     def available_cash(self, account_id: str) -> float:
-        """Book cash minus cash reserved by pending orders."""
-        return round_money(self.cash.cash(account_id) - self.reserved_cash(account_id))
+        """Book cash minus pending-order reservations and unsettled proceeds."""
+        return round_money(
+            self.cash.cash(account_id)
+            - self.reserved_cash(account_id)
+            - self.held_cash(account_id)
+        )
+
+    def held_cash(self, account_id: str) -> float:
+        """Proceeds booked but not yet spendable (A-share T+1 settlement)."""
+        market = self._account_market(account_id)
+        if market != "cn_stock":
+            return 0.0
+        from app.modules.risk.daykey import risk_day_key
+
+        today = risk_day_key(market)
+        total = self.session.scalar(
+            select(func.coalesce(func.sum(CashHold.amount), 0.0)).where(
+                CashHold.account_id == account_id,
+                CashHold.release_day >= today,
+            )
+        )
+        return round_money(float(total or 0.0))
+
+    def release_held_cash(self, account_id: str | None = None) -> int:
+        """Delete holds whose release day has arrived.
+
+        Called by the daily settlement sweep alongside `settle_t1`. Holds are
+        removed rather than flipped to a flag: the ledger already carries the
+        cash, so a released hold simply stops subtracting from availability.
+        """
+        from datetime import date
+
+        from app.modules.risk.daykey import risk_day_key
+
+        today = date.fromisoformat(risk_day_key("cn_stock"))
+        stmt = delete(CashHold).where(CashHold.release_day <= today.isoformat())
+        if account_id:
+            stmt = stmt.where(CashHold.account_id == account_id)
+        result = self.session.execute(stmt)
+        self.session.commit()
+        return int(result.rowcount or 0)
 
     def _safe_price(self, symbol: str) -> float:
         try:
@@ -789,6 +828,25 @@ class TradingService:
                 ref=order.id,
                 note=f"sell {quantity} {order.symbol} @ {price}",
             )
+            if market == "cn_stock" and proceeds > 0:
+                # A-share sale proceeds settle T+1: the ledger is credited now,
+                # but the money cannot back a new purchase until the next trading
+                # day. Holding it here keeps `available_cash` honest without
+                # touching the ledger (which must show the trade when it happened).
+                from datetime import date
+
+                from app.modules.cn.calendar import next_trading_day
+                from app.modules.risk.daykey import risk_day_key
+
+                release = next_trading_day(date.fromisoformat(risk_day_key(market)))
+                self.session.add(
+                    CashHold(
+                        account_id=order.account_id,
+                        amount=proceeds,
+                        release_day=release.isoformat(),
+                        ref=order.id,
+                    )
+                )
 
         fill = Fill(
             id=new_id(),
@@ -959,8 +1017,16 @@ class TradingService:
         ).all()
         for position in rows:
             position.available_quantity = position.quantity
+        # Release every outstanding sale-proceeds hold for these accounts. This
+        # method *is* the settlement event ("a new trading day has opened"), so
+        # holds created yesterday are due now regardless of the wall-clock date —
+        # comparing against `release_day <= today` would leave them stuck whenever
+        # the settlement runs before the calendar has rolled.
+        held = self.session.execute(
+            delete(CashHold).where(CashHold.account_id.in_(cn_account_ids))
+        )
         self.session.commit()
-        return len(rows)
+        return len(rows) + int(held.rowcount or 0)
 
 
 def at_or_above(price: float, level: float, tick: float) -> bool:

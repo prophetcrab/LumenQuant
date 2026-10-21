@@ -225,3 +225,62 @@ def test_one_bad_instance_does_not_break_the_whole_tick(runtime_client):
     evaluated = response.json()["evaluated"]
     assert evaluated.get(bad["id"]) == "error"
     assert good["id"] in evaluated
+
+
+def test_entry_sizes_against_available_cash_not_book_balance(runtime_client):
+    """A resting order freezes part of the balance; sizing must respect that.
+
+    `_place_entry` used `account.cash_balance`, which ignores cash reserved by
+    resting buy orders. With 30k frozen on a 100k account, a 50% instance still
+    tried to spend 50k — more than was actually available.
+    """
+    import math
+
+    account = runtime_client.post(
+        "/api/accounts", json={"name": "Sizing Basis", "initial_balance": 100_000}
+    ).json()
+    price = runtime_client.get("/api/market/snapshot", params={"symbol": "BTCUSDT"}).json()["price"]
+    quantity = math.floor((60_000 / price) / 0.0001) * 0.0001
+    resting = runtime_client.post(
+        "/api/trading/orders",
+        json={
+            "account_id": account["id"],
+            "symbol": "BTCUSDT",
+            "side": "buy",
+            "order_type": "limit",
+            "quantity": quantity,
+            "limit_price": round(price * 0.5, 2),
+        },
+    )
+    assert resting.status_code == 201
+
+    overview = runtime_client.get(
+        "/api/portfolio/overview", params={"account_id": account["id"]}
+    ).json()
+    available = overview["available_cash"]
+    assert available < overview["cash"]  # something really is frozen
+
+    instance = runtime_client.post(
+        "/api/runtime/instances",
+        json={
+            "account_id": account["id"],
+            "strategy_key": "buy_and_hold",
+            "symbol": "ETHUSDT",
+            "timeframe": "1h",
+            "params": {},
+            "position_pct": 0.5,
+            "max_order_notional": 100_000,
+            "start": True,
+        },
+    ).json()
+    runtime_client.post("/api/runtime/tick")
+
+    positions = runtime_client.get(
+        "/api/trading/positions", params={"account_id": account["id"]}
+    ).json()
+    eth = [item for item in positions if item["symbol"] == "ETHUSDT"]
+    assert eth, f"instance did not open a position: {instance['id']}"
+    # Within one lot step of half the *available* cash, and clearly below half the
+    # book balance.
+    assert eth[0]["market_value"] < overview["cash"] * 0.5
+    assert eth[0]["market_value"] == pytest.approx(available * 0.5, rel=0.05)
