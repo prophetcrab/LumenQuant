@@ -139,7 +139,9 @@ export function CnTradingPanel() {
             <span className="muted">
               {overview.data && overview.data.reserved_cash > 0
                 ? `挂单冻结 ${cash(overview.data.reserved_cash, account.base_currency)}`
-                : `含 T+1：当日买入次日可卖`}
+                : /* T+1 freezes shares, not cash. Saying otherwise under the cash
+                     figure read as "your money is locked too". */
+                  "可立即用于买入"}
             </span>
           }
         />
@@ -288,6 +290,29 @@ export function CnTradingPanel() {
             >
               {place.isPending ? "提交中…" : `${side === "buy" ? "买入" : "卖出"} ${active?.name ?? ""}`}
             </ButtonField>
+            {/* A disabled button with no explanation is a dead end: the user sees
+                "卖出" greyed out and has to work out that T+1 froze the shares.
+                `sellBlocked` means limit-down, so availability is checked directly. */}
+            {side === "sell" && available <= 0 ? (
+              <div className="helper" style={{ color: "var(--warning)" }}>
+                当前无可卖数量：当日买入的股份需次日才能卖出（T+1）。
+              </div>
+            ) : null}
+            {side === "sell" && available > 0 && Number(quantity) > available ? (
+              <div className="helper" style={{ color: "var(--warning)" }}>
+                可卖 {available} 股，已超出可用数量。
+              </div>
+            ) : null}
+            {side === "sell" && sellBlocked ? (
+              <div className="helper" style={{ color: "var(--warning)" }}>
+                当前标的跌停，无法卖出。
+              </div>
+            ) : null}
+            {side === "buy" && buyBlocked ? (
+              <div className="helper" style={{ color: "var(--warning)" }}>
+                当前标的涨停，无法买入。
+              </div>
+            ) : null}
             <div className="helper">
               佣金 {rules.data?.fees.commission_bps ?? 2.5}bp（最低 {money(rules.data?.fees.min_commission ?? 5, 0)} 元）
               · 卖出印花税 {rules.data?.fees.stamp_duty_bps ?? 5}bp · 过户费{" "}
