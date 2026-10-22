@@ -44,6 +44,11 @@ from app.modules.market.service_types import CandlePoint
 logger = logging.getLogger(__name__)
 
 CN_STEP_MS = 900_000
+# A bar closes when the *next* bucket starts, so a continuously observed bar
+# always spans exactly one bucket. Anything larger means at least one bucket went
+# unseen: the bar then holds only the samples before and after a gap, and storing
+# it would record a high/low that never saw the middle of the period.
+MAX_TRUSTED_GAP_BUCKETS = 1
 
 
 @dataclass(frozen=True)
@@ -400,34 +405,114 @@ class CnQuoteEngine:
         return closed
 
     def _persist_closed(self, rows: list[dict]) -> None:
-        """Write completed bars and fold them into the daily series.
+        """Write completed bars, repairing gaps from the intraday endpoint.
 
         Without this the database only advances on a manual sync, so after a
         restart the app would show a realtime price next to yesterday's history,
-        and every backtest would stop at the last sync date. Bars already present
-        are skipped, and their volume is not re-added to the daily bar.
+        and every backtest would stop at the last sync date.
+
+        A poll outage leaves two problems that look like data rather than errors:
+
+        * the accumulated bar spans the whole gap, so its high/low come from the
+          samples at the edges only;
+        * every bucket inside the gap is simply absent.
+
+        Both are fixed by fetching the real 15m series for the affected symbols
+        whenever a bar closes. A bar whose span exceeds the trusted window is
+        dropped rather than stored: it is not a bar, it is two samples.
         """
         if not rows:
             return
+        current_bucket = align_down(self.now_ms(), CN_STEP_MS)
+        by_symbol: dict[str, list[dict]] = {}
+        for row in rows:
+            by_symbol.setdefault(row["symbol"], []).append(row)
+
+        for code, closing in by_symbol.items():
+            oldest = min(row["open_time"] for row in closing)
+            missed = max(0, (current_bucket - oldest) // CN_STEP_MS)
+            # The endpoint returns the most recent N bars; one session is 16 bars,
+            # so allow enough to cover a multi-day outage without over-fetching.
+            limit = max(32, min(320, int(missed) + 8))
+            authoritative: dict[int, dict] = {}
+            try:
+                batch = self.source.intraday_bars(code, limit=limit)
+            except Exception as exc:
+                # Daily bars and the quote path are unaffected; keep the bars we
+                # did observe and let the next successful fetch repair the rest.
+                logger.warning(
+                    "A-share intraday fetch failed for %s; storing accumulated bars: %s",
+                    code,
+                    exc,
+                )
+                batch = None
+            if batch is not None:
+                for bar in batch.bars:
+                    if bar.time < current_bucket:
+                        authoritative[bar.time] = {
+                            "symbol": code,
+                            "timeframe": "15m",
+                            "open_time": bar.time,
+                            "open": bar.open,
+                            "high": bar.high,
+                            "low": bar.low,
+                            "close": bar.close,
+                            "volume": bar.volume,
+                        }
+
+            accepted: dict[int, dict] = {}
+            for row in closing:
+                source_bar = authoritative.get(row["open_time"])
+                if source_bar is not None:
+                    # Keeps the exchange's range and volume instead of our sampled
+                    # approximation; the gap fill below covers the other buckets.
+                    accepted[row["open_time"]] = source_bar
+                    continue
+                if current_bucket - row["open_time"] > (
+                    MAX_TRUSTED_GAP_BUCKETS * CN_STEP_MS
+                ):
+                    continue
+                accepted[row["open_time"]] = row
+            for bar_time, bar in authoritative.items():
+                accepted.setdefault(bar_time, bar)
+
+            if accepted:
+                self._write_bars(code, list(accepted.values()))
+
+    def _write_bars(self, code: str, rows: list[dict]) -> None:
         with self.db.session() as session:
             existing = {
-                (symbol, ts)
-                for symbol, ts in session.execute(
-                    select(Candle.symbol, Candle.open_time).where(
-                        Candle.symbol.in_({row["symbol"] for row in rows}),
+                row.open_time: row
+                for row in session.scalars(
+                    select(Candle).where(
+                        Candle.symbol == code,
                         Candle.timeframe == "15m",
                         Candle.open_time.in_({row["open_time"] for row in rows}),
                     )
                 ).all()
             }
-            fresh = [
-                row for row in rows if (row["symbol"], row["open_time"]) not in existing
-            ]
-            if not fresh:
+            fresh: list[dict] = []
+            repaired = 0
+            for row in rows:
+                stored = existing.get(row["open_time"])
+                if stored is None:
+                    fresh.append(row)
+                    continue
+                # A bar stored with zero volume can only have come from a gap; the
+                # real series is in hand now, so correct rather than keep it.
+                if stored.volume <= 0 and row["volume"] > 0:
+                    stored.open, stored.high = row["open"], row["high"]
+                    stored.low, stored.close = row["low"], row["close"]
+                    stored.volume = row["volume"]
+                    repaired += 1
+            if not fresh and not repaired:
                 return
-            session.execute(insert(Candle), fresh)
-            self._roll_daily(session, fresh)
-        logger.debug("persisted %s closed A-share bars from realtime quotes", len(fresh))
+            if fresh:
+                session.execute(insert(Candle), fresh)
+                self._roll_daily(session, fresh)
+        logger.debug(
+            "persisted %s A-share bars for %s (%s repaired)", len(fresh), code, repaired
+        )
 
     def _roll_daily(self, session, fresh: list[dict]) -> None:
         grouped: dict[tuple[str, int], list[dict]] = {}

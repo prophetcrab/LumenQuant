@@ -35,12 +35,20 @@ class FakeSource:
         self.payload: dict[str, Quote] = {}
         self.calls = 0
         self.error: Exception | None = None
+        # 15m bars the intraday endpoint would return; empty means "unavailable".
+        self.intraday: dict[str, list] = {}
 
     def quotes(self, codes):
         self.calls += 1
         if self.error is not None:
             raise self.error
         return {code: self.payload[code] for code in codes if code in self.payload}
+
+    def intraday_bars(self, code, *, limit=320):
+        from app.modules.cn.sources.base import BarBatch
+
+        bars = self.intraday.get(code.upper(), [])
+        return BarBatch(code=code.upper(), timeframe="15m", bars=list(bars))
 
 
 def quote(code: str, price: float, volume: float, ts_ms: int, prev_close: float = 10.0) -> Quote:
@@ -427,3 +435,60 @@ def test_outage_before_any_success_reports_a_sane_message(setup):
     assert alert is not None
     assert "启动后从未成功获取报价" in alert.message
     assert "1792" not in alert.message
+
+
+def test_poll_outage_is_backfilled_from_the_intraday_endpoint(setup):
+    """A gap must be filled with real bars, not left as one fabricated bar.
+
+    The accumulator only saw the samples at each edge of the outage: its "bar"
+    spans the whole gap with a high/low that never saw the middle. Persisting that
+    while leaving the missing buckets absent corrupts the series twice over.
+    """
+    from app.modules.market.service_types import CandlePoint
+
+    state, source, engine, db = setup
+    source.payload["600519.SH"] = quote("600519.SH", 10.0, 100.0, state["now"])
+    engine.poll_once()
+
+    # Polling dies for 30 minutes, then resumes.
+    state["now"] = at(10, 31)
+    source.payload["600519.SH"] = quote("600519.SH", 10.4, 900.0, state["now"])
+    # Upstream still has the real 15m candles for the missed window.
+    source.intraday["600519.SH"] = [
+        CandlePoint(time=at(10, 0), open=10.0, high=10.2, low=9.9, close=10.15, volume=300.0),
+        CandlePoint(time=at(10, 15), open=10.15, high=10.45, low=10.1, close=10.4, volume=500.0),
+    ]
+    engine.poll_once()
+
+    with db.session() as session:
+        bars = session.scalars(
+            select(Candle)
+            .where(Candle.symbol == "600519.SH", Candle.timeframe == "15m")
+            .order_by(Candle.open_time.asc())
+        ).all()
+    assert len(bars) == 2
+    assert [bar.open_time for bar in bars] == [at(10, 0), at(10, 15)]
+    # Exchange values, not the single-sample shape.
+    assert bars[0].high == pytest.approx(10.2)
+    assert bars[0].low == pytest.approx(9.9)
+    assert bars[0].volume == pytest.approx(300.0)
+    assert bars[1].volume == pytest.approx(500.0)
+
+
+def test_a_share_gap_bar_is_dropped_when_the_endpoint_is_unavailable(setup):
+    """Without klines the edge-sampled bar must not be stored as if it were real."""
+    state, source, engine, db = setup
+    source.payload["600519.SH"] = quote("600519.SH", 10.0, 100.0, state["now"])
+    engine.poll_once()
+
+    state["now"] = at(10, 31)
+    source.payload["600519.SH"] = quote("600519.SH", 10.4, 900.0, state["now"])
+    source.intraday["600519.SH"] = []  # endpoint unavailable
+    engine.poll_once()
+
+    with db.session() as session:
+        bars = session.scalars(
+            select(Candle).where(Candle.symbol == "600519.SH", Candle.timeframe == "15m")
+        ).all()
+    # Nothing fabricated: the gap stays a gap until a real fetch fills it.
+    assert bars == []

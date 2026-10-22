@@ -36,11 +36,11 @@ logger = logging.getLogger(__name__)
 
 CRYPTO_STEP_MS = 900_000
 DAILY_MS = 86_400_000
-# A bar accumulated across more buckets than this was not observed continuously:
-# polling stopped, and the "bar" holds only the samples before and after the gap.
-# Persisting it would store a fabricated high/low and volume 0, so the gap is
-# filled from klines instead.
-MAX_TRUSTED_GAP_BUCKETS = 2
+# A bar closes when the *next* bucket starts, so a continuously observed bar
+# always spans exactly one bucket. Anything larger means at least one bucket went
+# unseen: the bar then holds only the samples before and after a gap, and storing
+# it would record a fabricated high/low and volume 0.
+MAX_TRUSTED_GAP_BUCKETS = 1
 
 
 class CryptoQuoteEngine:
