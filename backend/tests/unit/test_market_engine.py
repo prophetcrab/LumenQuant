@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import pytest
+
 from app.core.config import Settings
 from app.core.db import Database
 from app.modules.market.aggregate import aggregate
@@ -86,3 +88,48 @@ def test_aggregation_ohlcv():
     assert len(result) == 1
     bar = result[0]
     assert (bar.open, bar.high, bar.low, bar.close, bar.volume) == (10, 15, 8, 9.5, 26)
+
+
+def test_cn_snapshot_keeps_limit_band_without_any_candles(database):
+    """A registered symbol with no bars must still report its price limits.
+
+    This is the state right after switching to a real data source, before the
+    first sync lands. The previous close comes from the symbol registry, so the
+    band is computable — but the snapshot used to fail outright, and the list
+    route filled price/limit_up/limit_down with 0.0. The UI then showed
+    "涨停 0.00 / 跌停 0.00", i.e. no limits at all.
+    """
+    from app.modules.market.service import MarketService
+    from sqlalchemy import select
+    from app.modules.market.models import Candle
+
+    with database.session() as session:
+        service = MarketService(session, live=None)
+        service.add_symbol(
+            code="600519.SH", name="贵州茅台", initial_price=1680.0,
+            market="cn_stock", board="main", prev_close=1680.0,
+        )
+        snap = service.snapshot("600519.SH")
+        assert snap.price == pytest.approx(1680.0)
+        assert snap.prev_close == pytest.approx(1680.0)
+        assert snap.limit_up == pytest.approx(1848.0)
+        assert snap.limit_down == pytest.approx(1512.0)
+        # Nothing was fabricated into the candle table to make this work.
+        assert session.scalars(
+            select(Candle).where(Candle.symbol == "600519.SH")
+        ).all() == []
+
+
+def test_gem_board_uses_a_twenty_percent_band(database):
+    """The band must follow the board, not a hard-coded 10%."""
+    from app.modules.market.service import MarketService
+
+    with database.session() as session:
+        service = MarketService(session, live=None)
+        service.add_symbol(
+            code="300750.SZ", name="宁德时代", initial_price=200.0,
+            market="cn_stock", board="gem", prev_close=200.0,
+        )
+        snap = service.snapshot("300750.SZ")
+        assert snap.limit_up == pytest.approx(240.0)
+        assert snap.limit_down == pytest.approx(160.0)

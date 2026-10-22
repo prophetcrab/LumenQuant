@@ -421,6 +421,27 @@ class MarketService:
             else (current.close if current is not None else (daily[-1].close if daily else 0.0))
         )
         if price <= 0:
+            # No quote and no stored bars — the state right after switching to a
+            # real data source, before the first sync finishes. The previous close
+            # is registry data and already known, so the limit band is still
+            # meaningful; failing the whole snapshot instead zeroed limit_up/down
+            # along with the price, and the UI showed "涨停 0.00 / 跌停 0.00" as if
+            # the instrument had no limits at all.
+            if prev_close > 0:
+                band = price_band(prev_close, row.board, row.is_st, row.tick_size or 0.01)
+                return Snapshot(
+                    symbol=row.code,
+                    price=prev_close,
+                    change_24h_pct=0.0,
+                    high_24h=prev_close,
+                    low_24h=prev_close,
+                    volume_24h=0.0,
+                    time=0,
+                    market=row.market,
+                    prev_close=prev_close,
+                    limit_up=band.up if band else 0.0,
+                    limit_down=band.down if band else 0.0,
+                )
             raise NotFoundError(f"no price for {row.code}")
         if quote is not None and quote.high > 0 and quote.low > 0:
             high, low = quote.high, quote.low
