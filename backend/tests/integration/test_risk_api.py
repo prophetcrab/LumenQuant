@@ -151,3 +151,48 @@ def test_risk_overview_warns_about_unprotected_instances(risk_client):
     ).json()
     assert body["instances"][0]["protected"] is True
     assert not body["warnings"]
+
+
+def test_quote_outage_does_not_trip_the_breakers(risk_client, monkeypatch):
+    """A missing price must not be read as a total loss.
+
+    The risk overview values positions through the same path that falls back to
+    cost when no quote is available. If that fallback were zero, one failed quote
+    would show equity collapsing and trip the daily-loss breaker, blocking all
+    trading for a transient network error.
+    """
+    account = risk_client.post(
+        "/api/accounts",
+        json={"name": "熔断误判", "initial_balance": 200000, "market": "crypto"},
+    ).json()
+    placed = risk_client.post(
+        "/api/trading/orders",
+        json={
+            "account_id": account["id"],
+            "symbol": "BTCUSDT",
+            "side": "buy",
+            "order_type": "market",
+            "quantity": 1,
+        },
+    )
+    assert placed.status_code == 201, placed.text
+
+    healthy = risk_client.get(
+        "/api/risk/overview", params={"account_id": account["id"]}
+    ).json()
+    assert healthy["exposure"]["equity"] > 0
+
+    # Break the live-candle path the way a dead feed does.
+    engine = risk_client.app.state.live_market
+    monkeypatch.setattr(
+        engine, "live_candle", lambda symbol: (_ for _ in ()).throw(RuntimeError("down"))
+    )
+
+    degraded = risk_client.get(
+        "/api/risk/overview", params={"account_id": account["id"]}
+    ).json()
+    # Equity may differ slightly (last stored bar vs live price) but must stay in
+    # the same order of magnitude, and no breaker may trip.
+    assert degraded["exposure"]["equity"] > healthy["exposure"]["equity"] * 0.5
+    assert degraded["state"]["breaker_active"] is False
+    assert degraded["positions"][0]["market_price"] > 0

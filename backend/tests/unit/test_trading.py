@@ -282,3 +282,37 @@ def test_resting_orders_do_not_trip_breaker(database):
             order_type="market", quantity=1,
         )
         assert order.status == "filled"
+
+
+def test_missing_price_values_a_position_at_cost_not_zero(env):
+    """A quote outage must not look like a total loss to the risk breakers.
+
+    `_safe_price` returns 0 when the feed is unavailable. Valuing the position at
+    0 wipes its market value, which the daily-loss and drawdown breakers read as
+    a catastrophic loss and trip on — blocking all trading because a quote was
+    missing for one tick.
+    """
+    service, accounts, account, _prices = env
+    service.place_order(
+        account_id=account.id, symbol="BTCUSDT", side="buy", order_type="market", quantity=2
+    )
+
+    class NoPrice:
+        def price(self, _symbol):
+            raise RuntimeError("feed down")
+
+        def symbol(self, _code):
+            raise RuntimeError("feed down")
+
+    blind = TradingService(
+        service.session,
+        cash=service.cash,
+        prices=NoPrice(),
+        policy=service.policy,
+    )
+    view = blind.positions(account.id)[0]
+    # Cost, not zero: no invented loss and no invented gain. avg_price includes
+    # the entry fee, so it is slightly above the 100.0 market price.
+    assert view.market_price == pytest.approx(100.1)
+    assert view.market_value == pytest.approx(200.2)
+    assert view.unrealized_pnl == pytest.approx(0.0)

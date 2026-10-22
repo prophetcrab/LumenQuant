@@ -14,6 +14,7 @@ from sqlalchemy.orm import Session
 from app.api.deps import get_session
 from app.api.wiring import build_market, settings_of
 from app.core.cache import invalidate_symbol_caches
+from app.core.errors import ConflictError
 from app.modules.cn.sources.base import SourceUnavailable
 from app.modules.cn.sources.tencent import TencentSource
 from app.modules.cn.sync import CnDataSyncService
@@ -77,7 +78,11 @@ def quotes(request: Request):
     """
     engine = getattr(request.app.state, "cn_quote_engine", None)
     if engine is None:
-        raise SourceUnavailable(
+        # 409, not 502: nothing upstream failed — the feature is switched off.
+        # Reporting "bad gateway" sent operators looking at the network for a
+        # problem that is one env var away (and made the two markets answer the
+        # same situation with different status codes).
+        raise ConflictError(
             "实时报价未启用：设置 LQ_CN_DATA_SOURCE=tencent 后重启"
         )
     return {"health": engine.health(), "quotes": engine.snapshot_rows()}
@@ -88,7 +93,11 @@ def poll_now(request: Request):
     """Force one poll; useful right after starting the app or after a network gap."""
     engine = getattr(request.app.state, "cn_quote_engine", None)
     if engine is None:
-        raise SourceUnavailable(
+        # 409, not 502: nothing upstream failed — the feature is switched off.
+        # Reporting "bad gateway" sent operators looking at the network for a
+        # problem that is one env var away (and made the two markets answer the
+        # same situation with different status codes).
+        raise ConflictError(
             "实时报价未启用：设置 LQ_CN_DATA_SOURCE=tencent 后重启"
         )
     updated = engine.poll_once()

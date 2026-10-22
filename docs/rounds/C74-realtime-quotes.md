@@ -336,3 +336,37 @@ before=21938 removed=21814 after=124
 ```
 
 统计口径不变，行数降到千分之五。
+
+## C74 后续：行情缺失被当成"价格为零"
+
+`TradingService._safe_price` 在取价异常时返回 `0.0`，`_position_view` 直接用它算市值：
+
+```python
+price = self._safe_price(position.symbol)          # 异常 → 0
+market_value = position.quantity * price            # 整个持仓市值归零
+unrealized = (price - avg_price) * quantity         # 浮亏 = 全部成本
+```
+
+"没有价格"和"价格是 0"被混为一谈。后果不是显示难看，而是**资金安全**问题：
+权益瞬间塌陷，日损失/回撤熔断读到这个数字就会触发，随后所有下单被拦截——
+而真实原因只是某一次报价拉取失败。
+
+修复：取不到价时回落到**持仓成本价**。这是唯一既不凭空造成亏损、也不凭空造成
+盈利的估值；熔断不会误触发，用户也不会看到虚假的巨额浮亏。
+
+### 另一个一致性问题
+
+未启用实时报价时，两个市场返回不同状态码：A 股 502、加密 409。502 语义是
+"上游出错"，把运维引向网络排查，而实际只是一个环境变量没开。统一为 409，
+测试断言两端一致。
+
+### 验证
+
+两个修复都做了"还原即失败"验证：
+
+```
+去掉 price <= 0 回落 → test_missing_price_values_a_position_at_cost_not_zero 失败
+                      → test_quote_outage_does_not_trip_the_breakers 失败（market_price 0.0）
+```
+
+后端 **458 passed**。

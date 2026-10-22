@@ -170,6 +170,13 @@ class TradingService:
 
     def _position_view(self, position: Position) -> PositionView:
         price = self._safe_price(position.symbol)
+        if price <= 0:
+            # No price is not the same as a price of zero. Valuing the position at
+            # 0 wipes out its entire market value, which the risk breakers read as
+            # a catastrophic loss: an unrelated quote outage could trip the daily
+            # loss / drawdown breakers and block trading. Cost is the only
+            # fallback that neither invents a loss nor a gain.
+            price = position.avg_price
         market_value = round_money(position.quantity * price)
         unrealized = round_money((price - position.avg_price) * position.quantity)
         # Pending sells lock shares; report what the user can actually commit.

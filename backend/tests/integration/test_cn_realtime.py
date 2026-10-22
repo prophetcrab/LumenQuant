@@ -191,8 +191,32 @@ def test_poll_and_quotes_fail_clearly_in_synthetic_mode(tmp_path):
     with TestClient(app) as client:
         assert app.state.cn_quote_engine is None
         response = client.get("/api/cn/data/quotes")
-        assert response.status_code == 502
+        # 409: the feature is off, not the upstream broken. Both markets answer
+        # this situation identically so a client can rely on one contract.
+        assert response.status_code == 409
         assert "LQ_CN_DATA_SOURCE" in response.json()["error"]["message"]
         source = client.get("/api/cn/data/source").json()
         assert source["mode"] == "synthetic"
+    db.dispose()
+
+
+def test_disabled_quotes_status_matches_the_crypto_market(tmp_path):
+    """Both markets must answer "not enabled" the same way."""
+    settings = Settings(
+        database_url=f"sqlite:///{(tmp_path / 'both.db').as_posix()}",
+        seed_market=False,
+        cn_symbols_enabled=False,
+        runtime_enabled=False,
+        cn_data_source="synthetic",
+        crypto_data_source="synthetic",
+    )
+    db = Database(settings.database_url)
+    db.create_schema()
+    app = create_app(settings, db)
+    with TestClient(app) as client:
+        cn = client.get("/api/cn/data/quotes")
+        crypto = client.get("/api/market/data/quotes")
+    assert cn.status_code == crypto.status_code == 409
+    assert "LQ_CN_DATA_SOURCE" in cn.json()["error"]["message"]
+    assert "LQ_CRYPTO_DATA_SOURCE" in crypto.json()["error"]["message"]
     db.dispose()
