@@ -13,6 +13,7 @@ Market rules are resolved per account:
 from __future__ import annotations
 
 import json
+import math
 from dataclasses import dataclass
 from datetime import timedelta
 
@@ -332,6 +333,48 @@ class TradingService:
         if market == "cn_stock":
             return self.cn_fees.total(side, notional)
         return round_money(notional * self.fee_bps / 10_000.0)
+
+    def max_affordable_quantity(
+        self,
+        account_id: str,
+        symbol: str,
+        price: float,
+        budget: float,
+        *,
+        lot_size: float | None = None,
+    ) -> float:
+        """Largest lot-multiple quantity whose *total cost* fits in `budget`.
+
+        Sizing from `budget / price` alone ignores the fee, so a full-budget order
+        is always rejected: with 10,000 available and a 10bp fee, the intended
+        10,000 notional costs 10,010. Callers that want to spend everything they
+        have must ask for the fee-inclusive size instead of discovering the gap at
+        placement time.
+
+        `lot_size` is supplied by callers that already resolved the symbol, so both
+        sides agree on the step even when the price port exposes a different view.
+        Returns 0 when even one lot does not fit.
+        """
+        if price <= 0 or budget <= 0:
+            return 0.0
+        lot = lot_size if lot_size and lot_size > 0 else self.prices.symbol(symbol).lot_size
+        lot = lot or 0.0001
+        market = self._account_market(account_id)
+        # Solve qty*price*(1 + fee_rate) <= budget, then confirm with the real fee
+        # function so commission floors (A-share minimum) are respected.
+        rate = self.fee_bps / 10_000.0
+        raw = budget / (price * (1.0 + rate)) if rate > 0 else budget / price
+        # floor, not round: rounding up would spend more than the budget, and
+        # `round_qty` only trims decimals — it does not align to the lot step.
+        quantity = round_qty(math.floor(raw / lot) * lot)
+        for _ in range(1000):
+            if quantity <= 0:
+                return 0.0
+            notional = quantity * price
+            if notional + self._fee(market, "buy", notional) <= budget + 1e-9:
+                return quantity
+            quantity = round_qty(quantity - lot)
+        return 0.0
 
     def _band(self, symbol_view, market: str) -> PriceBand | None:
         if market != "cn_stock":

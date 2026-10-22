@@ -367,3 +367,49 @@ def test_limit_order_notional_uses_the_worse_of_limit_and_market(env):
         limit_price=9_000.0,
     )
     assert order.status == "open"
+
+
+def test_full_budget_sizing_reserves_the_fee(env):
+    """Spending the entire available balance must still be executable.
+
+    Sizing from budget/price produced an order whose notional equalled the budget,
+    so the fee pushed the total over it and every full-size order was rejected:
+    "need 10,007, available 10,000". The runner hit this whenever an instance was
+    configured with position_pct=1.0.
+    """
+    service, accounts, account, prices = env
+    prices.current = 100.0
+    budget = accounts.cash(account.id)
+
+    qty = service.max_affordable_quantity(
+        account.id, "BTCUSDT", prices.current, budget
+    )
+    assert qty > 0
+    notional = qty * prices.current
+    assert notional <= budget
+    # The whole point: notional + fee still fits.
+    assert notional + service._fee("crypto", "buy", notional) <= budget + 1e-9
+
+    order = service.place_order(
+        account_id=account.id,
+        symbol="BTCUSDT",
+        side="buy",
+        order_type="market",
+        quantity=qty,
+    )
+    assert order.status == "filled"
+    assert accounts.cash(account.id) >= 0
+
+    # With no fee the same budget buys strictly more, confirming the reserve is
+    # real and not just rounding noise.
+    free_service = TradingService(
+        service.session,
+        cash=service.cash,
+        prices=prices,
+        policy=service.policy,
+        fee_bps=0,
+        slippage_bps=0,
+    )
+    assert free_service.max_affordable_quantity(
+        account.id, "BTCUSDT", prices.current, budget
+    ) >= qty

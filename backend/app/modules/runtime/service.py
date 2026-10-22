@@ -545,12 +545,18 @@ class RuntimeService:
         available = self.trading.available_cash(row.account_id)
         cash_budget = max(0.0, available * row.position_pct)
         budget = min(cash_budget, row.max_order_notional)
-        raw = budget / price if price else 0.0
-        # Orders must respect the exchange lot step, so floor to a whole step.
+        # The fee is part of the cost: sizing from budget/price made a full-budget
+        # order always fail ("need 10,007, available 10,000"). Ask the trading
+        # service for the fee-inclusive quantity instead.
+        quantity = self.trading.max_affordable_quantity(
+            row.account_id, row.symbol, price, budget, lot_size=symbol.lot_size
+        )
         lot = symbol.lot_size or 0.0001
-        quantity = math.floor(raw / lot) * lot
-        quantity = round(quantity, 8)
-        if quantity <= 0 or quantity * price < 10:
+        # Read the minimum from the policy actually installed, not a literal 10:
+        # deployments that raise LQ_RISK_MIN_ORDER_NOTIONAL would otherwise be
+        # silently blocked at the old threshold.
+        min_notional = self.trading.policy.limits.min_order_notional
+        if quantity <= 0 or quantity * price < min_notional:
             # Say *which* limit bound the size. Reporting "cash insufficient" when
             # the notional cap is the binding constraint sends users hunting for
             # the wrong problem (a 1M account can still be blocked by a 200k cap
