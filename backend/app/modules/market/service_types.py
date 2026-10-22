@@ -51,3 +51,7 @@ class Snapshot:
     prev_close: float = 0.0
     limit_up: float = 0.0
     limit_down: float = 0.0
+    # A suspended instrument keeps its last price and cannot be traded. Callers
+    # that only see `price` cannot tell that apart from a quiet market, so the flag
+    # travels with the snapshot instead of requiring a second lookup.
+    suspended: bool = False

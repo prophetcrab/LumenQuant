@@ -441,6 +441,7 @@ class MarketService:
                     prev_close=prev_close,
                     limit_up=band.up if band else 0.0,
                     limit_down=band.down if band else 0.0,
+                    suspended=bool(row.suspended),
                 )
             raise NotFoundError(f"no price for {row.code}")
         if quote is not None and quote.high > 0 and quote.low > 0:
@@ -465,6 +466,7 @@ class MarketService:
             prev_close=prev_close,
             limit_up=band.up if band else 0.0,
             limit_down=band.down if band else 0.0,
+            suspended=bool(row.suspended),
         )
 
     def _live_quote(self, code: str):

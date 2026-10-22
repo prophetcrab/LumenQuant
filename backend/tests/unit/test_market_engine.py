@@ -133,3 +133,28 @@ def test_gem_board_uses_a_twenty_percent_band(database):
         snap = service.snapshot("300750.SZ")
         assert snap.limit_up == pytest.approx(240.0)
         assert snap.limit_down == pytest.approx(160.0)
+
+
+def test_snapshot_reports_the_suspended_flag(database):
+    """Callers must be able to tell a frozen price from a quiet market.
+
+    A suspended A-share keeps its last traded price, so `price` alone looks
+    normal. Without the flag the assistant would describe it as trading and a
+    reader had to cross-reference a different endpoint to learn otherwise.
+    """
+    from app.modules.market.service import MarketService
+
+    with database.session() as session:
+        service = MarketService(session, live=None)
+        view = service.add_symbol(
+            code="601318.SH", name="中国平安", initial_price=50.0,
+            market="cn_stock", board="main", prev_close=50.0,
+        )
+        assert service.snapshot(view.code).suspended is False
+        service.set_suspended(view.code, True)
+
+        snap = service.snapshot(view.code)
+        assert snap.suspended is True
+        # The price is still reported: it is the last traded value, not a gap.
+        assert snap.price == pytest.approx(50.0)
+        assert snap.limit_up == pytest.approx(55.0)

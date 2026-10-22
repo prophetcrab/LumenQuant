@@ -261,6 +261,9 @@ class ToolBox:
             # 24-hour window; the field name must not imply otherwise.
             "change_24h_pct": snap.change_24h_pct,
             "change_label": "较昨收" if snap.market == "cn_stock" else "近 24 小时",
+            # A suspended stock keeps its last price; without this flag the model
+            # would describe a frozen price as if it were trading.
+            "suspended": bool(snap.suspended),
         }
 
     def _strategies(self) -> list[dict]:

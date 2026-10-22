@@ -32,6 +32,7 @@ const snap = (symbol: string, market: "crypto" | "cn_stock"): Snapshot => ({
   prev_close: 100,
   limit_up: 110,
   limit_down: 90,
+  suspended: false,
 });
 
 const apiMock = vi.hoisted(() => ({

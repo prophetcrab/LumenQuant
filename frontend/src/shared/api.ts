@@ -56,6 +56,7 @@ export type Snapshot = {
   prev_close: number;
   limit_up: number;
   limit_down: number;
+  suspended: boolean;
 };
 
 export type Candle = {
