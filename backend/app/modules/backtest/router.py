@@ -62,7 +62,6 @@ def optimise(
     """
     from app.api.wiring import build_market
     from app.modules.backtest.engine import BacktestConfig
-    from app.modules.cn.fees import CnFeeSchedule
     from app.modules.market.service import SUPPORTED_TIMEFRAMES
     from app.modules.strategies.registry import get
 
@@ -126,7 +125,6 @@ def walk_forward(
     """Rolling train/optimise/test validation across several windows."""
     from app.api.wiring import build_market
     from app.modules.backtest.engine import BacktestConfig
-    from app.modules.cn.fees import CnFeeSchedule
     from app.modules.market.service import SUPPORTED_TIMEFRAMES
     from app.modules.strategies.registry import get
 

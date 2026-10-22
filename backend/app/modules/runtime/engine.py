@@ -129,8 +129,9 @@ class StrategyRuntimeEngine:
                 try:
                     # Acknowledged alerts are history; unacknowledged ones are
                     # open questions and are never pruned by age.
-                    from app.modules.alerts.service import AlertService
-
+                    # AlertService is imported at module level; re-importing it
+                    # here would bind the name locally for the whole method and
+                    # break the TradingService/AlertService construction above.
                     purged = AlertService(session).prune(keep_days=self.alert_retention_days)
                     if purged:
                         logger.info("pruned %s acknowledged alerts", purged)
@@ -138,8 +139,11 @@ class StrategyRuntimeEngine:
                     logger.exception("alert pruning failed")
                 try:
                     from app.modules.backtest.multi import MultiSymbolBacktester
-                    from app.modules.market.service import MarketService
 
+                    # MarketService is imported at module level. Re-importing it
+                    # here bound the name locally for the *whole* function, which
+                    # made every tick fail with UnboundLocalError at the top of
+                    # the method — quietly, because the loop logs and continues.
                     multi = MultiSymbolBacktester(
                         MarketService(session), session=session
                     )

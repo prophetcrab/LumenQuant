@@ -56,7 +56,15 @@ def test_session_bounds_and_state():
     assert state.next_open_ms > lunch
 
 
-def test_custom_holiday_can_be_added():
+def test_custom_holiday_can_be_added(monkeypatch):
+    # add_holidays() mutates a module-level set. Without isolating it here the
+    # date stays a holiday for every later test in the same process, which made
+    # unrelated session/quote tests fail depending on file order.
+    from app.modules.cn import calendar as calendar_module
+
+    monkeypatch.setattr(
+        calendar_module, "_HOLIDAYS", set(calendar_module._HOLIDAYS)
+    )
     add_holidays(["2026-10-21"])
     assert is_trading_day(date(2026, 10, 21)) is False
 
