@@ -181,6 +181,8 @@ npx tsc --noEmit; npx vite build                # 0 errors
 | 停牌状态随行情下发 | ✅ | `test_snapshot_reports_the_suspended_flag`；停牌时仍返回最后成交价与涨跌停 |
 | 跨日后 `prev_close` 滚动更新 | ✅ | `test_prev_close_rolls_to_the_previous_trading_day_close`；还原后失败 |
 | 15m 采样值被交易所权威值覆盖 | ✅ | `test_authoritative_bar_replaces_a_sampled_one_with_nonzero_volume`；端点故障时不降级 |
+| 未来时间戳不阻塞真实历史导入 | ✅ | `test_future_dated_bars_are_not_treated_as_fresh`；重启后 6 标的各导入 2000 根 |
+| 测试不受 .env 真实数据配置影响 | ✅ | .env 配 tencent+binance 时全量 496 项仍在 2.5 分钟内通过 |
 
 **真实网络实测（全新数据库，双市场）**：`crypto: 6 symbols / 5s / 702ms`、
 `cn: 8 quotes / 15s / 405ms`；CN 日线量 33514 与报价累计量完全一致；
@@ -258,8 +260,9 @@ C 轮以"实际使用系统"为主，每轮都从真实操作中找缺陷。完�
 | 停牌可见性 | C86 | Snapshot 增加 suspended 字段，助手与两个行情接口同步下发 |
 | 涨跌停基准 | C87 | 交易日切换时把 `prev_close` 更新为上一交易日收盘（此前从不更新） |
 | 15m 精度 | C88 | 权威 K 线无条件覆盖采样值；端点故障时不把精确行降级 |
+| 数据源切换 | C89 | 修复未来时间戳阻塞历史导入；测试强制离线，不受 .env 影响 |
 
-**当前规模**：后端 495 项测试、前端 66 项测试，全部通过。
+**当前规模**：后端 496 项测试、前端 66 项测试，全部通过。
 
 **验证方式**：除自动化测试外，每轮都在真实浏览器中操作 2K 界面确认，
 并在真实 A 股行情（腾讯数据源）上跑通同步 → 回测 → 优化 → 滚动验证 → 组合分析。

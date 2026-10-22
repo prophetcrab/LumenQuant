@@ -510,3 +510,30 @@ def ticker_for(price: float, ts_ms: int) -> CryptoTicker:
         prev_close=price,
         timestamp_ms=ts_ms,
     )
+
+
+def test_future_dated_bars_are_not_treated_as_fresh(engine_setup):
+    """Synthetic bars run ahead of wall time; they must not block a real import.
+
+    `age = now - latest` goes negative for a future timestamp, and the freshness
+    test `age <= max_age_ms` then returns True. On a database that had been running
+    the 60x synthetic engine, switching to Binance skipped `sync_history` entirely
+    and left ~23k synthetic 15m bars (spanning months ahead) beside live quotes.
+    """
+    from sqlalchemy import select
+
+    from app.modules.market.models import Candle
+
+    state, _source, engine, db = engine_setup
+    future = state["now"] + 90 * 24 * 3600_000
+    with db.session() as session:
+        session.add(
+            Candle(
+                symbol="BTCUSDT",
+                timeframe="15m",
+                open_time=future,
+                open=1.0, high=1.0, low=1.0, close=1.0, volume=1.0,
+            )
+        )
+
+    assert engine._history_is_fresh("BTCUSDT", 1_800_000) is False

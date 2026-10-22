@@ -293,9 +293,18 @@ class CryptoQuoteEngine:
             )
         if latest is None:
             return False
+        age = self.now_ms() - int(latest)
+        # A bar stamped in the future cannot come from the exchange: it is left over
+        # from the synthetic engine, whose 60x clock runs ahead of wall time. The
+        # plain `age <= max_age_ms` test evaluated *negative* for those rows and
+        # reported them as "fresh", so switching to real data skipped the import
+        # entirely and left ~23k synthetic bars (spanning months into the future)
+        # in place next to live quotes.
+        if age < 0:
+            return False
         # The newest bar can legitimately be one bucket behind "now": the current
         # bucket is still open and only lands in the database after it closes.
-        return self.now_ms() - int(latest) <= max_age_ms
+        return age <= max_age_ms
 
     # ----------------------------------------------------------------- poll
     def now_ms(self) -> int:
