@@ -137,6 +137,10 @@ class CnMarketEngine:
         self._live: dict[str, CandlePoint] = {}
         self._locked: dict[str, str] = {}
         self._prev_close: dict[str, float] = {}
+        # Trading day the engine last produced bars for. Used to notice the
+        # rollover so `prev_close` (the limit band's reference) follows yesterday's
+        # close instead of staying at whatever it was on the seed date.
+        self._last_bar_day: date | None = None
         self._lock = threading.Lock()
         self._task: asyncio.Task | None = None
         self._stopping = asyncio.Event()
@@ -355,6 +359,13 @@ class CnMarketEngine:
                         Symbol.market == "cn_stock", Symbol.enabled.is_(True)
                     )
                 ).all()
+                if self._last_bar_day != current_day:
+                    # New trading day: yesterday's close becomes today's reference
+                    # for the limit band. Without this, `prev_close` stayed at the
+                    # seed date forever and every later session's band was measured
+                    # against a price from days ago.
+                    self._roll_prev_close(session, rows, current_day)
+                    self._last_bar_day = current_day
                 closed: list[dict] = []
                 for row in rows:
                     if row.suspended:
@@ -394,6 +405,35 @@ class CnMarketEngine:
                     if fresh:
                         self.upsert_daily_bars(session, fresh)
                     session.commit()
+
+    def _roll_prev_close(self, session, rows, current_day: date) -> None:
+        """Set `prev_close` to the last close *strictly before* today.
+
+        Must exclude today's own row: the daily bar for the current session is
+        being updated in place as intraday bars close, so reading "the latest
+        daily close" would return a price that is still moving and let the limit
+        band drift with it.
+        """
+        day_start = int(
+            datetime.combine(current_day, datetime.min.time(), tzinfo=CN_TZ).timestamp()
+            * 1000
+        )
+        for row in rows:
+            last = session.scalar(
+                select(Candle.close)
+                .where(
+                    Candle.symbol == row.code,
+                    Candle.timeframe == "1d",
+                    Candle.open_time < day_start,
+                )
+                .order_by(Candle.open_time.desc())
+                .limit(1)
+            )
+            if last:
+                value = float(last)
+                row.prev_close = value
+                self._prev_close[row.code] = value
+        session.commit()
 
     def upsert_daily_bars(self, session, closed_rows: list[dict]) -> int:
         """Maintain the native daily bar from intraday closes.

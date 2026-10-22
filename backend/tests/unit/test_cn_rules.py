@@ -143,3 +143,99 @@ def test_cn_daily_import_allowed_and_other_timeframes_rejected(database):
         assert report.imported == 2
         with pytest.raises(Exception):
             service.import_csv("600000.SH", timeframe="1h", content=csv_text)
+
+
+def test_prev_close_rolls_to_the_previous_trading_day_close(tmp_path):
+    """`prev_close` is the limit band's reference and must advance each session.
+
+    The engine only synced it once at seed time, so after the seed date every
+    session's ±10% band was measured against a price from days ago — a stock could
+    look "near limit-up" (or never reachable) for reasons unrelated to today.
+    """
+    from app.core.db import Database
+    from app.core.config import Settings
+    from app.modules.cn.engine import CnMarketEngine
+    from app.modules.market.models import Candle, Symbol
+    from app.modules.cn.calendar import CN_TZ
+    from datetime import date, datetime
+    from sqlalchemy import select
+
+    settings = Settings(
+        database_url=f"sqlite:///{(tmp_path / 'roll.db').as_posix()}",
+        seed_market=False,
+        cn_symbols_enabled=True,
+        cn_seed_days=5,
+        runtime_enabled=False,
+    )
+    db = Database(settings.database_url)
+    db.create_schema()
+    engine = CnMarketEngine(db, settings)
+    engine.seed()
+
+    target = date(2026, 10, 23)
+    with db.session() as session:
+        row = session.scalar(select(Symbol).where(Symbol.code == "600519.SH"))
+        previous = session.scalar(
+            select(Candle)
+            .where(Candle.symbol == row.code, Candle.timeframe == "1d")
+            .order_by(Candle.open_time.desc())
+            .limit(1)
+        )
+        previous.close = 1500.0
+        row.prev_close = 1631.6
+        session.commit()
+
+        engine._roll_prev_close(session, [row], target)
+
+        assert row.prev_close == pytest.approx(1500.0)
+        assert engine._prev_close[row.code] == pytest.approx(1500.0)
+    db.dispose()
+
+
+def test_prev_close_roll_ignores_todays_partial_bar(tmp_path):
+    """Today's daily row is still being written; using it would move the band.
+
+    The daily bar for the current session is updated in place as intraday bars
+    close, so "the latest daily close" is a moving target. The roll must take the
+    last close strictly *before* today.
+    """
+    from app.core.db import Database
+    from app.core.config import Settings
+    from app.modules.cn.engine import CnMarketEngine
+    from app.modules.market.models import Candle, Symbol
+    from app.modules.cn.calendar import CN_TZ
+    from datetime import date, datetime
+    from sqlalchemy import select
+
+    settings = Settings(
+        database_url=f"sqlite:///{(tmp_path / 'roll2.db').as_posix()}",
+        seed_market=False,
+        cn_symbols_enabled=True,
+        cn_seed_days=5,
+        runtime_enabled=False,
+    )
+    db = Database(settings.database_url)
+    db.create_schema()
+    engine = CnMarketEngine(db, settings)
+    engine.seed()
+
+    target = date(2026, 10, 23)
+    day_start = int(
+        datetime.combine(target, datetime.min.time(), tzinfo=CN_TZ).timestamp() * 1000
+    )
+    with db.session() as session:
+        row = session.scalar(select(Symbol).where(Symbol.code == "600519.SH"))
+        # A partial bar for the target day, priced very differently.
+        session.add(
+            Candle(
+                symbol=row.code,
+                timeframe="1d",
+                open_time=day_start,
+                open=1900.0, high=1900.0, low=1900.0, close=1900.0, volume=1.0,
+            )
+        )
+        session.commit()
+        engine._roll_prev_close(session, [row], target)
+        # 1900 must NOT become the reference; yesterday's real close does.
+        assert row.prev_close != pytest.approx(1900.0)
+    db.dispose()

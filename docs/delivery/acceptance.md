@@ -179,6 +179,7 @@ npx tsc --noEmit; npx vite build                # 0 errors
 | 集合竞价时段不生成伪日线 | ✅ | `test_opening_auction_quote_does_not_create_a_daily_bar`；收盘 15:00 竞价仍被接受 |
 | 无 K 线时仍给出涨跌停 | ✅ | `test_cn_snapshot_keeps_limit_band_without_any_candles`、`test_gem_board_uses_a_twenty_percent_band` |
 | 停牌状态随行情下发 | ✅ | `test_snapshot_reports_the_suspended_flag`；停牌时仍返回最后成交价与涨跌停 |
+| 跨日后 `prev_close` 滚动更新 | ✅ | `test_prev_close_rolls_to_the_previous_trading_day_close`；还原后失败 |
 
 **真实网络实测（全新数据库，双市场）**：`crypto: 6 symbols / 5s / 702ms`、
 `cn: 8 quotes / 15s / 405ms`；CN 日线量 33514 与报价累计量完全一致；
@@ -254,8 +255,9 @@ C 轮以"实际使用系统"为主，每轮都从真实操作中找缺陷。完�
 | 竞价时段防护 | C84 | 显式时间守卫替代对 volume>0 的间接依赖（加固，非缺陷修复） |
 | 涨跌停可见性 | C85 | 无行情时按昨收算涨跌停，不再整行为 0；板块限幅按板块取 |
 | 停牌可见性 | C86 | Snapshot 增加 suspended 字段，助手与两个行情接口同步下发 |
+| 涨跌停基准 | C87 | 交易日切换时把 `prev_close` 更新为上一交易日收盘（此前从不更新） |
 
-**当前规模**：后端 491 项测试、前端 66 项测试，全部通过。
+**当前规模**：后端 493 项测试、前端 66 项测试，全部通过。
 
 **验证方式**：除自动化测试外，每轮都在真实浏览器中操作 2K 界面确认，
 并在真实 A 股行情（腾讯数据源）上跑通同步 → 回测 → 优化 → 滚动验证 → 组合分析。
