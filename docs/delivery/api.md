@@ -57,6 +57,9 @@ Base URL：`http://127.0.0.1:8000/api`　完整交互式文档：`/docs`
 - `POST /api/backtests/portfolio` — `{run_ids[], weights?, initial_capital?}`
   合并已保存回测：对齐权益曲线、计算合并指标、成分贡献、相关性矩阵与分散效果。
   要求周期与市场一致，重叠区间至少 50 根。
+  任一成分曲线含异常跳变（单根权益变动 ≥50%）时，`correlation.robust` 额外返回
+  剔除这些 bar 后重算的矩阵（`matrix`、`dropped_bars`、`returns_per_sleeve`），
+  并在 `warnings` 中说明扭曲程度。
 
 ## 自动运行
 - `GET /api/runtime/instances?account_id=`

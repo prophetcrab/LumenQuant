@@ -334,7 +334,17 @@ export type PortfolioReport = {
   metrics: BacktestMetrics;
   equity: { time: number; equity: number }[];
   components: PortfolioComponent[];
-  correlation: { labels: string[]; matrix: number[][] };
+  correlation: {
+    labels: string[];
+    matrix: number[][];
+    // Present only when a sleeve had an impossible bar; the primary matrix is
+    // then known to be distorted and this one excludes those bars.
+    robust?: {
+      matrix: number[][];
+      dropped_bars: number;
+      returns_per_sleeve: number;
+    };
+  };
   diversification: {
     weighted_volatility_pct: number;
     combined_volatility_pct: number;

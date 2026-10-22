@@ -20,6 +20,7 @@ from dataclasses import dataclass
 from sqlalchemy.orm import Session
 
 from app.core.errors import NotFoundError, ValidationError
+from app.modules.backtest.engine import IMPLAUSIBLE_BAR_RETURN
 from app.modules.backtest.metrics import compute_metrics, periods_per_year
 from app.modules.backtest.models import BacktestRun
 
@@ -29,6 +30,10 @@ MIN_ALIGNED_BARS = 50
 # Above this, two sleeves are effectively the same risk; the payload says so
 # instead of leaving the user to eyeball a heat-map cell.
 HIGH_CORRELATION = 0.85
+# A correlation shift this large means the anomalous bars were driving the
+# number, not the co-movement. Below it the two estimates agree closely enough
+# that reporting both would just add noise.
+MATERIAL_CORRELATION_SHIFT = 0.15
 
 
 @dataclass(frozen=True)
@@ -67,6 +72,35 @@ def _returns(equity: list[float]) -> list[float]:
         (equity[i] - equity[i - 1]) / equity[i - 1]
         for i in range(1, len(equity))
         if equity[i - 1] > 0
+    ]
+
+
+def _indexed_returns(equity: list[float]) -> list[tuple[int, float]]:
+    """Returns paired with the index of the bar they land on.
+
+    `_returns` drops entries whose base is non-positive, which shifts indices and
+    makes it impossible to say *which* bar an anomaly came from. This variant keeps
+    the bar index so a warning can name the exact timestamp.
+    """
+    out: list[tuple[int, float]] = []
+    for index in range(1, len(equity)):
+        previous = equity[index - 1]
+        if previous <= 0:
+            continue
+        out.append((index, (equity[index] - previous) / previous))
+    return out
+
+
+def _implausible_bars(equity: list[float]) -> list[tuple[int, float]]:
+    """Every bar whose equity move cannot come from price alone.
+
+    Same threshold the single-run and multi-symbol engines use, so a curve that
+    triggers the warning there cannot slip through here.
+    """
+    return [
+        (index, change * 100)
+        for index, change in _indexed_returns(equity)
+        if abs(change) >= IMPLAUSIBLE_BAR_RETURN
     ]
 
 
@@ -158,7 +192,9 @@ class PortfolioAnalyser:
         sleeve_payload = []
         sleeve_returns: list[list[float]] = []
         sleeve_equities: list[list[float]] = []
-        for sleeve, curve in zip(sleeves, curves):
+        sleeve_spans: list[list[tuple[int, float]]] = []
+        anomalies: list[tuple[int, int, float]] = []  # (sleeve index, bar, pct)
+        for sleeve_index, (sleeve, curve) in enumerate(zip(sleeves, curves)):
             allocation = initial_capital * sleeve.weight
             anchor = curve[common[0]]
             if anchor <= 0:
@@ -168,8 +204,14 @@ class PortfolioAnalyser:
             scale = allocation / anchor
             equity = [curve[time] * scale for time in common]
             sleeve_equities.append(equity)
-            returns = _returns(equity)
+            spans = _indexed_returns(equity)
+            sleeve_spans.append(spans)
+            returns = [value for _index, value in spans]
             sleeve_returns.append(returns)
+            for bar_index, change_pct in _implausible_bars(equity):
+                # Only the aligned curve matters: a jump outside the common window
+                # cannot distort a correlation computed on it.
+                anomalies.append((sleeve_index, bar_index, change_pct))
             ppy = periods_per_year(sleeve.run.timeframe, self._market(sleeve.run))
             volatility = _std(returns) * math.sqrt(ppy) * 100
             peak = equity[0]
@@ -247,6 +289,16 @@ class PortfolioAnalyser:
             for left in sleeve_returns
         ]
 
+        # A jump that only one sleeve contains makes that sleeve look
+        # uncorrelated (or spuriously correlated) with everything else, because a
+        # single ±95% return dominates the covariance. Recompute the matrix with
+        # every bar touched by an anomaly removed from *all* sleeves, so pairing
+        # stays aligned, and report it only when the estimates actually differ.
+        robust = self._robust_correlation(sleeve_spans, anomalies)
+        correlation_payload: dict = {"labels": labels, "matrix": matrix}
+        if robust is not None:
+            correlation_payload["robust"] = robust["payload"]
+
         combined_returns = _returns(combined)
         ppy = periods_per_year(timeframe, market)
         combined_vol = _std(combined_returns) * math.sqrt(ppy) * 100
@@ -255,6 +307,9 @@ class PortfolioAnalyser:
         )
 
         warnings = self._warnings(sleeve_payload, matrix, labels)
+        warnings.extend(self._anomaly_warnings(anomalies, labels, common, sleeve_payload))
+        if robust is not None:
+            warnings.extend(robust["warnings"])
         return {
             "timeframe": timeframe,
             "market": market,
@@ -269,7 +324,7 @@ class PortfolioAnalyser:
                 for time, value in zip(common, combined)
             ],
             "components": sleeve_payload,
-            "correlation": {"labels": labels, "matrix": matrix},
+            "correlation": correlation_payload,
             "diversification": {
                 "weighted_volatility_pct": round(weighted_vol, 4),
                 "combined_volatility_pct": round(combined_vol, 4),
@@ -277,6 +332,107 @@ class PortfolioAnalyser:
                 "benefit_pct": round((1 - combined_vol / weighted_vol) * 100, 4)
                 if weighted_vol
                 else 0.0,
+            },
+            "warnings": warnings,
+        }
+
+    @staticmethod
+    def _anomaly_warnings(
+        anomalies: list[tuple[int, int, float]],
+        labels: list[str],
+        common: list[int],
+        components: list[dict],
+    ) -> list[str]:
+        """Report each sleeve whose curve contains an impossible move.
+
+        Deliberately loud: once a curve has a bar that cannot come from price
+        alone, every statistic derived from it — correlation, volatility,
+        drawdown, the diversification benefit — is suspect, and the portfolio
+        numbers will not match what the user remembers from the single runs.
+        """
+        if not anomalies:
+            return []
+        from datetime import datetime, timezone
+
+        by_sleeve: dict[int, list[tuple[int, float]]] = {}
+        for sleeve_index, bar_index, change_pct in anomalies:
+            by_sleeve.setdefault(sleeve_index, []).append((bar_index, change_pct))
+
+        out: list[str] = []
+        for sleeve_index, hits in sorted(by_sleeve.items()):
+            worst_bar, worst_pct = max(hits, key=lambda item: abs(item[1]))
+            if 0 <= worst_bar < len(common):
+                when = datetime.fromtimestamp(
+                    common[worst_bar] / 1000, timezone.utc
+                ).strftime("%Y-%m-%d %H:%M")
+            else:
+                when = "—"
+            out.append(
+                f"{labels[sleeve_index]} 的权益曲线有 {len(hits)} 根异常跳变"
+                f"（最大 {worst_pct:+.1f}%，位于 {when}）；"
+                f"相关性、波动率与分散收益都建立在这条曲线上，结论不可直接采信"
+            )
+        return out
+
+    @staticmethod
+    def _robust_correlation(
+        spans: list[list[tuple[int, float]]],
+        anomalies: list[tuple[int, int, float]],
+    ) -> dict | None:
+        """Correlation recomputed with every anomalous bar removed.
+
+        All sleeves lose the same bar indices, so the return series stay aligned
+        pairwise. The cleaned matrix is always offered when anomalies exist — the
+        primary matrix is known to be suspect, so the user needs something to
+        compare it against. Only the *shift* warning is gated on materiality, to
+        avoid claiming distortion when the estimates happen to agree anyway.
+        """
+        if not anomalies:
+            return None
+        # `bar_index` is the index in the aligned equity array, i.e. the bar the
+        # return lands on. Return series are indexed from 1, so drop index-1.
+        drop = {bar_index - 1 for _sleeve, bar_index, _pct in anomalies}
+        cleaned = [
+            [value for position, (_index, value) in enumerate(span) if position not in drop]
+            for span in spans
+        ]
+        if any(len(series) < MIN_ALIGNED_BARS - 1 for series in cleaned):
+            # Removing the bad bars leaves too little data; a correlation on a
+            # handful of points would be less trustworthy than the warning.
+            return None
+
+        robust_matrix = [
+            [round(_correlation(left, right), 4) for right in cleaned] for left in cleaned
+        ]
+        original_matrix = [
+            [
+                round(_correlation([v for _i, v in left], [v for _i, v in right]), 4)
+                for right in spans
+            ]
+            for left in spans
+        ]
+
+        shifted: list[str] = []
+        for i in range(len(spans)):
+            for j in range(i + 1, len(spans)):
+                delta = robust_matrix[i][j] - original_matrix[i][j]
+                if abs(delta) >= MATERIAL_CORRELATION_SHIFT:
+                    shifted.append(
+                        f"剔除异常 bar 后，第 {i + 1} 与第 {j + 1} 条曲线的相关性从 "
+                        f"{original_matrix[i][j]:.2f} 变为 {robust_matrix[i][j]:.2f}"
+                        f"（变化 {delta:+.2f}）"
+                    )
+        warnings = [
+            f"已剔除 {len(drop)} 根异常 bar 重算相关性（剩 {len(cleaned[0])} 个样本），"
+            "可对比两者判断原矩阵被扭曲的程度"
+        ]
+        if shifted:
+            warnings.append("相关性被异常跳变显著扭曲：" + "；".join(shifted))
+        return {
+            "payload": {
+                "matrix": robust_matrix,
+                "dropped_bars": len(drop),
+                "returns_per_sleeve": len(cleaned[0]),
             },
             "warnings": warnings,
         }

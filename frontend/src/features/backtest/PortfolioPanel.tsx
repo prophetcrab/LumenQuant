@@ -356,8 +356,28 @@ function PortfolioResult({
           </div>
         </Card>
 
-        <Card title="相关性矩阵" subtitle="逐根收益率的相关；越接近 1 越是同一个风险">
+        <Card
+          title="相关性矩阵"
+          subtitle={
+            report.correlation.robust
+              ? "原始矩阵含异常跳变，下方另给剔除后的结果"
+              : "逐根收益率的相关；越接近 1 越是同一个风险"
+          }
+        >
           <CorrelationMatrix labels={report.correlation.labels} matrix={report.correlation.matrix} />
+          {report.correlation.robust ? (
+            <div className="stack" style={{ gap: 8, marginTop: 14 }}>
+              <div className="divider" />
+              <div className="helper">
+                剔除 {report.correlation.robust.dropped_bars} 根异常 bar 后重算（每条约{" "}
+                {report.correlation.robust.returns_per_sleeve} 个样本）
+              </div>
+              <CorrelationMatrix
+                labels={report.correlation.labels}
+                matrix={report.correlation.robust.matrix}
+              />
+            </div>
+          ) : null}
         </Card>
       </div>
     </>

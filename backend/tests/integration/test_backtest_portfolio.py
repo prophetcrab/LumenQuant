@@ -163,3 +163,76 @@ def test_portfolio_alignment_uses_real_overlap(client, tmp_path):
     response = client.post("/api/backtests/portfolio", json={"run_ids": ids})
     assert response.status_code == 422
     assert "重叠" in response.json()["error"]["message"]
+
+
+def _inject_jump(client, run_id: str, *, at_fraction: float, magnitude: float) -> None:
+    """Rewrite a stored curve to contain one impossible single-bar move."""
+    from sqlalchemy import create_engine
+    from sqlalchemy.orm import Session
+
+    settings = client.app.state.settings
+    engine = create_engine(settings.database_url)
+    with Session(engine) as session:
+        row = session.get(BacktestRun, run_id)
+        points = json.loads(row.equity_json)
+        index = max(2, int(len(points) * at_fraction))
+        for point in points[index:]:
+            point["equity"] = point["equity"] * (1.0 + magnitude)
+        row.equity_json = json.dumps(points)
+        session.commit()
+    engine.dispose()
+
+
+def test_portfolio_flags_an_implausible_sleeve_curve(client):
+    """One bad bar in one sleeve silently distorts every correlation.
+
+    A single -60% return dominates the covariance, so that sleeve reads as
+    uncorrelated with everything else even if it moves exactly like the others.
+    The analysis must say so instead of publishing a confident-looking matrix.
+    """
+    ids = [
+        _run(client, "sma_cross", "BTCUSDT"),
+        _run(client, "rsi_reversion", "ETHUSDT"),
+        _run(client, "macd_momentum", "SOLUSDT"),
+    ]
+    _inject_jump(client, ids[1], at_fraction=0.5, magnitude=-0.60)
+
+    body = client.post("/api/backtests/portfolio", json={"run_ids": ids}).json()
+    joined = " ".join(body["warnings"])
+    assert "异常跳变" in joined
+    # The warning must name which sleeve is compromised, not just "something".
+    assert "rsi_reversion · ETHUSDT" in joined
+    # A curve that cannot come from price alone invalidates the summary metrics.
+    assert "不可直接采信" in joined
+
+
+def test_robust_matrix_is_reported_when_the_jump_drives_the_correlation(client):
+    """Removing the anomaly must visibly move at least one correlation."""
+    ids = [
+        _run(client, "sma_cross", "BTCUSDT"),
+        _run(client, "rsi_reversion", "ETHUSDT"),
+    ]
+    _inject_jump(client, ids[0], at_fraction=0.4, magnitude=0.8)
+
+    body = client.post("/api/backtests/portfolio", json={"run_ids": ids}).json()
+    robust = body["correlation"].get("robust")
+    assert robust is not None, body["warnings"]
+    assert robust["dropped_bars"] >= 1
+    joined = " ".join(body["warnings"])
+    # A warning that claims a recomputation happened must be backed by the data:
+    # earlier the message was emitted while the matrix itself was never attached,
+    # leaving the UI with text pointing at nothing.
+    assert "重算相关性" in joined
+    assert len(robust["matrix"]) == 2
+    # Same shape as the original matrix, so the UI can render either.
+    assert len(robust["matrix"][0]) == 2
+    # Fewer observations than the raw series.
+    assert robust["returns_per_sleeve"] < body["aligned_bars"] - 1
+
+
+def test_clean_portfolios_report_no_anomaly_and_no_robust_matrix(client):
+    """No false positives: a normal pair must not gain a second matrix."""
+    ids = [_run(client, "sma_cross", "BTCUSDT"), _run(client, "rsi_reversion", "ETHUSDT")]
+    body = client.post("/api/backtests/portfolio", json={"run_ids": ids}).json()
+    assert "robust" not in body["correlation"]
+    assert not any("异常跳变" in warning for warning in body["warnings"])
