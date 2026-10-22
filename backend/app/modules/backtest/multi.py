@@ -140,7 +140,9 @@ class MultiSymbolBacktester:
                 raw["t_plus_one"] = True
             cfg = BacktestConfig.from_dict(raw)
 
-            candles = self.market.candles(view.code, timeframe=timeframe, limit=bars)
+            candles = self.market.candles(
+                view.code, timeframe=timeframe, limit=bars, closed_only=True
+            )
             required = strategy.warmup(parsed) + 3
             if len(candles) < required:
                 raise ValidationError(

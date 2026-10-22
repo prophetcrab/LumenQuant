@@ -304,3 +304,76 @@ def test_snapshot_uses_the_24h_ticker(engine_setup):
     assert snap.change_24h_pct == pytest.approx(4.375, abs=1e-3)
     assert snap.high_24h == pytest.approx(84000.0)
     assert snap.volume_24h == pytest.approx(1234.5)
+
+
+def test_crypto_feed_outage_raises_one_alert_and_recovery_clears_it(engine_setup):
+    """Crypto trades 24/7, so a silent feed is always a defect worth alerting."""
+    from sqlalchemy import select
+
+    from app.modules.alerts.models import Alert
+    from app.modules.market.sources.binance_public import CryptoTicker
+
+    state, source, engine, db = engine_setup
+    source.payload = {
+        "BTCUSDT": CryptoTicker(
+            symbol="BTCUSDT",
+            price=83500.0,
+            open=80000.0,
+            high=84000.0,
+            low=79000.0,
+            volume=1.0,
+            prev_close=80100.0,
+            timestamp_ms=state["now"],
+        )
+    }
+    engine.poll_once()
+    engine._check_health()
+
+    def failing(codes):
+        raise RuntimeError("connection reset")
+
+    source.tickers = failing
+    for _ in range(3):
+        with pytest.raises(RuntimeError):
+            engine.poll_once()
+    engine._check_health()
+
+    with db.session() as session:
+        open_alerts = session.scalars(
+            select(Alert).where(
+                Alert.category == "data_feed", Alert.acknowledged.is_(False)
+            )
+        ).all()
+    assert len(open_alerts) == 1
+    assert open_alerts[0].ref_id == "crypto"
+    assert "中断" in open_alerts[0].title
+
+    # Repeated checks while still broken must not add rows.
+    engine._check_health()
+    with db.session() as session:
+        assert len(session.scalars(select(Alert).where(Alert.category == "data_feed")).all()) == 1
+
+    # Recovery acknowledges it.
+    source.tickers = lambda codes: source.payload
+    state["now"] += 60_000
+    source.payload["BTCUSDT"] = CryptoTicker(
+        symbol="BTCUSDT",
+        price=83600.0,
+        open=80000.0,
+        high=84000.0,
+        low=79000.0,
+        volume=2.0,
+        prev_close=80100.0,
+        timestamp_ms=state["now"],
+    )
+    engine.poll_once()
+    engine._check_health()
+    with db.session() as session:
+        assert (
+            session.scalars(
+                select(Alert).where(
+                    Alert.category == "data_feed", Alert.acknowledged.is_(False)
+                )
+            ).all()
+            == []
+        )

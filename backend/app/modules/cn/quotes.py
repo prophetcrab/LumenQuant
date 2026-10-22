@@ -32,6 +32,7 @@ from app.modules.cn.calendar import (
     CN_TZ,
     day_key,
     is_session_open,
+    is_trading_day,
     session_bounds,
     session_state,
 )
@@ -114,6 +115,10 @@ class CnQuoteEngine:
         self._last_latency_ms = 0.0
         self._last_error = ""
         self._failures = 0
+        # Health guard state: which condition is currently reported, so a
+        # persistent outage raises one alert instead of one per poll, and a
+        # recovery is announced exactly once.
+        self._outage_reported = False
         self._now_ms = now_ms or (lambda: int(time.time() * 1000))
         self._task: asyncio.Task | None = None
         self._stopping = asyncio.Event()
@@ -161,6 +166,10 @@ class CnQuoteEngine:
                 # makes the log unreadable. The reason is kept in `last_error`
                 # and surfaced through /cn/data/source.
                 logger.warning("A-share quote poll failed: %s", str(exc)[:160])
+            try:
+                await asyncio.to_thread(self._check_health)
+            except Exception:
+                logger.exception("A-share quote health check failed")
 
     def _next_delay(self) -> float:
         """Session-paced polling with exponential backoff while failing."""
@@ -173,6 +182,63 @@ class CnQuoteEngine:
                 else max(60.0, self.poll_seconds * 4)
             )
         return min(300.0, self.poll_seconds * (2**failures))
+
+    def _check_health(self) -> None:
+        """Raise/clear an alert when the quote feed dies or recovers.
+
+        Nothing else notices a dead feed: every consumer silently falls back to
+        the last stored bar, so the platform keeps serving prices that look real.
+        An operator watching a position needs to be told the feed is gone.
+        """
+        from app.modules.alerts.service import AlertService
+
+        now = self.now_ms()
+        with self._lock:
+            last_poll = self._last_poll_ms
+            failures = self._failures
+            error = self._last_error
+        # Outside a session the poller is deliberately slow, so a long gap is
+        # normal; only an actual failure streak should alert then.
+        open_now = is_session_open(now)
+        stale_after_ms = self._max_age_ms() * 2
+        stale = bool(last_poll) and (now - last_poll) > stale_after_ms
+        broken = failures >= 3 or (open_now and stale)
+        if broken and not self._outage_reported:
+            if last_poll:
+                gap = f"最近报价已 {max(0, now - last_poll) // 1000}s 未更新。"
+            else:
+                # Without this the message subtracts from 0 and reports the whole
+                # Unix epoch ("1,792,631,255s"), which reads like a bug in the
+                # alert rather than a feed that never came up.
+                gap = "启动后从未成功获取报价。"
+            with self.db.session() as session:
+                AlertService(session).raise_alert(
+                    category="data_feed",
+                    level="critical",
+                    title="A 股实时行情中断",
+                    message=(
+                        f"连续失败 {failures} 次；{gap}"
+                        f"原因：{error or '未知'}。交易仍在用最后一根已存 K 线估值。"
+                    ),
+                    ref_type="data_feed",
+                    ref_id="cn",
+                    commit=True,
+                )
+            self._outage_reported = True
+            logger.error("A-share quote feed outage recorded: %s", error)
+            return
+        if not broken and self._outage_reported:
+            with self.db.session() as session:
+                alerts = AlertService(session)
+                for row in alerts.list(
+                    category="data_feed", unacknowledged_only=True, limit=50
+                ):
+                    if row.ref_id == "cn":
+                        alerts.acknowledge(row.id)
+                        break
+            self._outage_reported = False
+            logger.info("A-share quote feed recovered")
+        return
 
     # ----------------------------------------------------------------- poll
     def now_ms(self) -> int:
@@ -408,32 +474,37 @@ class CnQuoteEngine:
             existing.close = last_close
 
     def _sync_today_daily(self, fetched: dict, now: int) -> None:
-        """Write today's daily bar from the quote itself.
+        """Write the daily bar for the quote's own trading day.
 
         The quote gives open/high/low/last and the day's cumulative volume, which
         *is* the daily bar. Deriving it from accumulated 15m bars instead loses
         every trade that happened before the process started, and after a restart
         it loses them twice.
 
-        Only written during a session: outside it the stored row is already final,
-        and re-writing `high`/`low` from a quote taken after the close could
-        silently narrow a range that the exchange already published.
+        The day is taken from the **quote timestamp**, not from `now`:
+
+        * after 15:00 the quote is stamped at the close and still describes today,
+          so the closing-auction print is captured instead of being frozen at the
+          last in-session poll;
+        * before 09:30 the quote still belongs to yesterday, so no phantom bar is
+          created for a day that has not traded yet.
         """
-        if not is_session_open(now):
-            return
-        day_open = int(
-            datetime.combine(day_key(now), datetime.min.time(), tzinfo=CN_TZ).timestamp()
-            * 1000
-        )
         rows = [
             (code, quote)
             for code, quote in fetched.items()
-            if quote.price > 0 and quote.volume > 0
+            if quote.price > 0 and quote.volume > 0 and quote.timestamp_ms > 0
         ]
         if not rows:
             return
         with self.db.session() as session:
             for code, quote in rows:
+                quote_day = day_key(quote.timestamp_ms)
+                if not is_trading_day(quote_day):
+                    continue
+                day_open = int(
+                    datetime.combine(quote_day, datetime.min.time(), tzinfo=CN_TZ).timestamp()
+                    * 1000
+                )
                 existing = session.scalar(
                     select(Candle).where(
                         Candle.symbol == code,
@@ -455,10 +526,12 @@ class CnQuoteEngine:
                         )
                     )
                     continue
-                # The exchange's day figures are authoritative and monotone within
-                # a session, so assign rather than max/min: a previously stored
-                # synthetic or half-imported range must not widen the real one.
-                existing.open = existing.open or quote.open or quote.price
+                # The exchange's day figures are authoritative, so assign rather
+                # than max/min: a previously stored synthetic or half-imported
+                # range must not widen the real one. `open` is assigned too — an
+                # earlier `_roll_daily` row may hold the first *observed* 15m
+                # price, which is not the session's opening auction.
+                existing.open = quote.open or existing.open or quote.price
                 existing.high = max(quote.high, quote.price)
                 existing.low = min(quote.low or quote.price, quote.price)
                 existing.close = quote.price

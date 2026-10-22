@@ -121,7 +121,12 @@ class AlertService:
     ) -> list[AlertView]:
         stmt = select(Alert).order_by(Alert.created_at.desc())
         if account_id:
-            stmt = stmt.where(Alert.account_id == account_id)
+            # Platform-wide alerts (empty account_id) concern every account: a
+            # dead price feed is exactly what a trader needs to see, so filtering
+            # strictly by account would hide the most important alert there is.
+            stmt = stmt.where(
+                (Alert.account_id == account_id) | (Alert.account_id == "")
+            )
         if unacknowledged_only:
             stmt = stmt.where(Alert.acknowledged.is_(False))
         if level:
@@ -135,7 +140,12 @@ class AlertService:
         """Distinct categories with counts, for building a filter control."""
         stmt = select(Alert.category, func.count(Alert.id))
         if account_id:
-            stmt = stmt.where(Alert.account_id == account_id)
+            # Same rule as `list()`: include platform-wide rows, otherwise the
+            # "行情中断" filter option would be missing on an otherwise populated
+            # alert center and the rows behind it unreachable.
+            stmt = stmt.where(
+                (Alert.account_id == account_id) | (Alert.account_id == "")
+            )
         rows = self.session.execute(
             stmt.group_by(Alert.category).order_by(Alert.category)
         ).all()
@@ -165,7 +175,11 @@ class AlertService:
             Alert.acknowledged.is_(False)
         )
         if account_id:
-            stmt = stmt.where(Alert.account_id == account_id)
+            # Match `list()`: platform-wide alerts count for every account, so the
+            # sidebar badge cannot stay silent while the feed is down.
+            stmt = stmt.where(
+                (Alert.account_id == account_id) | (Alert.account_id == "")
+            )
         counts = {level: 0 for level in ("info", "warning", "critical")}
         for level, count in self.session.execute(stmt.group_by(Alert.level)).all():
             counts[level] = int(count)

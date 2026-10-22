@@ -71,6 +71,7 @@ class CryptoQuoteEngine:
         self._last_latency_ms = 0.0
         self._last_error = ""
         self._failures = 0
+        self._outage_reported = False
         self._task: asyncio.Task | None = None
         self._stopping = asyncio.Event()
 
@@ -136,6 +137,60 @@ class CryptoQuoteEngine:
                 # A resolver hiccup is expected and self-healing; a full traceback
                 # every 5 seconds buries the lines that matter.
                 logger.warning("crypto quote poll failed: %s", str(exc)[:160])
+            try:
+                await asyncio.to_thread(self._check_health)
+            except Exception:
+                logger.exception("crypto quote health check failed")
+
+    def _check_health(self) -> None:
+        """Raise/clear an alert when the Binance feed dies or recovers.
+
+        Crypto trades 24/7, so there is no "market is closed" excuse for silence:
+        a gap here always means the feed is broken.
+        """
+        from app.modules.alerts.service import AlertService
+
+        now = self.now_ms()
+        with self._lock:
+            last_poll = self._last_poll_ms
+            failures = self._failures
+            error = self._last_error
+        stale = bool(last_poll) and (now - last_poll) > self.max_age_ms * 2
+        broken = failures >= 3 or stale
+        if broken and not self._outage_reported:
+            if last_poll:
+                gap = f"最近报价已 {max(0, now - last_poll) // 1000}s 未更新。"
+            else:
+                # Never polled successfully: subtracting from 0 would report the
+                # whole Unix epoch as the gap, which looks like an alert bug.
+                gap = "启动后从未成功获取报价。"
+            with self.db.session() as session:
+                AlertService(session).raise_alert(
+                    category="data_feed",
+                    level="critical",
+                    title="加密实时行情中断",
+                    message=(
+                        f"连续失败 {failures} 次；{gap}"
+                        f"原因：{error or '未知'}。交易仍在用最后一根已存 K 线估值。"
+                    ),
+                    ref_type="data_feed",
+                    ref_id="crypto",
+                    commit=True,
+                )
+            self._outage_reported = True
+            logger.error("crypto quote feed outage recorded: %s", error)
+            return
+        if not broken and self._outage_reported:
+            with self.db.session() as session:
+                alerts = AlertService(session)
+                for row in alerts.list(
+                    category="data_feed", unacknowledged_only=True, limit=50
+                ):
+                    if row.ref_id == "crypto":
+                        alerts.acknowledge(row.id)
+                        break
+            self._outage_reported = False
+            logger.info("crypto quote feed recovered")
 
     def _next_delay(self) -> float:
         """Exponential backoff while failing, capped so recovery stays quick.

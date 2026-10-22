@@ -28,6 +28,7 @@ const CATEGORY_LABEL: Record<string, string> = {
   exit_failed: "保护性离场失败",
   order_rejected: "下单被拒",
   gateway_failure: "网关故障",
+  data_feed: "行情中断",
 };
 
 export function AlertsPage() {

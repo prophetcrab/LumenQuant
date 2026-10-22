@@ -1,0 +1,171 @@
+"""`closed_only` must exclude a bar whose interval has not finished.
+
+Real-time feeds update today's daily bar as trades arrive. That row is not a
+finished bar: its close still moves, so any caller that reads it produces results
+that change with the wall clock. Backtests and strategy signals must not.
+"""
+
+from __future__ import annotations
+
+from datetime import datetime
+
+import pytest
+
+from app.core.config import Settings
+from app.core.db import Database
+from app.modules.cn.calendar import CN_TZ, to_ms
+from app.modules.market.models import Candle, Symbol
+from app.modules.market.service import MarketService
+
+TRADING_DAY = datetime(2026, 10, 21, tzinfo=CN_TZ).date()
+
+
+def ms(hour: int, minute: int = 0) -> int:
+    return to_ms(TRADING_DAY, datetime.min.time().replace(hour=hour, minute=minute))
+
+
+class FixedClock:
+    def __init__(self, now_ms: int) -> None:
+        self._now = now_ms
+
+    def now_ms(self) -> int:
+        return self._now
+
+    def set(self, value: int) -> None:
+        self._now = value
+
+
+class FakeLive:
+    """Live provider that only supplies a clock, no in-progress candle."""
+
+    def __init__(self, clock: FixedClock) -> None:
+        self.clock = clock
+
+    def live_candle(self, symbol: str):
+        return None
+
+
+def make_settings(tmp_path) -> Settings:
+    return Settings(
+        database_url=f"sqlite:///{(tmp_path / 'closed.db').as_posix()}",
+        seed_market=False,
+        cn_symbols_enabled=False,
+        runtime_enabled=False,
+    )
+
+
+@pytest.fixture()
+def cn_db(tmp_path):
+    settings = make_settings(tmp_path)
+    db = Database(settings.database_url)
+    db.create_schema()
+    with db.session() as session:
+        session.add(
+            Symbol(
+                code="600519.SH",
+                name="贵州茅台",
+                asset_class="stock",
+                market="cn_stock",
+                exchange="SH",
+                board="main",
+                base="600519",
+                quote="CNY",
+                tick_size=0.01,
+                lot_size=100.0,
+                initial_price=1000.0,
+                prev_close=1000.0,
+                limit_pct=0.10,
+            )
+        )
+        # Yesterday's final bar and today's still-forming bar.
+        session.add(
+            Candle(
+                symbol="600519.SH",
+                timeframe="1d",
+                open_time=ms(0) - 86_400_000,
+                open=990.0,
+                high=1010.0,
+                low=985.0,
+                close=1005.0,
+                volume=5000.0,
+            )
+        )
+        session.add(
+            Candle(
+                symbol="600519.SH",
+                timeframe="1d",
+                open_time=ms(0),
+                open=1005.0,
+                high=1015.0,
+                low=1000.0,
+                close=1012.0,
+                volume=1200.0,
+            )
+        )
+    yield db
+    db.dispose()
+
+
+def test_today_daily_bar_is_excluded_while_the_session_is_open(cn_db):
+    clock = FixedClock(ms(11, 0))
+    with cn_db.session() as session:
+        market = MarketService(session, live=FakeLive(clock))
+        closed = market.candles("600519.SH", timeframe="1d", limit=10, closed_only=True)
+        everything = market.candles(
+            "600519.SH", timeframe="1d", limit=10, closed_only=False
+        )
+    assert len(everything) == 2
+    assert len(closed) == 1
+    # Only yesterday's finished bar survives.
+    assert closed[-1].close == pytest.approx(1005.0)
+
+
+def test_the_same_bar_becomes_available_after_the_close(cn_db):
+    clock = FixedClock(ms(15, 1))
+    with cn_db.session() as session:
+        market = MarketService(session, live=FakeLive(clock))
+        closed = market.candles("600519.SH", timeframe="1d", limit=10, closed_only=True)
+    assert len(closed) == 2
+    assert closed[-1].close == pytest.approx(1012.0)
+
+
+def test_crypto_15m_bar_is_excluded_until_its_bucket_ends(tmp_path):
+    settings = make_settings(tmp_path)
+    db = Database(settings.database_url)
+    db.create_schema()
+    bucket = 1_792_576_800_000  # 2026-10-21 10:00:00 UTC
+    with db.session() as session:
+        session.add(
+            Symbol(
+                code="BTCUSDT",
+                name="Bitcoin / USDT",
+                market="crypto",
+                base="BTC",
+                quote="USDT",
+                initial_price=80_000.0,
+            )
+        )
+        session.add(
+            Candle(
+                symbol="BTCUSDT",
+                timeframe="15m",
+                open_time=bucket,
+                open=80_000.0,
+                high=80_500.0,
+                low=79_900.0,
+                close=80_200.0,
+                volume=10.0,
+            )
+        )
+
+    clock = FixedClock(bucket + 60_000)  # one minute into the bucket
+    with db.session() as session:
+        market = MarketService(session, live=FakeLive(clock))
+        assert market.candles("BTCUSDT", timeframe="15m", limit=5, closed_only=True) == []
+
+    clock.set(bucket + 15 * 60_000)
+    with db.session() as session:
+        market = MarketService(session, live=FakeLive(clock))
+        closed = market.candles("BTCUSDT", timeframe="15m", limit=5, closed_only=True)
+    assert len(closed) == 1
+    db.dispose()

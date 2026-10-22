@@ -72,7 +72,9 @@ def optimise(
     strategy = get(payload.strategy)
     market = build_market(request, session, live=False)
     symbol_view = market.require_symbol(payload.symbol)
-    candles = market.candles(payload.symbol, timeframe=payload.timeframe, limit=payload.bars)
+    candles = market.candles(
+        payload.symbol, timeframe=payload.timeframe, limit=payload.bars, closed_only=True
+    )
     if not candles:
         raise ValidationError(f"{payload.symbol} 没有可用的 K 线数据")
 
@@ -135,7 +137,9 @@ def walk_forward(
     strategy = get(payload.strategy)
     market = build_market(request, session, live=False)
     symbol_view = market.require_symbol(payload.symbol)
-    candles = market.candles(payload.symbol, timeframe=payload.timeframe, limit=payload.bars)
+    candles = market.candles(
+        payload.symbol, timeframe=payload.timeframe, limit=payload.bars, closed_only=True
+    )
     if not candles:
         raise ValidationError(f"{payload.symbol} 没有可用的 K 线数据")
 

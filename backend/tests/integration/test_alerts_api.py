@@ -244,3 +244,40 @@ def test_prune_removes_only_old_acknowledged_alerts(client):
 
 def test_prune_rejects_negative_days(client):
     assert client.post("/api/alerts/prune", params={"keep_days": -1}).status_code == 422
+
+
+def test_platform_wide_alert_is_visible_to_every_account(client):
+    """A dead price feed has no account, yet every account must see it.
+
+    Filtering strictly by account_id made the most severe alert category
+    invisible: it never appeared in the list, the category filter or the badge.
+    """
+    account = client.post(
+        "/api/accounts",
+        json={"name": "告警可见性", "initial_balance": 100000, "market": "cn_stock"},
+    ).json()
+
+    # Simulate what the quote engines raise on their own session: no account_id.
+    from app.modules.alerts.service import AlertService
+
+    with client.app.state.db.session() as session:
+        AlertService(session).raise_alert(
+            category="data_feed",
+            level="critical",
+            title="A 股实时行情中断",
+            message="启动后从未成功获取报价。",
+            ref_type="data_feed",
+            ref_id="cn",
+            commit=True,
+        )
+
+    listed = client.get("/api/alerts", params={"account_id": account["id"]}).json()
+    assert any(row["category"] == "data_feed" for row in listed)
+
+    summary = client.get("/api/alerts/summary", params={"account_id": account["id"]}).json()
+    assert summary["by_level"]["critical"] == 1
+
+    categories = client.get(
+        "/api/alerts/categories", params={"account_id": account["id"]}
+    ).json()
+    assert any(row["category"] == "data_feed" for row in categories)

@@ -42,7 +42,9 @@ class StrategyService:
             parsed = strategy.validate_params(params)
         except Exception as exc:
             raise ValidationError(f"invalid strategy parameters: {exc}") from exc
-        candles = self.market.candles(symbol, timeframe=timeframe, limit=limit)
+        candles = self.market.candles(
+            symbol, timeframe=timeframe, limit=limit, closed_only=True
+        )
         required = strategy.warmup(parsed) + 2
         if len(candles) < required:
             # Mirror the backtest message so the same failure reads the same way

@@ -12,7 +12,9 @@ aggregates.
 
 from __future__ import annotations
 
+import time
 from collections.abc import Sequence
+from datetime import time as dtime
 from typing import Protocol
 
 from sqlalchemy import delete, select
@@ -32,6 +34,21 @@ SUPPORTED_TIMEFRAMES = ("15m", "30m", "1h", "4h", "1d")
 # broker or charting tool calls 4h. Offering it invites misleading comparisons.
 CN_TIMEFRAMES = ("15m", "30m", "1h", "1d")
 MARKETS = ("crypto", "cn_stock")
+
+
+def _bar_close_ms(market: str, timeframe: str, open_time: int) -> int:
+    """When a bar's interval ends, in epoch milliseconds.
+
+    Daily bars are not simply `open + 1d`: an A-share daily bar is stamped at
+    local midnight but is only final at the 15:00 close, so `open + 24h` would
+    keep calling it "in progress" all evening and hide the just-closed session
+    from every `closed_only` caller.
+    """
+    if market == "cn_stock" and timeframe == "1d":
+        from app.modules.cn.calendar import CN_TZ, day_key, to_ms
+
+        return to_ms(day_key(open_time), dtime(15, 0))
+    return open_time + timeframe_ms(timeframe)
 
 
 def _merge_partial_bar(stored: CandlePoint, live: CandlePoint) -> CandlePoint:
@@ -256,8 +273,16 @@ class MarketService:
             )
 
         # Native series (e.g. A-share daily) beat aggregation when long enough.
-        if timeframe != base_tf and self._native_count(symbol, timeframe) >= min(limit, 30):
-            return self._read(symbol, timeframe, limit=limit)
+        native = self._native_count(symbol, timeframe) if timeframe != base_tf else 0
+        if native and (native >= min(limit, 30) or self._native_count(symbol, base_tf) == 0):
+            # The second clause matters: a freshly imported symbol may have fewer
+            # than `limit` native bars, and aggregating from a base series that
+            # does not exist returns *nothing* — an empty chart where the data was
+            # actually present.
+            points = self._read(symbol, timeframe, limit=limit)
+            if closed_only:
+                points = self._drop_in_progress(row, timeframe, points)
+            return points
 
         ratio = timeframe_ms(timeframe) // timeframe_ms(base_tf)
         needed = min(limit * ratio + ratio, 20_000)
@@ -281,7 +306,45 @@ class MarketService:
                 points = aggregate_session_bars(points, timeframe)
             else:
                 points = aggregate(points, timeframe)
+        if closed_only:
+            # The stored base bar can itself be unfinished — the realtime engine
+            # only closes a bucket once the next one starts, and a daily bar stays
+            # open all session. Filtering here covers every path (native series,
+            # aggregation, live append) instead of only the first one.
+            points = self._drop_in_progress(row, timeframe, points)
         return points[-limit:]
+
+    def _now_ms(self) -> int:
+        """Best available "now" for deciding whether a bar has closed.
+
+        The live engine owns the clock that produced the bars, so it is the only
+        consistent reference; the wall clock is the fallback for a market with no
+        engine (tests, imported data).
+        """
+        clock = getattr(self.live, "clock", None)
+        if clock is not None:
+            try:
+                return int(clock.now_ms())
+            except Exception:
+                pass
+        return int(time.time() * 1000)
+
+    def _drop_in_progress(
+        self, row: Symbol, timeframe: str, points: list[CandlePoint]
+    ) -> list[CandlePoint]:
+        """Remove a bar whose interval has not finished yet.
+
+        Real-time feeds keep today's daily bar up to date as prices arrive. That
+        row is *unfinished*: a strategy or a backtest reading it sees a close that
+        will still move, so the same request returns different results an hour
+        later. `closed_only` is the contract that excludes it.
+        """
+        if not points:
+            return points
+        last = points[-1]
+        if _bar_close_ms(row.market, timeframe, last.time) <= self._now_ms():
+            return points
+        return points[:-1]
 
     def snapshot(self, symbol: str) -> Snapshot:
         row = self._symbol(symbol)

@@ -71,7 +71,11 @@ class BacktestService:
             raw_config["t_plus_one"] = True
         cfg = BacktestConfig.from_dict(raw_config)
 
-        candles = self.market.candles(symbol, timeframe=timeframe, limit=bars)
+        # closed_only: an in-progress daily bar keeps moving, so including it would
+        # make the same backtest return different results depending on when it ran.
+        candles = self.market.candles(
+            symbol, timeframe=timeframe, limit=bars, closed_only=True
+        )
         required = strategy.warmup(parsed) + 3
         if len(candles) < required:
             # Explain *why* so the user knows which knob to turn. Strategies with a

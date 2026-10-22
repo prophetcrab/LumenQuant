@@ -314,3 +314,116 @@ def test_batch_quotes_skip_missing_symbols_without_failing():
     source = TencentSource(transport=httpx.MockTransport(handler))
     result = source.quotes(["600519.SH", "000001.SZ"])
     assert list(result) == ["600519.SH"]
+
+
+def test_closing_auction_price_replaces_the_last_in_session_write(setup):
+    """After 15:00 the quote is the closing print; the daily bar must take it.
+
+    Writing the daily bar only during a session froze it at the last poll before
+    the close, so the closing auction — which often moves the price — never
+    reached the stored bar.
+    """
+    state, source, engine, db = setup
+    state["now"] = at(14, 59)
+    source.payload["600519.SH"] = quote("600519.SH", 10.0, 5_000.0, state["now"])
+    engine.poll_once()
+
+    # 15:00:00 closing auction prints a different price and a larger day volume.
+    state["now"] = at(15, 1)
+    source.payload["600519.SH"] = quote("600519.SH", 10.25, 5_800.0, at(15, 0))
+    engine.poll_once()
+
+    with db.session() as session:
+        daily = session.scalar(
+            select(Candle).where(Candle.symbol == "600519.SH", Candle.timeframe == "1d")
+        )
+    assert daily.close == pytest.approx(10.25)
+    assert daily.volume == pytest.approx(5_800.0)
+
+
+def test_pre_open_quote_does_not_create_a_phantom_daily_bar(setup):
+    """Before 09:30 the quote still describes yesterday; today has not traded."""
+    state, source, engine, db = setup
+    state["now"] = at(9, 10)
+    # Stamped yesterday 15:00 — the last session's close.
+    yesterday_close = at(10, 5) - 86_400_000
+    source.payload["600519.SH"] = quote("600519.SH", 10.0, 5_000.0, yesterday_close)
+    engine.poll_once()
+
+    with db.session() as session:
+        today_bar = session.scalar(
+            select(Candle).where(
+                Candle.symbol == "600519.SH",
+                Candle.timeframe == "1d",
+                Candle.open_time == at(0, 0),
+            )
+        )
+    assert today_bar is None
+
+
+def test_feed_outage_raises_one_alert_and_recovery_clears_it(setup):
+    """A dead feed must be visible; a persistent outage must not spam.
+
+    Nothing else notices: every consumer silently falls back to the last stored
+    bar, so the UI keeps showing prices that look real while the feed is gone.
+    """
+    from app.modules.alerts.models import Alert
+
+    state, source, engine, db = setup
+    source.payload["600519.SH"] = quote("600519.SH", 10.0, 100.0, state["now"])
+    engine.poll_once()
+    engine._check_health()
+
+    # Three consecutive failures put the feed in the "broken" state.
+    source.error = RuntimeError("connection reset")
+    for _ in range(3):
+        with pytest.raises(RuntimeError):
+            engine.poll_once()
+    engine._check_health()
+
+    with db.session() as session:
+        open_alerts = session.scalars(
+            select(Alert).where(Alert.category == "data_feed", Alert.acknowledged.is_(False))
+        ).all()
+    assert len(open_alerts) == 1
+    assert "中断" in open_alerts[0].title
+    assert open_alerts[0].level == "critical"
+
+    # Still broken: a second check must not add another row.
+    engine._check_health()
+    with db.session() as session:
+        count = len(
+            session.scalars(select(Alert).where(Alert.category == "data_feed")).all()
+        )
+    assert count == 1
+
+    # Recovery acknowledges the alert instead of leaving a permanent red banner.
+    source.error = None
+    state["now"] = at(10, 20)
+    source.payload["600519.SH"] = quote("600519.SH", 10.1, 150.0, state["now"])
+    engine.poll_once()
+    engine._check_health()
+    with db.session() as session:
+        remaining = session.scalars(
+            select(Alert).where(Alert.category == "data_feed", Alert.acknowledged.is_(False))
+        ).all()
+    assert remaining == []
+
+
+
+def test_outage_before_any_success_reports_a_sane_message(setup):
+    """`last_poll` is 0 before the first success; the gap must not be the epoch."""
+    from app.modules.alerts.models import Alert
+
+    _state, source, engine, db = setup
+    source.error = RuntimeError("dns failure")
+    for _ in range(3):
+        with pytest.raises(RuntimeError):
+            engine.poll_once()
+    engine._check_health()
+
+    with db.session() as session:
+        alert = session.scalar(select(Alert).where(Alert.category == "data_feed"))
+    assert alert is not None
+    assert "启动后从未成功获取报价" in alert.message
+    assert "1792" not in alert.message
