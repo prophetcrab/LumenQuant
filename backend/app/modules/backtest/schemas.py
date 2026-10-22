@@ -59,6 +59,15 @@ class PortfolioRequest(BaseModel):
     initial_capital: float = Field(default=100_000.0, gt=0)
 
 
+class ApplyWeightsRequest(BaseModel):
+    """Re-run the basket that produced these sleeves, with adjusted weights."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    run_ids: list[str] = Field(min_length=2, max_length=12)
+    weights: list[float] = Field(min_length=2, max_length=12)
+
+
 class WalkForwardRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 

@@ -8,6 +8,7 @@ from app.api.wiring import build_backtests
 from app.core.errors import ValidationError
 from app.modules.backtest.optimiser import OptimiserService, parse_space
 from app.modules.backtest.schemas import (
+    ApplyWeightsRequest,
     BacktestRequest,
     MultiBacktestRequest,
     OptimiseRequest,
@@ -260,6 +261,23 @@ def portfolio(payload: PortfolioRequest, session: Session = Depends(get_session)
         weights=payload.weights,
         initial_capital=payload.initial_capital,
     )
+
+
+@router.post("/portfolio/apply-weights", status_code=201)
+def apply_weights(
+    payload: ApplyWeightsRequest, request: Request, session: Session = Depends(get_session)
+):
+    """Re-run the source basket with adjusted weights.
+
+    A different allocation is a different portfolio, so it is persisted as a new
+    basket instead of overwriting the original: the old curve keeps describing the
+    old mix, and both remain comparable.
+    """
+    from app.api.wiring import build_market
+
+    return MultiSymbolBacktester(
+        build_market(request, session, live=False), session=session
+    ).rerun_with_weights(run_ids=payload.run_ids, weights=payload.weights)
 
 
 @router.get("/{run_id}")

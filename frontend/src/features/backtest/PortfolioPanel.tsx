@@ -1,10 +1,11 @@
 import { useMemo, useState } from "react";
-import { useMutation, useQuery } from "@tanstack/react-query";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Chart } from "../../shared/echarts";
 import { api } from "../../shared/api";
 import type { BacktestRun, PortfolioReport } from "../../shared/api";
 import { backtestEquityOption } from "../../shared/charts";
 import { cash, pct } from "../../shared/format";
+import { useToast } from "../../shared/toast";
 import { Badge, Card, EmptyState, Field, Stat } from "../../components/ui";
 import { ButtonField } from "../../components/form";
 
@@ -23,6 +24,8 @@ const currencyOf = (report: { currency?: string; market: "crypto" | "cn_stock" }
 const mag = (value: number) => `${value.toFixed(2)}%`;
 
 export function PortfolioPanel({ history }: Props) {
+  const toast = useToast();
+  const queryClient = useQueryClient();
   const [selected, setSelected] = useState<string[]>([]);
   const [weights, setWeights] = useState<Record<string, string>>({});
   const [capital, setCapital] = useState("100000");
@@ -102,6 +105,33 @@ export function PortfolioPanel({ history }: Props) {
   });
 
   const report = analyse.data ?? null;
+  // "Re-apply these weights" only makes sense when the selection is exactly one
+  // basket's complete sleeve set: a partial set would drop a position the user
+  // still believes they hold, and mixing baskets merges unrelated decisions.
+  const sourceBasket = useMemo(() => {
+    if (selected.length < 2) return null;
+    const chosen = new Set(selected);
+    return (
+      (importable ?? []).find((item) => {
+        const members = item.child_run_ids ?? [];
+        return members.length === selected.length && members.every((id) => chosen.has(id));
+      }) ?? null
+    );
+  }, [importable, selected]);
+  const applyWeights = useMutation({
+    mutationFn: () => {
+      const payload = selected.map((id) => {
+        const raw = Number(weights[id]);
+        return Number.isFinite(raw) && raw > 0 ? raw : 1;
+      });
+      return api.applyPortfolioWeights({ run_ids: selected, weights: payload });
+    },
+    onSuccess: (result) => {
+      toast.push(`已按新权重生成篮子回测（${result.aligned_bars} 根 K 线）`);
+      queryClient.invalidateQueries({ queryKey: ["multi-backtests"] });
+    },
+    onError: (error: Error) => toast.push(error.message, "error"),
+  });
   const equityOption = useMemo(
     () => (report ? backtestEquityOption(report.equity, undefined, currencyOf(report)) : null),
     [report],
@@ -113,12 +143,23 @@ export function PortfolioPanel({ history }: Props) {
         title="组合分析"
         subtitle="选择多个已保存的回测，检验它们叠加后是否真的分散风险"
         actions={
-          <ButtonField
-            disabled={selected.length < 2 || analyse.isPending}
-            onClick={() => analyse.mutate()}
-          >
-            {analyse.isPending ? "计算中…" : `分析 ${selected.length} 个回测`}
-          </ButtonField>
+          <div className="row" style={{ gap: 8 }}>
+            {sourceBasket ? (
+              <ButtonField
+                variant="default"
+                disabled={applyWeights.isPending}
+                onClick={() => applyWeights.mutate()}
+              >
+                {applyWeights.isPending ? "重跑中…" : "按当前权重重跑篮子"}
+              </ButtonField>
+            ) : null}
+            <ButtonField
+              disabled={selected.length < 2 || analyse.isPending}
+              onClick={() => analyse.mutate()}
+            >
+              {analyse.isPending ? "计算中…" : `分析 ${selected.length} 个回测`}
+            </ButtonField>
+          </div>
         }
       >
         {importable.length > 0 ? (

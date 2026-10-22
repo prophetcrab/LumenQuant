@@ -378,3 +378,73 @@ def test_merged_curve_flags_an_implausible_sleeve(client):
     # helper reports the first one it meets in the direction of iteration.
     assert index in (10, 11)
     assert abs(change) > 40
+
+
+def test_apply_weights_reruns_the_basket_with_the_new_mix(client):
+    """Saving adjusted weights must produce a run that matches those weights.
+
+    Overwriting `weights_json` in place would leave the stored metrics and equity
+    curve describing the previous mix — a record that contradicts itself.
+    """
+    original = run(client).json()
+    ids = original["child_run_ids"]
+
+    response = client.post(
+        "/api/backtests/portfolio/apply-weights",
+        json={"run_ids": ids, "weights": [6, 3, 1]},
+    )
+    assert response.status_code == 201, response.text
+    body = response.json()
+
+    assert body["previous_run_id"] == original["id"]
+    assert body["id"] != original["id"]
+    assert [c["share"] for c in body["components"]] == pytest.approx(
+        [0.6, 0.3, 0.1], abs=1e-6
+    )
+    # A different mix means a different curve; identical output would mean the
+    # weights were accepted and ignored.
+    assert body["metrics"]["total_return_pct"] != pytest.approx(
+        original["metrics"]["total_return_pct"], abs=1e-9
+    )
+    # The original basket is untouched and still describes its own mix.
+    stored = client.get(f"/api/backtests/multi/{original['id']}").json()
+    original_shares = [c["share"] for c in original["components"]]
+    assert stored["weights"] == pytest.approx(original_shares, abs=1e-6)
+
+
+def test_apply_weights_rejects_a_partial_sleeve_set(client):
+    """Omitting a sleeve would silently drop a position the user still holds."""
+    ids = run(client).json()["child_run_ids"]
+    response = client.post(
+        "/api/backtests/portfolio/apply-weights",
+        json={"run_ids": ids[:2], "weights": [1, 1]},
+    )
+    assert response.status_code == 422
+    assert "全部" in response.json()["error"]["message"]
+
+
+def test_apply_weights_rejects_a_non_sleeve_run(client):
+    """Only basket sleeves have a mix to re-apply."""
+    single = client.post(
+        "/api/backtests",
+        json={"strategy": "sma_cross", "symbol": "BTCUSDT", "timeframe": "1h", "bars": 200},
+    ).json()
+    sleeves = run(client).json()["child_run_ids"]
+    response = client.post(
+        "/api/backtests/portfolio/apply-weights",
+        json={"run_ids": [single["id"], sleeves[0]], "weights": [1, 1]},
+    )
+    assert response.status_code == 422
+    assert "篮子" in response.json()["error"]["message"]
+
+
+def test_apply_weights_rejects_sleeves_from_two_baskets(client):
+    """Components of different baskets must not be merged into one rerun."""
+    first = run(client).json()["child_run_ids"]
+    second = run(client, strategy="ema_trend").json()["child_run_ids"]
+    response = client.post(
+        "/api/backtests/portfolio/apply-weights",
+        json={"run_ids": [first[0], second[1]], "weights": [1, 1]},
+    )
+    assert response.status_code == 404
+    assert "篮子" in response.json()["error"]["message"]

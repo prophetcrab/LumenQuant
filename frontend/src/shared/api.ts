@@ -1016,6 +1016,11 @@ export const api = {
       method: "POST",
       body: JSON.stringify(body),
     }),
+  applyPortfolioWeights: (body: { run_ids: string[]; weights: number[] }) =>
+    request<MultiBacktestReport & { id: string; previous_run_id: string }>(
+      "/backtests/portfolio/apply-weights",
+      { method: "POST", body: JSON.stringify(body) },
+    ),
   walkForwardBacktest: (body: {
     strategy: string;
     symbol: string;

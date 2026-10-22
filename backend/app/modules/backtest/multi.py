@@ -291,6 +291,84 @@ class MultiSymbolBacktester:
             for row in rows
         ]
 
+    def rerun_with_weights(
+        self, *, run_ids: list[str], weights: list[float]
+    ) -> dict:
+        """Re-run the basket these sleeves came from, using new weights.
+
+        This is what "save the adjusted weights" has to mean. Patching
+        `weights_json` on the stored basket would leave its metrics, equity curve
+        and component allocations describing the *old* mix — a record that
+        contradicts itself, and a curve the user would keep reading as if it
+        matched the weights shown next to it. A new run is the only honest
+        representation of a different allocation.
+
+        Requirements are deliberate:
+
+        * every sleeve must exist and be `origin='multi'`;
+        * they must all belong to the *same* basket (the mix is one decision);
+        * the request must cover exactly that basket's sleeves — a partial set
+          would silently drop a position the user believes they still hold.
+        """
+        from app.core.errors import NotFoundError
+        from app.modules.backtest.models import BacktestRun
+
+        if len(run_ids) != len(weights):
+            raise ValidationError("权重数量必须与回测数量一致")
+        if len(set(run_ids)) != len(run_ids):
+            raise ValidationError("同一个回测不能重复加入组合")
+
+        rows: list[BacktestRun] = []
+        for run_id in run_ids:
+            row = self.session.get(BacktestRun, run_id)
+            if row is None:
+                raise NotFoundError(f"回测 {run_id} 不存在")
+            if row.origin != "multi":
+                raise ValidationError(
+                    f"回测 {run_id[:8]} 不是篮子回测的成分，无法按权重重跑"
+                )
+            rows.append(row)
+
+        parent = self._parent_of({row.id for row in rows})
+        if parent is None:
+            raise NotFoundError("找不到这些成分所属的篮子回测")
+        members = json.loads(parent.child_run_ids_json or "[]")
+        if set(members) != {row.id for row in rows}:
+            raise ValidationError(
+                f"必须同时提交该篮子的全部 {len(members)} 个成分，"
+                f"当前只给了 {len(rows)} 个；部分权重重跑会丢掉未提交的持仓"
+            )
+
+        # Preserve the basket's own symbol order so the new run reads the same
+        # way as the original, regardless of the order the UI sent.
+        order = {run_id: index for index, run_id in enumerate(members)}
+        ordered = sorted(rows, key=lambda row: order[row.id])
+        position = {run_id: index for index, run_id in enumerate(run_ids)}
+        ordered_weights = [weights[position[row.id]] for row in ordered]
+
+        report = self.run(
+            strategy_key=parent.strategy,
+            symbols=[row.symbol for row in ordered],
+            timeframe=parent.timeframe,
+            bars=parent.bars,
+            params=json.loads(parent.params_json or "{}"),
+            config={"initial_capital": parent.initial_capital},
+            weights=ordered_weights,
+            rebalance_bars=parent.rebalance_bars,
+        )
+        report["previous_run_id"] = parent.id
+        return report
+
+    def _parent_of(self, run_ids: set[str]):
+        """Find the basket whose child list contains exactly these sleeves."""
+        from app.modules.backtest.models import MultiBacktestRun
+
+        for row in self.session.scalars(select(MultiBacktestRun)).all():
+            members = set(json.loads(row.child_run_ids_json or "[]"))
+            if run_ids.issubset(members):
+                return row
+        return None
+
     def get_run(self, run_id: str) -> dict:
         from app.core.errors import NotFoundError
         from app.modules.backtest.models import MultiBacktestRun

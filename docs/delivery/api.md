@@ -60,6 +60,10 @@ Base URL：`http://127.0.0.1:8000/api`　完整交互式文档：`/docs`
   任一成分曲线含异常跳变（单根权益变动 ≥50%）时，`correlation.robust` 额外返回
   剔除这些 bar 后重算的矩阵（`matrix`、`dropped_bars`、`returns_per_sleeve`），
   并在 `warnings` 中说明扭曲程度。
+- `POST /api/backtests/portfolio/apply-weights` — `{run_ids[], weights[]}`
+  用调整后的权重重跑这些成分所属的篮子，返回新篮子（含 `previous_run_id`）。
+  要求提交该篮子的**全部**成分；部分提交会丢掉未提交的仓位，因此返回 422。
+  原篮子保持不动——不同权重是不同组合，两条记录都可对比。
 
 ## 自动运行
 - `GET /api/runtime/instances?account_id=`
