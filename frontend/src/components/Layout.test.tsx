@@ -63,9 +63,14 @@ describe("Layout alert badge", () => {
     const { container } = renderLayout();
 
     await waitFor(() => expect(container.querySelector(".nav-badge")?.textContent).toBe("3"));
+    // The badge is a cross-account total: a breaker on another account is
+    // exactly what the operator must not have to go looking for.
     expect(container.querySelector(".nav-badge")?.getAttribute("aria-label")).toBe(
-      "3 条待确认",
+      "3 条待确认（全部账户）",
     );
+    expect(apiMock.alertSummary).toHaveBeenCalledWith(undefined, {
+      allAccounts: true,
+    });
   });
 
   it("hides the badge when nothing is pending", async () => {

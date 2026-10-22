@@ -281,3 +281,88 @@ def test_platform_wide_alert_is_visible_to_every_account(client):
         "/api/alerts/categories", params={"account_id": account["id"]}
     ).json()
     assert any(row["category"] == "data_feed" for row in categories)
+
+
+def test_alerts_can_be_filtered_by_time_window(client):
+    """A time window is how an operator asks "what happened overnight?"."""
+    from datetime import timedelta
+
+    from app.core.timeutil import utcnow
+    from app.modules.alerts.service import AlertService
+
+    account = client.post(
+        "/api/accounts", json={"name": "时间窗", "initial_balance": 100_000}
+    ).json()
+    with client.app.state.db.session() as session:
+        svc = AlertService(session)
+        old = svc.raise_alert(
+            category="breaker", title="旧告警", account_id=account["id"], ref_id="old"
+        )
+        old.created_at = utcnow() - timedelta(days=3)
+        session.commit()
+        svc.raise_alert(
+            category="breaker", title="新告警", account_id=account["id"], ref_id="new"
+        )
+
+    cutoff = (utcnow() - timedelta(days=1)).isoformat()
+    recent = client.get(
+        "/api/alerts", params={"account_id": account["id"], "since": cutoff}
+    ).json()
+    titles = [row["title"] for row in recent]
+    assert "新告警" in titles
+    assert "旧告警" not in titles
+
+    # An `until` bound excludes the newer row instead.
+    older = client.get(
+        "/api/alerts",
+        params={"account_id": account["id"], "until": cutoff},
+    ).json()
+    titles = [row["title"] for row in older]
+    assert "旧告警" in titles
+    assert "新告警" not in titles
+
+
+def test_summary_can_total_across_all_accounts(client):
+    """The sidebar badge must surface a problem in a *different* account."""
+    from app.modules.alerts.service import AlertService
+
+    first = client.post(
+        "/api/accounts", json={"name": "账户一", "initial_balance": 100_000}
+    ).json()
+    second = client.post(
+        "/api/accounts", json={"name": "账户二", "initial_balance": 100_000}
+    ).json()
+    with client.app.state.db.session() as session:
+        svc = AlertService(session)
+        svc.raise_alert(
+            category="breaker", level="critical", title="一的告警",
+            account_id=first["id"], ref_id="a", commit=True,
+        )
+        svc.raise_alert(
+            category="stop_loss", level="warning", title="二的告警",
+            account_id=second["id"], ref_id="b", commit=True,
+        )
+        # Platform-wide alert has no account at all.
+        svc.raise_alert(
+            category="data_feed", level="critical", title="行情中断",
+            ref_type="data_feed", ref_id="cn", commit=True,
+        )
+
+    scoped = client.get(
+        "/api/alerts/summary", params={"account_id": first["id"]}
+    ).json()
+    assert scoped["unacknowledged"] == 2  # own breaker + platform-wide
+    assert "accounts" not in scoped
+
+    total = client.get(
+        "/api/alerts/summary", params={"all_accounts": "true"}
+    ).json()
+    # Every open alert, including the account-less one.
+    assert total["unacknowledged"] == 3
+    assert total["by_level"]["critical"] == 2
+    per_account = {item["account_id"]: item for item in total["accounts"]}
+    assert per_account[first["id"]]["unacknowledged"] == 1
+    assert per_account[second["id"]]["unacknowledged"] == 1
+    # Account-less alerts are reported under the empty key, not attributed to an
+    # arbitrary account.
+    assert per_account[""]["unacknowledged"] == 1

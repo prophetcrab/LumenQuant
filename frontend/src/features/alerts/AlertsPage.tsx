@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { api } from "../../shared/api";
 import type { Alert } from "../../shared/api";
@@ -37,6 +37,13 @@ export function AlertsPage() {
   const queryClient = useQueryClient();
   const [filter, setFilter] = useState<"open" | "all">("open");
   const [category, setCategory] = useState("");
+  // "" means no bound. Values are ISO strings so they map straight to the query.
+  const [range, setRange] = useState<"all" | "24h" | "7d" | "30d">("all");
+  const since = useMemo(() => {
+    if (range === "all") return undefined;
+    const hours = range === "24h" ? 24 : range === "7d" ? 24 * 7 : 24 * 30;
+    return new Date(Date.now() - hours * 3600_000).toISOString();
+  }, [range]);
 
   const categories = useQuery({
     queryKey: ["alert-categories", accountId],
@@ -45,17 +52,27 @@ export function AlertsPage() {
     refetchInterval: 30_000,
   });
   const alerts = useQuery({
-    queryKey: ["alerts", accountId, filter, category],
+    queryKey: ["alerts", accountId, filter, category, range],
     queryFn: () =>
-      api.alerts(accountId, filter === "open", 200, undefined, category || undefined),
+      api.alerts(accountId, filter === "open", 200, undefined, category || undefined, {
+        since,
+      }),
     enabled: Boolean(accountId),
     refetchInterval: 10_000,
   });
   const summary = useQuery({
-    queryKey: ["alert-summary", accountId],
-    queryFn: () => api.alertSummary(accountId),
+    queryKey: ["alert-summary", accountId, range],
+    queryFn: () => api.alertSummary(accountId, { since }),
     enabled: Boolean(accountId),
     refetchInterval: 10_000,
+  });
+  // The badge above answers "anything wrong here?"; this one answers "anything
+  // wrong anywhere?", which is what an operator actually needs when a different
+  // account's breaker has tripped.
+  const allSummary = useQuery({
+    queryKey: ["alert-summary-all", range],
+    queryFn: () => api.alertSummary(undefined, { since, allAccounts: true }),
+    refetchInterval: 30_000,
   });
 
   const ack = useMutation({
@@ -109,6 +126,25 @@ export function AlertsPage() {
           value={String(counts.info ?? 0)}
           meta={<span className="muted">无需处理</span>}
         />
+        <Stat
+          label="其他账户待确认"
+          value={String(
+            Math.max(
+              0,
+              (allSummary.data?.unacknowledged ?? 0) - (summary.data?.unacknowledged ?? 0),
+            ),
+          )}
+          accent={
+            (allSummary.data?.unacknowledged ?? 0) > (summary.data?.unacknowledged ?? 0)
+              ? "negative"
+              : "neutral"
+          }
+          meta={
+            <span className="muted">
+              全局 {allSummary.data?.unacknowledged ?? 0} 条，含无账户归属的系统告警
+            </span>
+          }
+        />
       </div>
 
       <Card
@@ -124,6 +160,18 @@ export function AlertsPage() {
               ]}
               onChange={(value) => setFilter(value)}
             />
+            <select
+              className="select"
+              style={{ width: 110, height: 30 }}
+              value={range}
+              onChange={(event) => setRange(event.target.value as typeof range)}
+              aria-label="时间范围"
+            >
+              <option value="all">全部时间</option>
+              <option value="24h">近 24 小时</option>
+              <option value="7d">近 7 天</option>
+              <option value="30d">近 30 天</option>
+            </select>
             <select
               className="select"
               style={{ width: 150, height: 30 }}

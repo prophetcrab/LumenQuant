@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from datetime import timedelta
+from datetime import datetime, timedelta
 
 from sqlalchemy import delete, func, select, update
 from sqlalchemy.orm import Session
@@ -18,6 +18,20 @@ MAX_TITLE = 160
 # identical rows. One open (unacknowledged) alert per (account, category, ref) is
 # enough to make the problem visible.
 DEDUPE_SECONDS = 300
+
+
+def _apply_window(stmt, *, since: datetime | None, until: datetime | None):
+    """Restrict a query to [since, until).
+
+    Both bounds are optional and normalised to UTC before comparison: the column
+    is timezone-aware, and a naive datetime would silently compare against UTC in
+    SQLite and produce an off-by-hours window with no error.
+    """
+    if since is not None:
+        stmt = stmt.where(Alert.created_at >= ensure_utc(since))
+    if until is not None:
+        stmt = stmt.where(Alert.created_at < ensure_utc(until))
+    return stmt
 
 
 @dataclass(frozen=True)
@@ -117,6 +131,8 @@ class AlertService:
         unacknowledged_only: bool = False,
         level: str | None = None,
         category: str | None = None,
+        since: datetime | None = None,
+        until: datetime | None = None,
         limit: int = 100,
     ) -> list[AlertView]:
         stmt = select(Alert).order_by(Alert.created_at.desc())
@@ -133,6 +149,7 @@ class AlertService:
             stmt = stmt.where(Alert.level == level)
         if category:
             stmt = stmt.where(Alert.category == category)
+        stmt = _apply_window(stmt, since=since, until=until)
         rows = self.session.scalars(stmt.limit(max(1, min(limit, 500)))).all()
         return [self._view(row) for row in rows]
 
@@ -170,23 +187,63 @@ class AlertService:
         self.session.commit()
         return int(result.rowcount or 0)
 
-    def summary(self, *, account_id: str | None = None) -> dict:
+    def summary(
+        self,
+        *,
+        account_id: str | None = None,
+        since: datetime | None = None,
+        until: datetime | None = None,
+        all_accounts: bool = False,
+    ) -> dict:
+        """Open-alert counts, optionally windowed and split per account.
+
+        `all_accounts` exists because the sidebar badge answers "is anything
+        wrong?" while the page shows one account. Without a cross-account total an
+        operator has to click through every account to discover that a *different*
+        one is tripping a breaker.
+        """
         stmt = select(Alert.level, func.count(Alert.id)).where(
             Alert.acknowledged.is_(False)
         )
-        if account_id:
+        if account_id and not all_accounts:
             # Match `list()`: platform-wide alerts count for every account, so the
             # sidebar badge cannot stay silent while the feed is down.
             stmt = stmt.where(
                 (Alert.account_id == account_id) | (Alert.account_id == "")
             )
+        stmt = _apply_window(stmt, since=since, until=until)
         counts = {level: 0 for level in ("info", "warning", "critical")}
         for level, count in self.session.execute(stmt.group_by(Alert.level)).all():
             counts[level] = int(count)
-        return {
+
+        payload = {
             "unacknowledged": sum(counts.values()),
             "by_level": counts,
         }
+        if not all_accounts:
+            return payload
+
+        # Per-account breakdown, including the rows attached to no account at all
+        # (feed outages) which are reported under an empty key rather than
+        # silently folded into a random account.
+        per_stmt = (
+            select(Alert.account_id, Alert.level, func.count(Alert.id))
+            .where(Alert.acknowledged.is_(False))
+            .group_by(Alert.account_id, Alert.level)
+        )
+        per_stmt = _apply_window(per_stmt, since=since, until=until)
+        accounts: dict[str, dict] = {}
+        for owner, level, count in self.session.execute(per_stmt).all():
+            bucket = accounts.setdefault(
+                owner or "",
+                {"account_id": owner or "", "unacknowledged": 0, "by_level": {}},
+            )
+            bucket["unacknowledged"] += int(count)
+            bucket["by_level"][level] = int(count)
+        payload["accounts"] = sorted(
+            accounts.values(), key=lambda item: item["unacknowledged"], reverse=True
+        )
+        return payload
 
     @staticmethod
     def _view(row: Alert) -> AlertView:

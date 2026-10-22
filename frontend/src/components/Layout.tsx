@@ -79,10 +79,12 @@ export function Layout({ children }: { children: ReactNode }) {
   const clock = useMarketClock();
   const status = useQuery({ queryKey: ["health"], queryFn: health, refetchInterval: 20_000, retry: 1 });
   const online = status.data?.status === "ok";
+  // Cross-account total, not just the selected account. A breaker tripped on a
+  // different account is exactly the alert an operator must not have to go
+  // looking for; the alert center breaks the number down per account.
   const alertSummary = useQuery({
-    queryKey: ["alert-summary", accountId],
-    queryFn: () => api.alertSummary(accountId),
-    enabled: Boolean(accountId),
+    queryKey: ["alert-summary-all"],
+    queryFn: () => api.alertSummary(undefined, { allAccounts: true }),
     refetchInterval: 15_000,
   });
   const unacked = alertSummary.data?.unacknowledged ?? 0;
@@ -111,7 +113,7 @@ export function Layout({ children }: { children: ReactNode }) {
                   {item.icon}
                   <span>{item.label}</span>
                   {item.badge === "alerts" && unacked > 0 ? (
-                    <span className="nav-badge" aria-label={`${unacked} 条待确认`}>
+                    <span className="nav-badge" aria-label={`${unacked} 条待确认（全部账户）`}>
                       {unacked > 99 ? "99+" : unacked}
                     </span>
                   ) : null}

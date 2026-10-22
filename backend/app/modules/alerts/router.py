@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import asdict
+from datetime import datetime
 
 from fastapi import APIRouter, Depends, Query
 from sqlalchemy.orm import Session
@@ -18,6 +19,8 @@ def list_alerts(
     unacknowledged_only: bool = False,
     level: str | None = None,
     category: str | None = None,
+    since: datetime | None = Query(default=None, description="起始时间（含），ISO 8601"),
+    until: datetime | None = Query(default=None, description="结束时间（不含），ISO 8601"),
     limit: int = Query(default=100, ge=1, le=500),
     session: Session = Depends(get_session),
 ):
@@ -28,6 +31,8 @@ def list_alerts(
             unacknowledged_only=unacknowledged_only,
             level=level,
             category=category,
+            since=since,
+            until=until,
             limit=limit,
         )
     ]
@@ -52,8 +57,18 @@ def prune(
 
 
 @router.get("/summary")
-def summary(account_id: str | None = None, session: Session = Depends(get_session)):
-    return AlertService(session).summary(account_id=account_id)
+def summary(
+    account_id: str | None = None,
+    since: datetime | None = Query(default=None),
+    until: datetime | None = Query(default=None),
+    all_accounts: bool = Query(
+        default=False, description="跨所有账户合计，并按账户给出明细"
+    ),
+    session: Session = Depends(get_session),
+):
+    return AlertService(session).summary(
+        account_id=account_id, since=since, until=until, all_accounts=all_accounts
+    )
 
 
 @router.post("/{alert_id}/ack")

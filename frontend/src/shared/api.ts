@@ -288,6 +288,12 @@ export type Alert = {
 export type AlertSummary = {
   unacknowledged: number;
   by_level: Record<string, number>;
+  /** Present only when `all_accounts` was requested. */
+  accounts?: {
+    account_id: string;
+    unacknowledged: number;
+    by_level: Record<string, number>;
+  }[];
 };
 
 export type MultiBacktestSummary = {
@@ -966,6 +972,7 @@ export const api = {
     limit = 100,
     level?: string,
     category?: string,
+    window?: { since?: string; until?: string },
   ) =>
     request<Alert[]>(
       `/alerts${qs({
@@ -973,6 +980,8 @@ export const api = {
         unacknowledged_only: unacknowledgedOnly,
         level,
         category,
+        since: window?.since,
+        until: window?.until,
         limit,
       })}`,
     ),
@@ -980,8 +989,18 @@ export const api = {
     request<{ category: string; count: number }[]>(
       `/alerts/categories${qs({ account_id: accountId })}`,
     ),
-  alertSummary: (accountId?: string) =>
-    request<AlertSummary>(`/alerts/summary${qs({ account_id: accountId })}`),
+  alertSummary: (
+    accountId?: string,
+    window?: { since?: string; until?: string; allAccounts?: boolean },
+  ) =>
+    request<AlertSummary>(
+      `/alerts/summary${qs({
+        account_id: accountId,
+        since: window?.since,
+        until: window?.until,
+        all_accounts: window?.allAccounts,
+      })}`,
+    ),
   ackAlert: (id: string) => request<Alert>(`/alerts/${id}/ack`, { method: "POST" }),
   ackAllAlerts: (accountId?: string) =>
     request<{ acknowledged: number }>(`/alerts/ack-all${qs({ account_id: accountId })}`, {
