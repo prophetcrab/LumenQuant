@@ -158,3 +158,79 @@ def test_local_answer_labels_currency_and_separates_markets(assistant):
     assert reply.mode == "local"
     # Crypto fixture only, so exactly one currency group is present and labelled.
     assert "USDT" in reply.answer
+
+
+def test_llm_tool_calls_get_the_account_market_symbol(assistant, monkeypatch):
+    """A model that omits `symbol` must not silently answer with crypto data.
+
+    The tool defaults were BTCUSDT, so an A-share question turned into a crypto
+    backtest while the answer still looked like it described the user's market.
+    `AssistantService` now fills the symbol from the account's own market.
+    """
+    import httpx as _httpx
+
+    service, _crypto_account, toolbox = assistant
+    # Give the A-share catalog one symbol: the fixture only seeds crypto, and an
+    # A-share account with no symbols must fail loudly rather than borrow a
+    # crypto price.
+    toolbox.market.add_symbol(
+        code="600036.SH",
+        name="招商银行",
+        initial_price=35.2,
+        market="cn_stock",
+        board="main",
+        prev_close=35.0,
+    )
+    cn_account = toolbox.accounts.create(
+        name="A股助手", initial_balance=300_000, market="cn_stock"
+    )
+
+    def handler(request: _httpx.Request) -> _httpx.Response:
+        payload = __import__("json").loads(request.content)
+        if not any(m.get("role") == "tool" for m in payload["messages"]):
+            return _httpx.Response(
+                200,
+                json={
+                    "choices": [
+                        {
+                            "message": {
+                                "role": "assistant",
+                                "content": None,
+                                "tool_calls": [
+                                    {
+                                        "id": "call_1",
+                                        "type": "function",
+                                        "function": {
+                                            "name": "strategy_signals",
+                                            # Deliberately omits symbol and timeframe.
+                                            "arguments": '{"strategy_key": "sma_cross"}',
+                                        },
+                                    }
+                                ],
+                            }
+                        }
+                    ]
+                },
+            )
+        return _httpx.Response(
+            200, json={"choices": [{"message": {"role": "assistant", "content": "完成"}}]}
+        )
+
+    service.settings = service.settings.model_copy(
+        update={"llm_base_url": "https://llm.test/v1", "llm_model": "test-model"}
+    )
+    original_client = _httpx.Client
+
+    def patched_client(*args, **kwargs):
+        kwargs["transport"] = _httpx.MockTransport(handler)
+        return original_client(*args, **kwargs)
+
+    monkeypatch.setattr("app.modules.assistant.service.httpx.Client", patched_client)
+
+    reply = service.reply("给我双均线信号", account_id=cn_account.id)
+    assert reply.mode == "llm"
+    assert reply.tool_calls
+    arguments = reply.tool_calls[0]["arguments"]
+    # Resolved from the A-share catalog, not from a hard-coded crypto constant.
+    assert arguments["symbol"].endswith((".SH", ".SZ", ".BJ"))
+    assert arguments["timeframe"] == "1d"

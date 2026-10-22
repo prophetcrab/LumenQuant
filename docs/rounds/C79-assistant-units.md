@@ -105,3 +105,48 @@ A 股没有"24 小时涨跌"这个概念——它涨跌幅是**相对昨收**。
    不会产生错误结论。
 3. **`change_24h_pct` 字段名保留**：改名会破坏既有前端与测试契约，
    用 `change_label` 说明语义是更低成本的方案。
+
+## 同一轮发现的第二个缺陷：LLM 模式下标的默认值跨市场
+
+本地模式有一条 `_default_symbol(account_id)` 会按账户市场推断标的，
+**LLM 模式没有**：它只补 `account_id`，其余参数交给模型。
+
+两个工具的参数默认值是硬编码的：
+
+```python
+def _signals(self, strategy_key, symbol="BTCUSDT", timeframe="1h")
+def _backtest(self, strategy_key, symbol="BTCUSDT", timeframe="1h", bars=800)
+```
+
+于是 A 股用户问"给我双均线信号"，模型只传 `strategy_key` 时，会拿到一份
+**BTCUSDT 的加密结果**，而回答读起来像是在描述 A 股。这比报错严重得多：
+错误答案是静默的。
+
+### 修复
+
+1. `_llm_reply` 在调用工具前，按参数声明补齐默认值：
+   - 缺 `symbol` → `_default_symbol(account_id)`（按账户市场）；
+   - 缺 `timeframe` → `_default_timeframe(symbol)`（A 股用 `1d`，加密用 `1h`）。
+2. 两个工具的 Python 默认值改为 `None`，由调用方解析，不再内置常量。
+3. `_default_symbol` 在市场内没有任何标的时**抛错而不是回退到 BTCUSDT**：
+
+```python
+raise ValidationError(
+    f"账户所属市场（{market}）下没有可用标的，无法确定默认标的；"
+    "请先在数据页导入该市场的标的"
+)
+```
+
+跨市场回退是这类缺陷的根源——"有数字返回"不等于"回答正确"。
+
+### 验证
+
+新增 `test_llm_tool_calls_get_the_account_market_symbol`：用 `MockTransport`
+模拟一个只回 `{"strategy_key": "sma_cross"}` 的模型，断言注入后的 `symbol`
+以 `.SH/.SZ/.BJ` 结尾、`timeframe` 为 `1d`。
+
+- 还原注入逻辑 → 该测试失败（拿到 BTCUSDT）；
+- 恢复后 → 12 个测试全通过。
+
+这是 LLM 路径的**第一个**测试。此前该路径完全未被覆盖，
+所以这个缺陷能一直存在而不被发现。

@@ -275,8 +275,13 @@ class ToolBox:
         ]
 
     def _signals(
-        self, strategy_key: str, symbol: str = "BTCUSDT", timeframe: str = "1h"
+        self, strategy_key: str, symbol: str | None = None, timeframe: str | None = None
     ) -> dict:
+        # Defaults are resolved by the caller (`AssistantService`), which knows the
+        # account's market. A hard-coded BTCUSDT here silently answered A-share
+        # questions with crypto data whenever the model omitted the symbol.
+        symbol = symbol or self._fallback_symbol()
+        timeframe = timeframe or ("1d" if symbol.endswith((".SH", ".SZ", ".BJ")) else "1h")
         strategy = get(strategy_key)
         params = strategy.validate_params({})
         candles = self.market.candles(symbol, timeframe=timeframe, limit=600, closed_only=True)
@@ -309,10 +314,12 @@ class ToolBox:
     def _backtest(
         self,
         strategy_key: str,
-        symbol: str = "BTCUSDT",
-        timeframe: str = "1h",
+        symbol: str | None = None,
+        timeframe: str | None = None,
         bars: int = 800,
     ) -> dict:
+        symbol = symbol or self._fallback_symbol()
+        timeframe = timeframe or ("1d" if symbol.endswith((".SH", ".SZ", ".BJ")) else "1h")
         result = self.backtests.run(
             strategy_key=strategy_key,
             symbol=symbol,
@@ -401,6 +408,19 @@ class ToolBox:
             ],
             "warnings": payload["warnings"],
         }
+
+    def _fallback_symbol(self) -> str:
+        """Last-resort symbol when no account context exists.
+
+        Prefers whichever market actually has data, rather than assuming crypto.
+        """
+        for market, preferred in (("crypto", "BTCUSDT"), ("cn_stock", "600036.SH")):
+            codes = [view.code for view in self.market.list_symbols(market=market)]
+            if preferred in codes:
+                return preferred
+            if codes:
+                return codes[0]
+        return "BTCUSDT"
 
     def _default_account(self) -> str:
         accounts = self.accounts.list(include_archived=False)

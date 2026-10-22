@@ -224,6 +224,11 @@ class AssistantService:
         technically-valid but surprising answer for "双均线信号". Prefer the
         market's conventional benchmark when it is listed, otherwise fall back to
         the first enabled symbol.
+
+        Never falls back to another market: answering an A-share question with a
+        crypto symbol produces numbers that look like an answer and describe
+        something else entirely. When the account's market has no symbols the
+        caller gets an explicit error instead.
         """
         crypto_default, cn_default = "BTCUSDT", "600036.SH"
         market = "crypto"
@@ -239,7 +244,10 @@ class AssistantService:
             return preferred
         if codes:
             return codes[0]
-        return crypto_default
+        raise ValidationError(
+            f"账户所属市场（{market}）下没有可用标的，无法确定默认标的；"
+            "请先在数据页导入该市场的标的"
+        )
 
     @staticmethod
     def _default_timeframe(symbol: str) -> str:
@@ -390,8 +398,17 @@ class AssistantService:
                 for call in tool_calls:
                     name = call["function"]["name"]
                     arguments = json.loads(call["function"].get("arguments") or "{}")
-                    if "account_id" in self.toolbox._tools[name].parameters and not arguments.get("account_id"):
+                    params = self.toolbox._tools[name].parameters
+                    if "account_id" in params and not arguments.get("account_id"):
                         arguments["account_id"] = account_id
+                    if "symbol" in params and not arguments.get("symbol"):
+                        # The tool default is BTCUSDT regardless of the account.
+                        # A model answering an A-share question can easily omit the
+                        # symbol, and would then silently report a crypto backtest
+                        # as if it described the user's market.
+                        arguments["symbol"] = self._default_symbol(account_id)
+                    if "timeframe" in params and not arguments.get("timeframe"):
+                        arguments["timeframe"] = self._default_timeframe(arguments["symbol"])
                     try:
                         result = self.toolbox.call(name, arguments)
                     except Exception as exc:
