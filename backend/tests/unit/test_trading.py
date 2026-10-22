@@ -316,3 +316,54 @@ def test_missing_price_values_a_position_at_cost_not_zero(env):
     assert view.market_price == pytest.approx(100.1)
     assert view.market_value == pytest.approx(200.2)
     assert view.unrealized_pnl == pytest.approx(0.0)
+
+
+def test_limit_order_notional_uses_the_worse_of_limit_and_market(env):
+    """A limit price below market must not shrink the order's apparent size.
+
+    `max_order_notional` exists to bound how much one order can put at risk. A buy
+    limit far below market was measured at its own price, so 0.1 BTC at 9,000 read
+    as 900 against a 1,000 cap while the same size at market (7,025) was refused —
+    and a resting limit fills at market once the book moves through it.
+    """
+    service, accounts, account, prices = env
+    service.policy = RiskPolicy(
+        RiskLimits(max_order_notional=1_000, min_order_notional=10)
+    )
+    prices.current = 70_000.0
+
+    with pytest.raises(ConflictError) as exc:
+        service.place_order(
+            account_id=account.id,
+            symbol="BTCUSDT",
+            side="buy",
+            order_type="limit",
+            quantity=0.1,
+            limit_price=9_000.0,
+        )
+    assert "exceeds the limit" in str(exc.value)
+
+    # A limit above market is the genuinely worst case for a buy and is used as-is.
+    with pytest.raises(ConflictError):
+        service.place_order(
+            account_id=account.id,
+            symbol="BTCUSDT",
+            side="buy",
+            order_type="limit",
+            quantity=0.1,
+            limit_price=80_000.0,
+        )
+
+    # A small order still passes: the guard must not block everything.
+    service.policy = RiskPolicy(
+        RiskLimits(max_order_notional=100_000, min_order_notional=10)
+    )
+    order = service.place_order(
+        account_id=account.id,
+        symbol="BTCUSDT",
+        side="buy",
+        order_type="limit",
+        quantity=0.01,
+        limit_price=9_000.0,
+    )
+    assert order.status == "open"

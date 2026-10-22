@@ -172,6 +172,7 @@ npx tsc --noEmit; npx vite build                # 0 errors
 | LLM 模式按账户市场补齐标的 | ✅ | `test_llm_tool_calls_get_the_account_market_symbol`；还原注入逻辑后失败 |
 | 持仓限额按市价计算敞口 | ✅ | `test_position_limit_uses_market_value_not_cost`；还原后 DID NOT RAISE |
 | A 股当日买入计入敞口但不可卖 | ✅ | `test_same_day_a_share_position_counts_toward_the_notional_limit`；实测第二笔 409、当日卖出 409 |
+| 限价单按最坏成交价计算名义金额 | ✅ | `test_limit_order_notional_uses_the_worse_of_limit_and_market`；实测 0.1 BTC 市价/限价均 409 |
 
 **真实网络实测（全新数据库，双市场）**：`crypto: 6 symbols / 5s / 702ms`、
 `cn: 8 quotes / 15s / 405ms`；CN 日线量 33514 与报价累计量完全一致；
@@ -240,9 +241,9 @@ C 轮以"实际使用系统"为主，每轮都从真实操作中找缺陷。完�
 | 告警可观测性 | C77 | 时间范围筛选、跨账户合计与明细；侧栏角标改为全局口径 |
 | 时间基准与缺口 | C78 | A 股 bar 改用 A 股时钟判定收盘；加密轮询中断后从 klines 补历史并修正坏行 |
 | 助手数值语义 | C79 | 行情/账户工具返回市场与币种，A 股涨跌改标「较昨收」，本地文案按币种分组 |
-| 持仓限额 | C80 | 敞口改按市价；A 股当日买入计入敞口（此前 T+1 冻结使限额完全失效） |
+| 持仓限额 | C80 | 敞口改按市价；A 股当日买入计入敞口；限价单按最坏成交价计算名义金额 |
 
-**当前规模**：后端 482 项测试、前端 66 项测试，全部通过。
+**当前规模**：后端 483 项测试、前端 66 项测试，全部通过。
 
 **验证方式**：除自动化测试外，每轮都在真实浏览器中操作 2K 界面确认，
 并在真实 A 股行情（腾讯数据源）上跑通同步 → 回测 → 优化 → 滚动验证 → 组合分析。

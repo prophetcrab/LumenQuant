@@ -493,14 +493,22 @@ class TradingService:
                 self.risk.trip(account_id, breaker.reason)
                 raise ConflictError(f"trading halted: {breaker.reason}")
 
-        estimated_fee = self._fee(market, side, reference_price * quantity)
+        # The notional limit must assume the worst realistic fill, not the price
+        # the user typed. A buy limit far below market appeared tiny (0.1 BTC at
+        # 9,000 = 900 against a 1,000 cap) while a market order for the same size
+        # was correctly refused — and a resting limit still fills at the market
+        # price when the book moves through it.
+        risk_price = max(reference_price, market_price) if side == "buy" else min(
+            reference_price, market_price
+        )
+        estimated_fee = self._fee(market, side, risk_price * quantity)
         self.policy.validate(
             OrderIntent(
                 side=side,
                 quantity=quantity,
-                price=reference_price,
-                fee_bps=(estimated_fee / (reference_price * quantity) * 10_000.0)
-                if reference_price * quantity
+                price=risk_price,
+                fee_bps=(estimated_fee / (risk_price * quantity) * 10_000.0)
+                if risk_price * quantity
                 else 0.0,
             ),
             ctx,
