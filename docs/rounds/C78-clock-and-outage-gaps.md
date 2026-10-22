@@ -132,3 +132,43 @@ A 股有现成的分时接口（`intraday_bars`，腾讯 m15），因此采用�
 实际是**内存中的当前桶**：盘中首次启动只采集到一个价格，蜡烛自然是平的。
 连续三次轮询确认它在正常累积（高 1318.75→1318.88→1318.93，量 31→76→105），
 且数据库中 `15m` 行数为 0——当前桶不落库这条契约是成立的。
+
+## 缺陷四：真实数据模式下全新部署没有 A 股历史
+
+加密引擎启动时会 `sync_history()`，A 股引擎启动时只做一次报价轮询。
+历史导入完全依赖用户主动设置 `LQ_CN_SYNC_ON_START=true`。
+
+后果在真实部署上很直接（实测）：
+
+```
+cn_sync_on_start: False
+daily bars available: 1        ← 只有实时写入的当日那根
+15m bars available: 1
+backtest status: 422
+  reason: 数据不足：仅有 0 根 K 线，需要至少 34 根
+```
+
+用户把数据源切到腾讯、启动、打开图表，看到的是一条单点曲线，且任何回测都失败。
+这不是"配置没开"就能免责的问题——引擎既然接管了价格序列，就该保证序列可用。
+
+### 修复
+
+`CnQuoteEngine.start()` 先调用 `_import_missing_history()`：
+
+- 只导入**日线为零**的标的，重启不会重下已有数据；
+- 用现有的 `CnDataSyncService`，日线/分钟线限额沿用 `LQ_CN_SYNC_DAILY_LIMIT` /
+  `LQ_CN_SYNC_INTRADAY_LIMIT`；
+- 失败只记日志，不阻塞启动（与加密侧一致）。
+
+### 验证
+
+同一全新部署，修复后：
+
+```
+imported 8968 bars of A-share history for 8 symbols at startup
+daily bars: 400   15m bars: 320
+backtest status: 201
+```
+
+测试 `test_fresh_deployment_imports_only_symbols_without_history` 同时断言
+"有历史的标的不会被重复导入"（`untouched == 1`）。

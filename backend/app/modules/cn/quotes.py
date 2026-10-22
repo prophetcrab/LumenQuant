@@ -24,7 +24,7 @@ import time
 from dataclasses import dataclass
 from datetime import datetime
 
-from sqlalchemy import insert, select
+from sqlalchemy import func, insert, select
 
 from app.core.config import Settings
 from app.core.db import Database
@@ -131,6 +131,16 @@ class CnQuoteEngine:
 
     # ------------------------------------------------------------ lifecycle
     async def start(self) -> None:
+        # A deployment with no stored history is the normal case for a fresh
+        # install, and the engine alone would only ever produce bars from *now*
+        # onward: the chart opens empty and every backtest fails with
+        # "数据不足". The crypto engine imports history at startup; A-shares must
+        # do the same instead of depending on the user remembering
+        # LQ_CN_SYNC_ON_START.
+        try:
+            await asyncio.to_thread(self._import_missing_history)
+        except Exception:
+            logger.warning("A-share startup history import failed", exc_info=True)
         # Fetch once before the loop so the first request after boot shows a real
         # price instead of waiting a full poll interval (15s of stale display).
         try:
@@ -144,6 +154,47 @@ class CnQuoteEngine:
             self.poll_seconds,
             len(self._quotes),
         )
+
+    def _import_missing_history(self) -> int:
+        """Fill symbols that have no stored history yet.
+
+        Only symbols with zero daily bars are imported: re-importing everything on
+        every boot would re-download years of data for rows that are already there.
+        `/cn/data/sync` remains the explicit way to force a refresh.
+        """
+        from app.modules.cn.sync import CnDataSyncService
+
+        with self.db.session() as session:
+            rows = session.scalars(
+                select(Symbol).where(Symbol.market == "cn_stock", Symbol.enabled.is_(True))
+            ).all()
+            empty = [
+                row.code
+                for row in rows
+                if session.scalar(
+                    select(func.count(Candle.id)).where(
+                        Candle.symbol == row.code, Candle.timeframe == "1d"
+                    )
+                )
+                == 0
+            ]
+        if not empty:
+            return 0
+        with self.db.session() as session:
+            service = CnDataSyncService(session, self.source)
+            report = service.sync_symbols(
+                empty,
+                daily_limit=self.settings.cn_sync_daily_limit,
+                intraday_limit=self.settings.cn_sync_intraday_limit,
+            )
+        imported = sum(item.daily_bars + item.intraday_bars for item in report.symbols)
+        if imported:
+            logger.info(
+                "imported %s bars of A-share history for %s symbols at startup",
+                imported,
+                len(empty),
+            )
+        return imported
 
     async def stop(self) -> None:
         self._stopping.set()

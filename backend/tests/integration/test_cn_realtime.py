@@ -220,3 +220,112 @@ def test_disabled_quotes_status_matches_the_crypto_market(tmp_path):
     assert "LQ_CN_DATA_SOURCE" in cn.json()["error"]["message"]
     assert "LQ_CRYPTO_DATA_SOURCE" in crypto.json()["error"]["message"]
     db.dispose()
+
+
+def test_fresh_deployment_imports_only_symbols_without_history(tmp_path):
+    """A real-data install must not open with an empty chart.
+
+    The live engine only produces bars from "now" onward, so without an import a
+    fresh A-share deployment showed one daily bar and every backtest failed with
+    "数据不足". The crypto engine already imports at startup; A-shares must match.
+    Symbols that already have history are skipped so a restart does not re-download
+    years of data.
+    """
+    from app.core.db import Database
+    from app.modules.cn.quotes import CnQuoteEngine
+    from app.modules.cn.sources.base import BarBatch, Quote
+    from app.modules.market.models import Candle, Symbol
+    from app.modules.market.service_types import CandlePoint
+    from sqlalchemy import func, select
+
+    settings = Settings(
+        database_url=f"sqlite:///{(tmp_path / 'fresh.db').as_posix()}",
+        seed_market=False,
+        cn_symbols_enabled=False,
+        cn_data_source="tencent",
+        runtime_enabled=False,
+    )
+    db = Database(settings.database_url)
+    db.create_schema()
+    day = 1_792_512_000_000  # 2026-10-21 00:00 UTC+8
+    with db.session() as session:
+        for code in ("600519.SH", "000001.SZ"):
+            session.add(
+                Symbol(
+                    code=code,
+                    name=code,
+                    asset_class="stock",
+                    market="cn_stock",
+                    exchange="SH" if code.endswith(".SH") else "SZ",
+                    board="main",
+                    base=code.split(".")[0],
+                    quote="CNY",
+                    tick_size=0.01,
+                    lot_size=100.0,
+                    initial_price=100.0,
+                    prev_close=100.0,
+                    limit_pct=0.10,
+                )
+            )
+        # One symbol already has history: it must be left alone.
+        session.add(
+            Candle(
+                symbol="000001.SZ",
+                timeframe="1d",
+                open_time=day - 86_400_000,
+                open=10.0, high=10.0, low=10.0, close=10.0, volume=1.0,
+            )
+        )
+
+    class HistorySource:
+        name = "stub"
+
+        def daily_bars(self, code, *, limit=800):
+            return BarBatch(
+                code=code,
+                timeframe="1d",
+                bars=[
+                    CandlePoint(
+                        time=day - (5 - i) * 86_400_000,
+                        open=100.0 + i, high=101.0 + i, low=99.0 + i,
+                        close=100.5 + i, volume=1000.0,
+                    )
+                    for i in range(5)
+                ],
+            )
+
+        def intraday_bars(self, code, *, limit=320):
+            return BarBatch(code=code, timeframe="15m", bars=[])
+
+        def quote(self, code):
+            return Quote(
+                code=code, name="x", price=110.0, prev_close=109.0, open=109.0,
+                high=111.0, low=108.0, volume=100.0, timestamp_ms=day,
+            )
+
+        def quotes(self, codes):
+            return {}
+
+        def health(self):
+            raise AssertionError("unused")
+
+    engine = CnQuoteEngine(db, settings, source=HistorySource())
+    imported = engine._import_missing_history()
+    # Only the empty symbol is imported, and the sync drops non-trading days
+    # (two of the five stub dates fall on a weekend), so assert the range.
+    assert 1 <= imported <= 5
+
+    with db.session() as session:
+        missing = session.scalar(
+            select(func.count(Candle.id)).where(
+                Candle.symbol == "600519.SH", Candle.timeframe == "1d"
+            )
+        )
+        untouched = session.scalar(
+            select(func.count(Candle.id)).where(
+                Candle.symbol == "000001.SZ", Candle.timeframe == "1d"
+            )
+        )
+    assert missing >= 1
+    assert untouched == 1
+    db.dispose()
