@@ -160,6 +160,7 @@ npx tsc --noEmit; npx vite build                # 0 errors
 | 盘前不造幽灵日线 | ✅ | `test_pre_open_quote_does_not_create_a_phantom_daily_bar` |
 | 行情中断自动告警、只报一次、恢复自动确认 | ✅ | `test_feed_outage_raises_one_alert_and_recovery_clears_it` |
 | 平台级告警对每个账户可见 | ✅ | `test_platform_wide_alert_is_visible_to_every_account` |
+| 权益快照两级降采样 | ✅ | `tests/unit/test_snapshot_pruning.py`；实测 21938 → 124 行 |
 
 **真实网络实测（全新数据库，双市场）**：`crypto: 6 symbols / 5s / 702ms`、
 `cn: 8 quotes / 15s / 405ms`；CN 日线量 33514 与报价累计量完全一致；
@@ -224,7 +225,7 @@ C 轮以"实际使用系统"为主，每轮都从真实操作中找缺陷。完�
 | 异常跳变检测 | C72–C73 | A 股在途资金未计入权益（-95%/+1785% 单根跳变）修复；引擎与多标的合并曲线均自动告警 |
 | 实时行情 | C74 | 双市场接入真实数据（腾讯 + Binance）；批量轮询、退避、新闻度、15m 重建、成交量口径、半根 bar 合并 |
 
-**当前规模**：后端 451 项测试、前端 66 项测试，全部通过。
+**当前规模**：后端 455 项测试、前端 66 项测试，全部通过。
 
 **验证方式**：除自动化测试外，每轮都在真实浏览器中操作 2K 界面确认，
 并在真实 A 股行情（腾讯数据源）上跑通同步 → 回测 → 优化 → 滚动验证 → 组合分析。

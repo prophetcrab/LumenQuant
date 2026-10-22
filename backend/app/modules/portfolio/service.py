@@ -5,10 +5,10 @@ from __future__ import annotations
 from dataclasses import asdict, dataclass
 from datetime import timedelta
 
-from sqlalchemy import select
+from sqlalchemy import delete, select
 from sqlalchemy.orm import Session
 
-from app.core.errors import NotFoundError
+from app.core.errors import NotFoundError, ValidationError
 from app.core.money import round_money, safe_div
 from app.core.timeutil import iso, utcnow
 from app.modules.accounts.service import AccountService
@@ -16,6 +16,12 @@ from app.modules.portfolio.models import EquitySnapshot
 from app.modules.trading.service import PositionView, TradingService
 
 SNAPSHOT_THROTTLE = timedelta(seconds=10)
+# Equity rows are written every ~10s per account while an engine runs: 8,640 a
+# day, 3M a year, and nothing ever removed them. Keep fine-grained history for a
+# week, then one row per hour — the chart is read at daily scale long before then,
+# and the raw rows only bloat the file and slow every history query.
+SNAPSHOT_FINE_DAYS = 7
+SNAPSHOT_HOURLY_DAYS = 365
 
 
 @dataclass(frozen=True)
@@ -268,3 +274,79 @@ class PortfolioService:
             }
             for row in rows
         ]
+
+    def prune_snapshots(
+        self,
+        *,
+        fine_days: int = SNAPSHOT_FINE_DAYS,
+        hourly_days: int = SNAPSHOT_HOURLY_DAYS,
+    ) -> int:
+        return prune_equity_snapshots(
+            self.session, fine_days=fine_days, hourly_days=hourly_days
+        )
+
+
+def prune_equity_snapshots(
+    session: Session,
+    *,
+    fine_days: int = SNAPSHOT_FINE_DAYS,
+    hourly_days: int = SNAPSHOT_HOURLY_DAYS,
+) -> int:
+    """Downsample old equity history instead of keeping every 10s row.
+
+    Two tiers keep the curve honest at the scale people actually read it:
+
+    * younger than `fine_days` — untouched, 10s resolution for intraday review;
+    * between `fine_days` and `hourly_days` — one row per hour bucket;
+    * older than `hourly_days` — one row per day.
+
+    The bucket representative is the LAST row in the bucket (the closing equity),
+    not an average: averaging would fabricate an equity value the account never
+    held.
+
+    A module-level function rather than a method because it touches nothing but
+    `EquitySnapshot`: requiring a fully wired PortfolioService (accounts and
+    trading ports) just to drop rows would make every caller construct three
+    services to do a table cleanup.
+    """
+    if fine_days < 0 or hourly_days < fine_days:
+        raise ValidationError("保留天数必须非负，且总保留期不短于细粒度期")
+    now = utcnow()
+    fine_cutoff = now - timedelta(days=fine_days)
+    hourly_cutoff = now - timedelta(days=hourly_days)
+
+    rows = session.scalars(
+        select(EquitySnapshot)
+        .where(EquitySnapshot.created_at < fine_cutoff)
+        .order_by(
+            EquitySnapshot.account_id.asc(),
+            EquitySnapshot.created_at.asc(),
+        )
+    ).all()
+    if not rows:
+        return 0
+
+    # Keep the last row of each bucket; delete the rest.
+    keep: set[str] = set()
+    seen: dict[tuple[str, str, int], str] = {}
+    for row in rows:
+        created = row.created_at.replace(tzinfo=now.tzinfo)
+        if created >= hourly_cutoff:
+            key = (row.account_id, "hour", int(created.timestamp() // 3600))
+        else:
+            key = (row.account_id, "day", int(created.timestamp() // 86_400))
+        previous = seen.get(key)
+        if previous is not None:
+            keep.discard(previous)
+        seen[key] = row.id
+        keep.add(row.id)
+
+    doomed = [row.id for row in rows if row.id not in keep]
+    for start in range(0, len(doomed), 500):
+        session.execute(
+            delete(EquitySnapshot).where(
+                EquitySnapshot.id.in_(doomed[start : start + 500])
+            )
+        )
+    session.commit()
+    return len(doomed)

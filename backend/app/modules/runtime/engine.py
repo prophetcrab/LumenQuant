@@ -152,4 +152,15 @@ class StrategyRuntimeEngine:
                         logger.info("pruned %s orphan backtest sleeves", pruned)
                 except Exception:
                     logger.exception("orphan sleeve pruning failed")
+                try:
+                    # Equity snapshots are written every ~10s per account and were
+                    # never pruned. Two-tier downsampling keeps the curve readable
+                    # without letting the table grow without bound.
+                    from app.modules.portfolio.service import prune_equity_snapshots
+
+                    removed = prune_equity_snapshots(session)
+                    if removed:
+                        logger.info("downsampled %s old equity snapshots", removed)
+                except Exception:
+                    logger.exception("equity snapshot pruning failed")
             return results
