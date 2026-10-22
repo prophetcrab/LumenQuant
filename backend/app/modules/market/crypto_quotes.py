@@ -36,6 +36,11 @@ logger = logging.getLogger(__name__)
 
 CRYPTO_STEP_MS = 900_000
 DAILY_MS = 86_400_000
+# A bar accumulated across more buckets than this was not observed continuously:
+# polling stopped, and the "bar" holds only the samples before and after the gap.
+# Persisting it would store a fabricated high/low and volume 0, so the gap is
+# filled from klines instead.
+MAX_TRUSTED_GAP_BUCKETS = 2
 
 
 class CryptoQuoteEngine:
@@ -385,67 +390,123 @@ class CryptoQuoteEngine:
         return closed
 
     def _persist_closed(self, rows: list[dict]) -> None:
+        """Store closed bars, using klines as the source of truth.
+
+        One fetch per symbol per closed bucket (every 15 minutes) serves three
+        purposes at once:
+
+        * the closing bar gets its real OHLCV instead of the sampled range and
+          volume 0 that a ticker poll can produce (the 24h field is a rolling
+          turnover, not a candle volume);
+        * buckets missed by a polling outage are imported rather than left absent;
+        * rows previously stored with volume 0 are repaired while the
+          authoritative candle is in hand.
+
+        A bar that was only observed at the edges of an outage is dropped: its
+        high/low never saw the middle of the period, so persisting it would be a
+        fabricated candle. The import replaces it with the real one.
+        """
         if not rows:
             return
-        # A ticker poll cannot measure per-candle volume (the 24h field is a
-        # rolling turnover), so a bar assembled from polls would be stored with
-        # volume 0 — silently corrupting every volume-based strategy and the data
-        # quality report. Ask the kline endpoint for the authoritative candle as
-        # each bucket completes: one request per symbol per 15 minutes.
-        authoritative = self._authoritative_bars({row["symbol"] for row in rows})
-        merged: list[dict] = []
+        current_bucket = align_down(self.now_ms(), CRYPTO_STEP_MS)
+        by_symbol: dict[str, list[dict]] = {}
         for row in rows:
-            source_bar = authoritative.get(row["symbol"], {}).get(row["open_time"])
-            if source_bar is None:
-                merged.append(row)
+            by_symbol.setdefault(row["symbol"], []).append(row)
+
+        for code, closing in by_symbol.items():
+            oldest = min(row["open_time"] for row in closing)
+            missed = max(0, (current_bucket - oldest) // CRYPTO_STEP_MS)
+            # Enough history to cover the outage plus the bars being closed.
+            limit = max(12, min(500, int(missed) + 4))
+            try:
+                fetched = self.source.klines(code, interval="15m", limit=limit)
+            except Exception as exc:
+                logger.warning(
+                    "crypto kline fetch failed for %s; storing accumulated bars: %s",
+                    code,
+                    exc,
+                )
+                fetched = []
+
+            authoritative = {
+                bar.time: bar for bar in fetched if bar.time < current_bucket
+            }
+            accepted: dict[int, dict] = {}
+            for row in closing:
+                source_bar = authoritative.get(row["open_time"])
+                if source_bar is not None:
+                    accepted[row["open_time"]] = {
+                        **row,
+                        "open": source_bar.open,
+                        "high": source_bar.high,
+                        "low": source_bar.low,
+                        "close": source_bar.close,
+                        "volume": source_bar.volume,
+                    }
+                    continue
+                if current_bucket - row["open_time"] > (
+                    MAX_TRUSTED_GAP_BUCKETS * CRYPTO_STEP_MS
+                ):
+                    # Edge samples only: not a bar, and the import below supplies
+                    # the real one if upstream has it.
+                    continue
+                accepted[row["open_time"]] = row
+
+            # Gaps: every authoritative bucket that is not the in-progress one.
+            for bar_time, bar in authoritative.items():
+                if bar_time not in accepted:
+                    accepted[bar_time] = {
+                        "symbol": code,
+                        "timeframe": "15m",
+                        "open_time": bar.time,
+                        "open": bar.open,
+                        "high": bar.high,
+                        "low": bar.low,
+                        "close": bar.close,
+                        "volume": bar.volume,
+                    }
+
+            if not accepted:
                 continue
-            merged.append(
-                {
-                    **row,
-                    "open": source_bar.open,
-                    "high": source_bar.high,
-                    "low": source_bar.low,
-                    "close": source_bar.close,
-                    "volume": source_bar.volume,
-                }
-            )
+            self._write_bars(code, list(accepted.values()))
+
+    def _write_bars(self, code: str, rows: list[dict]) -> None:
+        """Insert new bars, repair volume-less ones, and roll the daily series."""
         with self.db.session() as session:
             existing = {
-                (symbol, ts)
-                for symbol, ts in session.execute(
-                    select(Candle.symbol, Candle.open_time).where(
-                        Candle.symbol.in_({row["symbol"] for row in merged}),
+                row.open_time: row
+                for row in session.scalars(
+                    select(Candle).where(
+                        Candle.symbol == code,
                         Candle.timeframe == "15m",
-                        Candle.open_time.in_({row["open_time"] for row in merged}),
+                        Candle.open_time.in_({row["open_time"] for row in rows}),
                     )
                 ).all()
             }
-            fresh = [
-                row
-                for row in merged
-                if (row["symbol"], row["open_time"]) not in existing
-            ]
-            if not fresh:
+            fresh: list[dict] = []
+            repaired = 0
+            for row in rows:
+                stored = existing.get(row["open_time"])
+                if stored is None:
+                    fresh.append(row)
+                    continue
+                if stored.volume <= 0 and row["volume"] > 0:
+                    stored.open, stored.high = row["open"], row["high"]
+                    stored.low, stored.close = row["low"], row["close"]
+                    stored.volume = row["volume"]
+                    repaired += 1
+            if not fresh and not repaired:
                 return
-            session.execute(insert(Candle), fresh)
-            self._roll_daily(session, fresh)
-        logger.debug("persisted %s closed crypto bars", len(fresh))
-
-    def _authoritative_bars(self, codes: set[str]) -> dict[str, dict[int, CandlePoint]]:
-        """Fetch recently closed klines so stored bars carry real volume.
-
-        Failure is tolerated per symbol: a network blip degrades the bar to the
-        accumulated (volume-less) version rather than losing the bar entirely.
-        """
-        out: dict[str, dict[int, CandlePoint]] = {}
-        for code in codes:
-            try:
-                bars = self.source.klines(code, interval="15m", limit=3)
-            except Exception as exc:
-                logger.debug("authoritative kline unavailable for %s: %s", code, exc)
-                continue
-            out[code] = {bar.time: bar for bar in bars}
-        return out
+            if fresh:
+                session.execute(insert(Candle), fresh)
+                self._roll_daily(session, fresh)
+        if fresh or repaired:
+            logger.debug(
+                "stored %s crypto bars for %s (%s repaired)",
+                len(fresh),
+                code,
+                repaired,
+            )
 
     def _roll_daily(self, session, fresh: list[dict]) -> None:
         """Extend the current UTC day's bar.

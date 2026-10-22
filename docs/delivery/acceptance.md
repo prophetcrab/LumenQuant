@@ -164,6 +164,8 @@ npx tsc --noEmit; npx vite build                # 0 errors
 | 组合分析检测异常跳变并给出稳健相关性 | ✅ | 真实数据：1 根 +73% bar 使相关性 0.006 → 0.230，剔除后复原 0.032 |
 | 按调整后权重重跑篮子 | ✅ | `test_apply_weights_reruns_the_basket_with_the_new_mix`；浏览器实测 60/30/10 → 收益 57.91% vs 等权 32.13% |
 | 告警时间范围与跨账户合计 | ✅ | `test_alerts_can_be_filtered_by_time_window`、`test_summary_can_total_across_all_accounts`；浏览器实测切换账户与时间窗 |
+| A 股 bar 的收盘判定用 A 股时钟 | ✅ | `test_a_share_bar_is_judged_by_the_a_share_clock`；还原修复后失败 |
+| 轮询中断后补历史并修正量 0 的坏行 | ✅ | `test_outage_gap_is_backfilled_instead_of_persisting_a_fake_bar`；实测 7 根全部带真实量 |
 
 **真实网络实测（全新数据库，双市场）**：`crypto: 6 symbols / 5s / 702ms`、
 `cn: 8 quotes / 15s / 405ms`；CN 日线量 33514 与报价累计量完全一致；
@@ -230,8 +232,9 @@ C 轮以"实际使用系统"为主，每轮都从真实操作中找缺陷。完�
 | 组合分析稳健性 | C75 | 相关性矩阵检测异常跳变，同时给出剔除后的稳健矩阵与扭曲程度 |
 | 权重落地 | C76 | 组合分析可按调整后的权重重跑篮子，生成新记录并保留原篮子 |
 | 告警可观测性 | C77 | 时间范围筛选、跨账户合计与明细；侧栏角标改为全局口径 |
+| 时间基准与缺口 | C78 | A 股 bar 改用 A 股时钟判定收盘；加密轮询中断后从 klines 补历史并修正坏行 |
 
-**当前规模**：后端 467 项测试、前端 66 项测试，全部通过。
+**当前规模**：后端 470 项测试、前端 66 项测试，全部通过。
 
 **验证方式**：除自动化测试外，每轮都在真实浏览器中操作 2K 界面确认，
 并在真实 A 股行情（腾讯数据源）上跑通同步 → 回测 → 优化 → 滚动验证 → 组合分析。

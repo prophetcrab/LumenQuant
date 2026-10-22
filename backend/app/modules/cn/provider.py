@@ -17,17 +17,30 @@ class CompositeLiveProvider:
 
     @property
     def clock(self):
-        """Expose a clock so MarketService can timestamp responses.
+        """Default clock for callers that have no symbol in hand.
 
-        Crypto and A-share run on separate simulated clocks; the crypto one is
-        the better default because it advances continuously. Consumers that need
-        the Beijing session clock read `cn.clock` through /api/cn/session.
+        Crypto's clock is the better default because it advances continuously.
+        It is *not* a substitute for `clock_for(symbol)`: the two markets run on
+        different clocks, and A-share bars must be judged against the A-share one.
         """
         if self.crypto is not None:
             return getattr(self.crypto, "clock", None)
         if self.cn is not None:
             return getattr(self.cn, "clock", None)
         return None
+
+    def clock_for(self, symbol: str):
+        """The clock that produced this symbol's bars.
+
+        Crypto's simulated clock runs at 60x while the A-share clock only advances
+        inside sessions. Using the wrong one to decide "has this bar closed yet"
+        makes an A-share daily bar look finished hours before the 15:00 close, so
+        `closed_only` would hand an in-progress bar to backtests and live signals.
+        """
+        provider = self._provider(symbol)
+        if provider is None:
+            return self.clock
+        return getattr(provider, "clock", None) or self.clock
 
     def register(self, symbol: str, market: str) -> None:
         self._symbol_market[symbol.upper()] = market

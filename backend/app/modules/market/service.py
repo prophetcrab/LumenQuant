@@ -314,14 +314,24 @@ class MarketService:
             points = self._drop_in_progress(row, timeframe, points)
         return points[-limit:]
 
-    def _now_ms(self) -> int:
-        """Best available "now" for deciding whether a bar has closed.
+    def _now_ms(self, symbol: str) -> int:
+        """Best available "now" for deciding whether this symbol's bar closed.
 
-        The live engine owns the clock that produced the bars, so it is the only
-        consistent reference; the wall clock is the fallback for a market with no
-        engine (tests, imported data).
+        Prefers the clock owned by the market that produced the bar. Falling back
+        to the provider's default clock is wrong for A-shares whenever a crypto
+        engine exists: that clock is simulated at 60x and would declare today's
+        A-share daily bar closed long before the real 15:00, letting an unfinished
+        bar into backtests and live signals.
         """
-        clock = getattr(self.live, "clock", None)
+        clock = None
+        getter = getattr(self.live, "clock_for", None)
+        if getter is not None:
+            try:
+                clock = getter(symbol)
+            except Exception:
+                clock = None
+        if clock is None:
+            clock = getattr(self.live, "clock", None)
         if clock is not None:
             try:
                 return int(clock.now_ms())
@@ -342,7 +352,7 @@ class MarketService:
         if not points:
             return points
         last = points[-1]
-        if _bar_close_ms(row.market, timeframe, last.time) <= self._now_ms():
+        if _bar_close_ms(row.market, timeframe, last.time) <= self._now_ms(row.code):
             return points
         return points[:-1]
 

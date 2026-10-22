@@ -169,3 +169,45 @@ def test_crypto_15m_bar_is_excluded_until_its_bucket_ends(tmp_path):
         closed = market.candles("BTCUSDT", timeframe="15m", limit=5, closed_only=True)
     assert len(closed) == 1
     db.dispose()
+
+
+class FakeEngine:
+    def __init__(self, now_ms: int) -> None:
+        self.clock = FixedClock(now_ms)
+
+    def live_candle(self, symbol: str):
+        return None
+
+
+def test_a_share_bar_is_judged_by_the_a_share_clock(cn_db):
+    """The crypto clock must not decide whether an A-share bar has closed.
+
+    Crypto's simulated clock runs at 60x. When both markets are enabled the
+    provider's default clock is the crypto one, so using it here declared today's
+    A-share daily bar finished hours before the 15:00 close — and `closed_only`
+    then handed an in-progress bar to backtests and live signals.
+    """
+    from app.modules.cn.provider import CompositeLiveProvider
+
+    # Crypto has already "reached" 18:00; the A-share session has not opened yet.
+    crypto_now = ms(18, 0)
+    cn_now = ms(6, 20)
+    provider = CompositeLiveProvider(
+        crypto=FakeEngine(crypto_now), cn=FakeEngine(cn_now)
+    )
+    provider.register("600519.SH", "cn_stock")
+
+    with cn_db.session() as session:
+        market = MarketService(session, live=provider)
+        closed = market.candles("600519.SH", timeframe="1d", limit=10, closed_only=True)
+    # Only yesterday's finished bar; today's is still forming on the A-share clock.
+    assert len(closed) == 1
+    assert closed[-1].close == pytest.approx(1005.0)
+
+    # Once the A-share clock passes the close, the same bar becomes available.
+    provider.cn.clock.set(ms(15, 1))
+    with cn_db.session() as session:
+        market = MarketService(session, live=provider)
+        closed = market.candles("600519.SH", timeframe="1d", limit=10, closed_only=True)
+    assert len(closed) == 2
+    assert closed[-1].close == pytest.approx(1012.0)

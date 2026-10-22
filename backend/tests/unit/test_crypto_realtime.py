@@ -9,7 +9,8 @@ from app.core.config import Settings
 from app.core.db import Database
 from app.modules.market.crypto_quotes import CryptoQuoteEngine
 from app.modules.market.models import Symbol
-from app.modules.market.sources.binance_public import BinancePublicSource
+from app.modules.market.service_types import CandlePoint
+from app.modules.market.sources.binance_public import BinancePublicSource, CryptoTicker
 from app.modules.market.service import MarketService
 
 # 2026-10-21 10:00:00 UTC, deliberately on a 15m boundary.
@@ -161,7 +162,6 @@ def test_finished_bar_is_persisted(engine_setup):
     from sqlalchemy import select
 
     from app.modules.market.models import Candle
-    from app.modules.market.sources.binance_public import CryptoTicker
 
     state, source, engine, db = engine_setup
     source.payload = {
@@ -210,8 +210,6 @@ def test_closed_bar_uses_the_authoritative_kline_volume(engine_setup):
     from sqlalchemy import select
 
     from app.modules.market.models import Candle
-    from app.modules.market.service_types import CandlePoint
-    from app.modules.market.sources.binance_public import CryptoTicker
 
     state, source, engine, db = engine_setup
     source.klines = lambda code, interval="15m", limit=3: [
@@ -377,3 +375,138 @@ def test_crypto_feed_outage_raises_one_alert_and_recovery_clears_it(engine_setup
             ).all()
             == []
         )
+
+
+def test_outage_gap_is_backfilled_instead_of_persisting_a_fake_bar(engine_setup):
+    """After a polling outage the missed candles come from klines.
+
+    The accumulator only saw samples at the edges of the gap, so persisting it
+    would store a bar whose high/low never saw the middle of the period and whose
+    volume is unknown — while every bucket in between stayed missing entirely.
+    """
+    from sqlalchemy import select
+
+    from app.modules.market.models import Candle
+
+    state, source, engine, db = engine_setup
+    base = NOW_MS  # a 15m boundary
+
+    def ticker(price: float, volume: float, ts_ms: int) -> CryptoTicker:
+        return CryptoTicker(
+            symbol="BTCUSDT",
+            price=price,
+            open=price,
+            high=price,
+            low=price,
+            volume=volume,
+            prev_close=price,
+            timestamp_ms=ts_ms,
+        )
+
+    # Upstream holds the candles the poller will miss.
+    def klines(code, interval="15m", limit=500):
+        out = []
+        bucket = base + BUCKET_MS
+        while bucket < (state["now"] // BUCKET_MS) * BUCKET_MS:
+            out.append(
+                CandlePoint(
+                    time=bucket,
+                    open=81000.0,
+                    high=81100.0,
+                    low=80900.0,
+                    close=81050.0,
+                    volume=42.0,
+                )
+            )
+            bucket += BUCKET_MS
+        return out
+
+    source.klines = klines
+    source.payload = {"BTCUSDT": ticker(80000.0, 10.0, base + 60_000)}
+    engine.poll_once()
+
+    # Polling dies for two hours, then resumes.
+    state["now"] += 2 * 3600_000
+    source.payload = {"BTCUSDT": ticker(82000.0, 5000.0, state["now"])}
+    engine.poll_once()
+
+    with db.session() as session:
+        bars = session.scalars(
+            select(Candle)
+            .where(Candle.symbol == "BTCUSDT", Candle.timeframe == "15m")
+            .order_by(Candle.open_time.asc())
+        ).all()
+
+    now_bucket = (state["now"] // BUCKET_MS) * BUCKET_MS
+    # Buckets base .. now_bucket-1 exist upstream. The very first one (`base`) was
+    # only sampled once before the outage, so the fake upstream stub below does not
+    # serve it either — every later bucket must be present.
+    expected = (now_bucket - base) // BUCKET_MS - 1
+    assert len(bars) == expected, f"expected {expected} closed bars, got {len(bars)}"
+    # Every stored bar carries real volume and a real range; none is fabricated.
+    assert all(bar.volume > 0 for bar in bars)
+    assert all(bar.high > bar.low for bar in bars)
+    # The pre-outage bucket is not left with the single-sample O=H=L=C shape.
+    assert bars[0].high > bars[0].low
+
+
+def test_backfill_repairs_a_bar_stored_without_volume(engine_setup):
+    """Bars already stored with volume 0 by a degraded poll get corrected."""
+    from sqlalchemy import select
+
+    from app.modules.market.models import Candle
+
+    state, source, engine, db = engine_setup
+    with db.session() as session:
+        session.add(
+            Candle(
+                symbol="BTCUSDT",
+                timeframe="15m",
+                open_time=NOW_MS,
+                open=80000.0,
+                high=80000.0,
+                low=80000.0,
+                close=80000.0,
+                volume=0.0,
+            )
+        )
+
+    def klines(code, interval="15m", limit=500):
+        return [
+            CandlePoint(
+                time=NOW_MS, open=79950.0, high=80100.0, low=79800.0, close=80050.0, volume=77.0
+            )
+        ]
+
+    source.klines = klines
+    # Jump three buckets so the stored bar is well behind "now": that is exactly
+    # the condition under which a degraded bar is recognised and repaired.
+    state["now"] += 3 * BUCKET_MS
+    source.payload = {"BTCUSDT": ticker_for(80100.0, state["now"])}
+    engine.poll_once()
+    # The repair rides on the closing-bar sync: advance one more bucket so a bar
+    # closes and the authoritative fetch runs.
+    state["now"] += BUCKET_MS
+    source.payload = {"BTCUSDT": ticker_for(80200.0, state["now"])}
+    engine.poll_once()
+
+    with db.session() as session:
+        bar = session.scalar(
+            select(Candle).where(Candle.open_time == NOW_MS, Candle.timeframe == "15m")
+        )
+    assert bar.volume == pytest.approx(77.0)
+    assert bar.high == pytest.approx(80100.0)
+    assert bar.low == pytest.approx(79800.0)
+
+
+def ticker_for(price: float, ts_ms: int) -> CryptoTicker:
+    return CryptoTicker(
+        symbol="BTCUSDT",
+        price=price,
+        open=price,
+        high=price,
+        low=price,
+        volume=1.0,
+        prev_close=price,
+        timestamp_ms=ts_ms,
+    )
