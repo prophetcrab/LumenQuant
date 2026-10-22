@@ -36,12 +36,24 @@ class OrderIntent:
 @dataclass(frozen=True)
 class RiskContext:
     cash: float
+    # Shares that may be sold right now (post T+1, minus reservations). This is
+    # the sell-side guard and must stay separate from exposure.
     position_qty: float
     position_avg_price: float
     orders_last_minute: int
     equity: float = 0.0
     day_start_equity: float = 0.0
     peak_equity: float = 0.0
+    # Total holding for exposure purposes. For A-shares this exceeds
+    # `position_qty` on the day of purchase: the shares are owned but not yet
+    # sellable. Valuing exposure from `position_qty` made the notional limit
+    # disappear entirely for same-day A-share buying.
+    exposure_qty: float = 0.0
+    # Current market price of the existing position. The notional limit is about
+    # *exposure*, so it must value the holding at today's price: cost-based
+    # valuation understates the risk of adding to a position that has run up.
+    # Zero means "unknown", and the policy then falls back to cost.
+    position_market_price: float = 0.0
 
 
 @dataclass(frozen=True)
@@ -109,9 +121,18 @@ class RiskPolicy:
                 raise ConflictError(
                     f"insufficient cash: need {round_money(cost)}, available {round_money(ctx.cash)}"
                 )
-            projected = ctx.position_qty * ctx.position_avg_price + notional
+            # Exposure is quantity × *market* value, not quantity × cost. A
+            # position bought at 100 and now trading at 200 carries twice the risk
+            # the cost figure implies, so a cost-based projection let a buy double
+            # the real exposure while appearing to stay under the limit.
+            mark = ctx.position_market_price or ctx.position_avg_price
+            held = ctx.exposure_qty if ctx.exposure_qty > 0 else ctx.position_qty
+            projected = held * mark + notional
             if projected > self.limits.max_position_notional:
-                raise ConflictError("projected position exceeds the notional limit")
+                raise ConflictError(
+                    f"projected position value {round_money(projected)} exceeds "
+                    f"the notional limit {self.limits.max_position_notional}"
+                )
         else:
             if intent.quantity > ctx.position_qty + 1e-9:
                 raise ConflictError(

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import pytest
 
+from app.core.errors import ConflictError
 from app.modules.market.service_types import SymbolView
 from app.modules.risk.policy import OrderIntent, RiskContext, RiskLimits, RiskPolicy
 
@@ -230,3 +231,84 @@ def test_daily_halt_releases_while_drawdown_persists(database, monkeypatch):
         # Drawdown reason wins and is still present.
         assert after.breaker_active is True
         assert after.halt_kind == "drawdown"
+
+
+def test_position_limit_uses_market_value_not_cost():
+    """Exposure is what the position is worth now, not what it cost.
+
+    A holding bought at 100 and now trading at 200 carries twice the risk the cost
+    figure implies. Projecting the new exposure from cost let a buy double the real
+    exposure while appearing to stay under the limit.
+    """
+    policy = RiskPolicy(RiskLimits(max_order_notional=1_000_000, max_position_notional=300_000))
+    intent = OrderIntent(side="buy", quantity=1000, price=200.0, fee_bps=0)
+
+    # 2000 shares at cost 100 = 200,000 booked; at market 200 = 400,000 real.
+    # Adding 1000 more at 200 pushes real exposure to 600,000 > 300,000 limit.
+    ctx = RiskContext(
+        cash=1_000_000,
+        position_qty=2000,
+        position_avg_price=100.0,
+        position_market_price=200.0,
+        orders_last_minute=0,
+    )
+    with pytest.raises(ConflictError) as exc:
+        policy.validate(intent, ctx, SYMBOL)
+    assert "notional limit" in str(exc.value)
+
+    # The same order at cost valuation would have looked acceptable, which is
+    # exactly the bug: 2000*100 + 200,000 = 400,000... still over, so pick a case
+    # where only the market valuation trips it.
+    ctx_cost_ok = RiskContext(
+        cash=1_000_000,
+        position_qty=1000,
+        position_avg_price=100.0,
+        position_market_price=0.0,   # unknown -> cost fallback
+        orders_last_minute=0,
+    )
+    small = OrderIntent(side="buy", quantity=100, price=200.0, fee_bps=0)
+    # 1000*100 + 20,000 = 120,000 -> allowed at cost.
+    policy.validate(small, ctx_cost_ok, SYMBOL)
+
+    ctx_market_high = RiskContext(
+        cash=1_000_000,
+        position_qty=1000,
+        position_avg_price=100.0,
+        position_market_price=200.0,  # same holding, now worth 200,000
+        orders_last_minute=0,
+    )
+    # 1000*200 + 20,000 = 220,000, still under 300k, so this must pass.
+    policy.validate(small, ctx_market_high, SYMBOL)
+
+    # And 1000 shares more at 200: 1000*200 + 200,000 = 400,000 -> blocked.
+    big = OrderIntent(side="buy", quantity=1000, price=200.0, fee_bps=0)
+    with pytest.raises(ConflictError):
+        policy.validate(big, ctx_market_high, SYMBOL)
+
+
+def test_same_day_a_share_position_counts_toward_the_notional_limit():
+    """T+1 makes a holding unsellable, not unowned.
+
+    `position_qty` (sellable) is 0 on the purchase day for A-shares, so the
+    exposure limit used to see no position at all and let a second buy through
+    entirely unprotected. Exposure and sellability are different questions.
+    """
+    policy = RiskPolicy(RiskLimits(max_order_notional=1_000_000, max_position_notional=150_000))
+    ctx = RiskContext(
+        cash=1_000_000,
+        position_qty=0.0,          # bought today: frozen by T+1
+        exposure_qty=100.0,        # but owned, and carrying market risk
+        position_avg_price=1310.0,
+        position_market_price=1310.0,
+        orders_last_minute=0,
+    )
+    with pytest.raises(ConflictError) as exc:
+        policy.validate(
+            OrderIntent(side="buy", quantity=100, price=1310.0, fee_bps=0), ctx, SYMBOL
+        )
+    assert "notional limit" in str(exc.value)
+    # Selling still obeys T+1: nothing is sellable, so a sell is refused.
+    with pytest.raises(ConflictError):
+        policy.validate(
+            OrderIntent(side="sell", quantity=100, price=1310.0, fee_bps=0), ctx, SYMBOL
+        )

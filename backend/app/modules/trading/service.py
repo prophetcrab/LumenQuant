@@ -451,8 +451,17 @@ class TradingService:
         )
         ctx = RiskContext(
             cash=self.available_cash(account_id),
+            # Sellable now: the T+1 rule and pending sells both apply here.
             position_qty=max(0.0, position_commit),
+            # Everything owned: the exposure limit must see same-day A-share buys,
+            # which are frozen for selling but already carry market risk.
+            exposure_qty=round_qty(position.quantity) if position else 0.0,
             position_avg_price=position.avg_price if position else 0.0,
+            # Exposure is measured at market, so pass the live price when there is
+            # a position; `0.0` tells the policy to fall back to cost.
+            position_market_price=(
+                self._safe_price(symbol) if position and position.quantity > 0 else 0.0
+            ),
             orders_last_minute=int(recent or 0),
         )
         if self.risk is not None:
@@ -470,6 +479,8 @@ class TradingService:
                 cash=ctx.cash,
                 position_qty=ctx.position_qty,
                 position_avg_price=ctx.position_avg_price,
+                position_market_price=ctx.position_market_price,
+                exposure_qty=ctx.exposure_qty,
                 orders_last_minute=ctx.orders_last_minute,
                 equity=equity,
                 day_start_equity=state.day_start_equity,
