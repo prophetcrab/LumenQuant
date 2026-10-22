@@ -111,3 +111,50 @@ def test_unknown_tool(assistant):
     _, _, toolbox = assistant
     with pytest.raises(KeyError):
         toolbox.call("drop_database", {})
+
+
+def test_snapshot_tool_labels_market_and_currency(assistant):
+    """Bare prices from two markets are not comparable, and a model will compare them.
+
+    The tool used to return `{symbol, price, change_24h_pct}` for every market at
+    once, so an A-share price in CNY and a crypto price in USDT arrived under
+    identical keys with nothing marking the difference.
+    """
+    _, _, toolbox = assistant
+    rows = toolbox.call("market_snapshot", {})
+    assert rows
+    for row in rows:
+        assert row["market"] in {"crypto", "cn_stock"}
+        assert row["currency"] == ("CNY" if row["market"] == "cn_stock" else "USDT")
+        assert row["change_label"] == (
+            "较昨收" if row["market"] == "cn_stock" else "近 24 小时"
+        )
+
+
+def test_snapshot_tool_can_be_scoped_to_one_market(assistant):
+    """A model asking about one market must not receive the other's prices."""
+    _, _, toolbox = assistant
+    crypto = toolbox.call("market_snapshot", {"market": "crypto"})
+    assert crypto
+    assert all(row["market"] == "crypto" for row in crypto)
+    assert all(row["currency"] == "USDT" for row in crypto)
+
+
+def test_account_tools_report_the_currency(assistant):
+    _, account, toolbox = assistant
+    accounts = toolbox.call("list_accounts", {})
+    row = next(item for item in accounts if item["id"] == account.id)
+    assert row["currency"] == account.base_currency
+    assert row["market"] == account.market
+
+    overview = toolbox.call("account_overview", {"account_id": account.id})
+    assert overview["currency"] == account.base_currency
+
+
+def test_local_answer_labels_currency_and_separates_markets(assistant):
+    """The local (no-LLM) formatter must not print two currencies as one list."""
+    service, account, _ = assistant
+    reply = service.reply("现在行情怎么样", account_id=account.id)
+    assert reply.mode == "local"
+    # Crypto fixture only, so exactly one currency group is present and labelled.
+    assert "USDT" in reply.answer

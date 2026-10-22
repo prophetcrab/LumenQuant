@@ -268,11 +268,17 @@ class AssistantService:
 
     def _render(self, tool: str, result: Any) -> str:
         if tool == "account_overview" and isinstance(result, dict):
+            # Amounts without a currency read as bare numbers to a model, which
+            # then compares an A-share CNY balance with a crypto USDT one.
+            money = result.get("currency", "")
             return (
-                f"账户「{result['account']}」权益 {result['equity']:,.2f}，现金 {result['cash']:,.2f}，"
-                f"持仓市值 {result['positions_value']:,.2f}（敞口 {result['exposure_pct']:.1f}%）。"
-                f"累计收益 {result['total_return_pct']:.2f}%，浮动盈亏 {result['unrealized_pnl']:,.2f}，"
-                f"已实现盈亏 {result['realized_pnl']:,.2f}。"
+                f"账户「{result['account']}」权益 {result['equity']:,.2f} {money}，"
+                f"现金 {result['cash']:,.2f} {money}，"
+                f"持仓市值 {result['positions_value']:,.2f} {money}"
+                f"（敞口 {result['exposure_pct']:.1f}%）。"
+                f"累计收益 {result['total_return_pct']:.2f}%，"
+                f"浮动盈亏 {result['unrealized_pnl']:,.2f} {money}，"
+                f"已实现盈亏 {result['realized_pnl']:,.2f} {money}。"
             )
         if tool == "list_positions":
             if not result:
@@ -293,9 +299,21 @@ class AssistantService:
             ]
             return "最近订单：\n" + "\n".join(lines)
         if tool == "market_snapshot":
-            return "行情：" + "；".join(
-                f"{s['symbol']} {s['price']:.4f}（{s['change_24h_pct']:+.2f}%）" for s in result[:6]
-            )
+            # Group by currency: mixing CNY and USDT prices in one sentence invites
+            # comparisons that are meaningless, and an A-share percentage is a move
+            # against the previous close, not a rolling 24-hour window.
+            grouped: dict[str, list[dict]] = {}
+            for item in result[:12]:
+                grouped.setdefault(item.get("currency", ""), []).append(item)
+            parts: list[str] = []
+            for currency, rows in grouped.items():
+                shown = "；".join(
+                    f"{s['symbol']} {s['price']:.4f}"
+                    f"（{s.get('change_label', '涨跌')} {s['change_24h_pct']:+.2f}%）"
+                    for s in rows
+                )
+                parts.append(f"[{currency or '未标注币种'}] {shown}")
+            return "行情：" + " | ".join(parts) if parts else "暂无行情数据。"
         if tool == "list_strategies":
             return "内置策略：" + "、".join(f"{s['name']}({s['key']})" for s in result)
         if tool == "risk_overview" and isinstance(result, dict):

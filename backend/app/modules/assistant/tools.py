@@ -95,8 +95,10 @@ class ToolBox:
         self._add(
             Tool(
                 "market_snapshot",
-                "获取一个或全部标的的最新价与 24h 涨跌。",
-                {"symbol": "string?"},
+                "获取一个或全部标的的最新价与涨跌。返回的每行都带 market 与 currency："
+                "A 股是 CNY、加密是 USDT，两种价格不能相加或直接比较。"
+                "不带 symbol 时可按 market 过滤。",
+                {"symbol": "string?", "market": "string?"},
                 self._snapshots,
             )
         )
@@ -167,6 +169,10 @@ class ToolBox:
                 "name": a.name,
                 "kind": a.kind,
                 "status": a.status,
+                "market": a.market,
+                # Cash is meaningless without its unit: an A-share account reports
+                # CNY and a crypto account USDT, and they must never be summed.
+                "currency": a.base_currency,
                 "cash": a.cash_balance,
                 "initial_balance": a.initial_balance,
             }
@@ -177,6 +183,7 @@ class ToolBox:
         view = self.portfolio.overview(account_id, record=False)
         return {
             "account": view.account_name,
+            "currency": view.base_currency,
             "equity": view.equity,
             "cash": view.cash,
             "positions_value": view.positions_value,
@@ -224,26 +231,37 @@ class ToolBox:
             for o in self.trading.list_orders(resolved, limit=min(int(limit), 50))
         ]
 
-    def _snapshots(self, symbol: str | None = None) -> list[dict]:
+    def _snapshots(
+        self, symbol: str | None = None, market: str | None = None
+    ) -> list[dict]:
+        """Prices with their market and currency, never bare numbers.
+
+        Without those two fields the tool returned a flat list mixing USDT and CNY
+        prices under identical keys. Asked "which is cheapest?", a model would
+        compare 0.45 (USDT) against 11.34 (CNY) as if they shared a unit. The
+        fields are returned per row rather than once per response so a mixed list
+        stays unambiguous.
+        """
         if symbol:
             snap = self.market.snapshot(symbol)
-            return [
-                {
-                    "symbol": snap.symbol,
-                    "price": snap.price,
-                    "change_24h_pct": snap.change_24h_pct,
-                    "high_24h": snap.high_24h,
-                    "low_24h": snap.low_24h,
-                }
-            ]
+            return [self._snapshot_row(snap)]
         return [
-            {
-                "symbol": s.symbol,
-                "price": s.price,
-                "change_24h_pct": s.change_24h_pct,
-            }
-            for s in self.market.snapshots()
+            self._snapshot_row(s)
+            for s in self.market.snapshots(market=market or None)
         ]
+
+    @staticmethod
+    def _snapshot_row(snap) -> dict:
+        return {
+            "symbol": snap.symbol,
+            "market": snap.market,
+            "currency": "CNY" if snap.market == "cn_stock" else "USDT",
+            "price": snap.price,
+            # For A-shares this compares against the previous close, not a rolling
+            # 24-hour window; the field name must not imply otherwise.
+            "change_24h_pct": snap.change_24h_pct,
+            "change_label": "较昨收" if snap.market == "cn_stock" else "近 24 小时",
+        }
 
     def _strategies(self) -> list[dict]:
         return [
