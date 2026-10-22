@@ -537,3 +537,90 @@ def test_closing_auction_print_at_1500_is_accepted(setup):
     assert len(daily) == 1
     assert daily[0].close == pytest.approx(10.9)
     assert daily[0].volume == pytest.approx(9_000.0)
+
+
+def test_authoritative_bar_replaces_a_sampled_one_with_nonzero_volume(setup):
+    """A sampled high must not survive just because its volume was non-zero.
+
+    Measured on real data: a 15m bucket stored high 42.19 while the exchange said
+    42.30. The old repair condition only fired when `volume <= 0`, so every bar
+    built from sampling kept its coarser range forever.
+    """
+    from app.modules.market.service_types import CandlePoint
+
+    state, source, engine, db = setup
+    source.payload["600519.SH"] = quote("600519.SH", 10.0, 500.0, state["now"])
+    engine.poll_once()
+    # A second sample inside the same bucket gives it a non-zero volume delta.
+    state["now"] = at(10, 8)
+    source.payload["600519.SH"] = quote("600519.SH", 10.15, 650.0, state["now"])
+    engine.poll_once()
+    # Close the bucket with the endpoint down, so the *sampled* bar (non-zero
+    # volume) is what lands in the database first.
+    state["now"] = at(10, 20)
+    source.payload["600519.SH"] = quote("600519.SH", 10.2, 900.0, state["now"])
+    source.intraday = {}
+    engine.poll_once()
+    with db.session() as session:
+        sampled = session.scalar(
+            select(Candle).where(
+                Candle.symbol == "600519.SH",
+                Candle.timeframe == "15m",
+                Candle.open_time == at(10, 0),
+            )
+        )
+    assert sampled is not None and sampled.volume > 0
+
+    # Next bucket closes with the endpoint back: the exchange's higher high and
+    # larger volume must replace the sampled values.
+    state["now"] = at(10, 35)
+    source.payload["600519.SH"] = quote("600519.SH", 10.25, 1300.0, state["now"])
+    source.intraday["600519.SH"] = [
+        CandlePoint(time=at(10, 0), open=10.0, high=10.5, low=9.8, close=10.1, volume=700.0),
+    ]
+    engine.poll_once()
+
+    with db.session() as session:
+        bar = session.scalar(
+            select(Candle).where(
+                Candle.symbol == "600519.SH",
+                Candle.timeframe == "15m",
+                Candle.open_time == at(10, 0),
+            )
+        )
+    assert bar.high == pytest.approx(10.5)
+    assert bar.low == pytest.approx(9.8)
+    assert bar.volume == pytest.approx(700.0)
+
+
+def test_endpoint_failure_does_not_downgrade_an_exact_bar(setup):
+    """When the intraday endpoint is down, a sampled bar must not overwrite it."""
+    from app.modules.market.service_types import CandlePoint
+
+    state, source, engine, db = setup
+    source.payload["600519.SH"] = quote("600519.SH", 10.0, 500.0, state["now"])
+    engine.poll_once()
+    state["now"] = at(10, 20)
+    source.payload["600519.SH"] = quote("600519.SH", 10.2, 900.0, state["now"])
+    source.intraday["600519.SH"] = [
+        CandlePoint(time=at(10, 0), open=10.0, high=10.5, low=9.8, close=10.1, volume=700.0),
+    ]
+    engine.poll_once()
+
+    # Now the endpoint fails while another sampled bar closes.
+    state["now"] = at(10, 35)
+    source.payload["600519.SH"] = quote("600519.SH", 10.3, 1200.0, state["now"])
+    source.intraday = {}
+    engine.poll_once()
+
+    with db.session() as session:
+        exact = session.scalar(
+            select(Candle).where(
+                Candle.symbol == "600519.SH",
+                Candle.timeframe == "15m",
+                Candle.open_time == at(10, 0),
+            )
+        )
+    # The exchange values survive the outage.
+    assert exact.high == pytest.approx(10.5)
+    assert exact.volume == pytest.approx(700.0)

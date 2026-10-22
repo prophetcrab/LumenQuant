@@ -544,9 +544,16 @@ class CnQuoteEngine:
                 accepted.setdefault(bar_time, bar)
 
             if accepted:
-                self._write_bars(code, list(accepted.values()))
+                # When the endpoint was unreachable, `accepted` holds sampled bars.
+                # They must not overwrite a row that already came from the exchange
+                # — that would replace a precise range with a coarser one.
+                self._write_bars(
+                    code, list(accepted.values()), authoritative=bool(authoritative)
+                )
 
-    def _write_bars(self, code: str, rows: list[dict]) -> None:
+    def _write_bars(
+        self, code: str, rows: list[dict], *, authoritative: bool = True
+    ) -> None:
         with self.db.session() as session:
             existing = {
                 row.open_time: row
@@ -565,9 +572,24 @@ class CnQuoteEngine:
                 if stored is None:
                     fresh.append(row)
                     continue
-                # A bar stored with zero volume can only have come from a gap; the
-                # real series is in hand now, so correct rather than keep it.
-                if stored.volume <= 0 and row["volume"] > 0:
+                # Always take the authoritative values. An accumulated bar has a
+                # non-zero volume too, so the old `volume <= 0` condition left every
+                # sampled high/low permanently in place: measured on real data, a
+                # 15m bucket stored high 42.19 while the exchange said 42.30 — the
+                # 0.11 gap came from samples that missed the peak and could never be
+                # corrected afterwards.
+                if not authoritative:
+                    # Endpoint unreachable: keep whatever exact row already exists
+                    # and only fill genuinely missing volume.
+                    if stored.volume > 0:
+                        continue
+                if (
+                    stored.open != row["open"]
+                    or stored.high != row["high"]
+                    or stored.low != row["low"]
+                    or stored.close != row["close"]
+                    or stored.volume != row["volume"]
+                ):
                     stored.open, stored.high = row["open"], row["high"]
                     stored.low, stored.close = row["low"], row["close"]
                     stored.volume = row["volume"]
