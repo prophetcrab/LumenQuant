@@ -240,10 +240,27 @@ class DataService:
         from app.modules.cn.calendar import day_key, sessions, trading_days
 
         if timeframe == "1d":
+            from app.modules.cn.calendar import CALENDAR_YEARS, day_key, trading_days
+
             first = day_key(times[0])
             last = day_key(times[-1])
-            expected_days = len(trading_days(first, last))
-            return max(0, expected_days - len(times))
+            # The holiday table only covers CALENDAR_YEARS. Outside it the moveable
+            # lunar holidays are unknown, so "expected trading days" is wrong and
+            # every Spring Festival / Mid-Autumn closure looks like missing data —
+            # imported 2023 history reported four phantom gaps for the Mid-Autumn +
+            # National Day run. Gap counting is therefore restricted to the covered
+            # window; `calendar_coverage()` tells the user the rest is unverified.
+            in_window = [ts for ts in times if day_key(ts).year in CALENDAR_YEARS]
+            if len(in_window) < 2:
+                return 0
+            window_first = day_key(in_window[0])
+            window_last = day_key(in_window[-1])
+            expected_days = [
+                day
+                for day in trading_days(window_first, window_last)
+                if day.year in CALENDAR_YEARS
+            ]
+            return max(0, len(expected_days) - len(in_window))
 
         # Intraday: expected bars exist only inside a session. Count the bars each
         # trading day should contain and compare with what is stored, so the

@@ -172,3 +172,63 @@ backtest status: 201
 
 测试 `test_fresh_deployment_imports_only_symbols_without_history` 同时断言
 "有历史的标的不会被重复导入"（`untouched == 1`）。
+
+## 缺陷五：节假日表覆盖范围外的历史被误报为"数据缺口"
+
+导入真实历史后，数据质量面板对 600519.SH 的日线报 `gaps=4`。逐日核对：
+
+```
+expected trading days: 805   stored: 801
+missing days: 2023-09-29, 2023-10-04, 2023-10-05, 2023-10-06
+```
+
+这四天是 2023 年中秋 + 国庆连休，交易所本就休市。原因是
+`_count_gaps` 用 `trading_days()` 算"应有交易日"，而节假日表只覆盖
+`CALENDAR_YEARS = {2024, 2025, 2026}`——表外年份的**农历假日无法推导**，
+`is_trading_day` 只能按周末和固定法定日判断，于是中秋、春节这类浮动假日
+全被当成交易日。
+
+`calendar_coverage()` 早已会就此给出警告，但质量检查仍然拿一份**错误的日历**
+去数缺口，产出一个看起来像数据问题的假告警。用户会去重新导入数据，
+而数据本来就是对的。
+
+### 修复
+
+缺口统计只在**日历覆盖窗口内**进行：
+
+```python
+in_window = [ts for ts in times if day_key(ts).year in CALENDAR_YEARS]
+if len(in_window) < 2:
+    return 0
+expected_days = [d for d in trading_days(window_first, window_last)
+                 if d.year in CALENDAR_YEARS]
+return max(0, len(expected_days) - len(in_window))
+```
+
+覆盖范围外的历史不参与统计，由 `calendar_coverage()` 的警告说明"这段未验证"。
+这比给出一个错误的数字诚实。
+
+### 验证
+
+| 场景 | 修复前 | 修复后 |
+|---|---|---|
+| 真实 2023 历史（含中秋国庆连休） | gaps=4 | **0** |
+| 手工删除一根 2026 交易日 | — | **1**（真实缺口仍被检出） |
+| 完整 2024–2026 真实数据 | 4（含假） | **0** |
+
+两个新测试分别守住"覆盖外不误报"与"覆盖内不漏报"，还原修复后第一个失败。
+
+### 实测：回测与实盘信号的一致性
+
+用真实腾讯数据启动完整应用后核对两条路径是否读同一根 bar：
+
+```
+closed_only 最后一根: 2026-10-21 (close 1309.69)
+不过滤最后一根:       2026-10-22 (close 1311.50, 进行中)
+同一根bar: False                                    ← 契约正确
+回测: 399 根 / 8 笔交易 / 收益 -19.88%
+实盘路径信号（同一批 bar）: hold
+```
+
+实盘实例的 `last_bar_time` 推进到 2026-10-21 那根，无报错，未下单——
+与回测在同一根已收盘 bar 上的判断一致。

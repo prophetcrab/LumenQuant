@@ -167,6 +167,7 @@ npx tsc --noEmit; npx vite build                # 0 errors
 | A 股 bar 的收盘判定用 A 股时钟 | ✅ | `test_a_share_bar_is_judged_by_the_a_share_clock`；还原修复后失败 |
 | 轮询中断后补历史并修正量 0 的坏行 | ✅ | `test_outage_gap_is_backfilled_instead_of_persisting_a_fake_bar`；实测 7 根全部带真实量 |
 | 全新部署自动导入 A 股历史 | ✅ | 实测 8968 根 / 8 标的，回测 422 → 201 |
+| 节假日覆盖范围外不误报数据缺口 | ✅ | `test_daily_gaps_are_not_reported_outside_the_calendar_years`；真实 2023 数据 4 → 0 |
 
 **真实网络实测（全新数据库，双市场）**：`crypto: 6 symbols / 5s / 702ms`、
 `cn: 8 quotes / 15s / 405ms`；CN 日线量 33514 与报价累计量完全一致；
@@ -235,7 +236,7 @@ C 轮以"实际使用系统"为主，每轮都从真实操作中找缺陷。完�
 | 告警可观测性 | C77 | 时间范围筛选、跨账户合计与明细；侧栏角标改为全局口径 |
 | 时间基准与缺口 | C78 | A 股 bar 改用 A 股时钟判定收盘；加密轮询中断后从 klines 补历史并修正坏行 |
 
-**当前规模**：后端 473 项测试、前端 66 项测试，全部通过。
+**当前规模**：后端 475 项测试、前端 66 项测试，全部通过。
 
 **验证方式**：除自动化测试外，每轮都在真实浏览器中操作 2K 界面确认，
 并在真实 A 股行情（腾讯数据源）上跑通同步 → 回测 → 优化 → 滚动验证 → 组合分析。
