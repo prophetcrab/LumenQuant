@@ -413,3 +413,39 @@ def test_full_budget_sizing_reserves_the_fee(env):
     assert free_service.max_affordable_quantity(
         account.id, "BTCUSDT", prices.current, budget
     ) >= qty
+
+
+def test_close_position_cancels_resting_sells_first(env):
+    """A resting sell must not be able to block a protective exit.
+
+    The stop-loss path calls `close_position`. It used `available_quantity`, which
+    already had the resting order's reservation subtracted, and `place_order`
+    subtracted it a second time — so with 0.4 of 1.0 committed, close asked to
+    sell 1.0 against an availability of 0.6 and failed. A position with a working
+    limit order could therefore never be closed.
+    """
+    service, accounts, account, prices = env
+    prices.current = 100.0
+    service.place_order(
+        account_id=account.id, symbol="BTCUSDT", side="buy",
+        order_type="market", quantity=1.0,
+    )
+    resting = service.place_order(
+        account_id=account.id, symbol="BTCUSDT", side="sell",
+        order_type="limit", quantity=0.4, limit_price=150.0,
+    )
+
+    view = service.positions(account.id)[0]
+    assert view.available_quantity == pytest.approx(0.6)
+
+    closed = service.close_position(account.id, "BTCUSDT")
+    assert closed is not None
+    assert closed.filled_quantity == pytest.approx(1.0)
+    assert service.positions(account.id) == []
+    # The working order was cancelled as part of closing, not left dangling.
+    from app.modules.trading.models import Order
+
+    cancelled = service.session.get(Order, resting.id)
+    assert cancelled is not None and cancelled.status == "cancelled"
+
+

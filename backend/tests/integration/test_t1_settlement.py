@@ -161,3 +161,63 @@ def test_settlement_does_not_touch_crypto_positions(real_mode_db):
             select(Position).where(Position.account_id == account.id)
         )
         assert position.available_quantity == 0.0
+
+
+def test_close_position_is_blocked_by_t_plus_one(tmp_path):
+    """Closing a same-day A-share position must still be refused.
+
+    `close_position` now cancels resting sells and sends the *full* holding, so
+    the T+1 guard is the only thing standing between "close" and selling shares
+    that are not yet deliverable.
+    """
+    from app.core.config import Settings
+    from app.core.db import Database
+    from app.main import create_app
+    from app.modules.accounts.service import AccountService
+    from app.modules.market.service import MarketService
+    from app.modules.trading.adapters import AccountCashAdapter, MarketPriceAdapter
+    from app.modules.trading.models import Position
+    from app.modules.trading.service import TradingService
+    from fastapi.testclient import TestClient
+
+    settings = Settings(
+        database_url=f"sqlite:///{(tmp_path / 'close_t1.db').as_posix()}",
+        seed_market=True,
+        cn_symbols_enabled=True,
+        cn_seed_days=10,
+        market_seed_bars=120,
+        runtime_enabled=False,
+        cn_session_enforced=False,
+    )
+    db = Database(settings.database_url)
+    db.create_schema()
+    app = create_app(settings, db)
+    with TestClient(app):
+        with db.session() as session:
+            accounts = AccountService(session)
+            account = accounts.create(
+                name="当日平仓", initial_balance=500_000, market="cn_stock"
+            )
+            market = MarketService(session)
+            trading = TradingService(
+                session,
+                cash=AccountCashAdapter(accounts),
+                prices=MarketPriceAdapter(market),
+            )
+            session.add(
+                Position(
+                    account_id=account.id,
+                    symbol="600519.SH",
+                    quantity=100.0,
+                    available_quantity=0.0,   # bought today
+                    avg_price=1300.0,
+                )
+            )
+            session.commit()
+            try:
+                trading.close_position(account.id, "600519.SH")
+            except Exception as exc:
+                assert "T+1" in str(exc) or "可卖" in str(exc)
+            else:
+                raise AssertionError("close must respect T+1")
+    db.dispose()

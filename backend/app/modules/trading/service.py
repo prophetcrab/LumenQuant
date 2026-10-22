@@ -1007,15 +1007,22 @@ class TradingService:
         position = self._position(account_id, symbol)
         if position is None or position.quantity <= 0:
             raise ConflictError(f"no open position for {symbol.upper()}")
-        market = self._account_market(account_id)
-        quantity = (
-            position.available_quantity if market == "cn_stock" else position.quantity
-        )
+        code = symbol.upper()
+        # A resting sell for this symbol reserves part of the holding, so a full
+        # exit could not be placed while it stood — "hold 0.6, sell 1.0". That made
+        # a stop unable to fire: the protective exit takes this path, and an
+        # unrelated limit order would block it indefinitely. Closing a position
+        # means the position is gone, so the orders working against it are
+        # cancelled first.
+        for order in self.open_orders(account_id=account_id):
+            if order.symbol.upper() == code and order.side == "sell":
+                self.cancel_order(order.id, account_id=account_id)
+        quantity = round_qty(position.quantity)
         if quantity <= 0:
             raise ConflictError("无可卖数量（T+1：当日买入次日可用）")
         return self.place_order(
             account_id=account_id,
-            symbol=symbol,
+            symbol=code,
             side="sell",
             order_type="market",
             quantity=quantity,
