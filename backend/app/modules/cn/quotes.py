@@ -22,7 +22,7 @@ import logging
 import threading
 import time
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, time as dtime
 
 from sqlalchemy import func, insert, select
 
@@ -63,6 +63,22 @@ class LiveQuote:
     timestamp_ms: int
     fetched_at_ms: int
     source: str = "tencent"
+
+
+def _has_traded(quote_ts_ms: int) -> bool:
+    """Whether a quote stamped at this time can describe a real session bar.
+
+    Continuous trading runs 09:30–11:30 and 13:00–15:00. The opening auction
+    (09:15–09:30) produces a price but no cumulative volume and no O/H/L, so a
+    daily bar built from it is an artefact. The closing auction's print is
+    stamped at 15:00:00 and *is* valid, hence the inclusive end.
+    """
+    local = datetime.fromtimestamp(quote_ts_ms / 1000, CN_TZ)
+    moment = local.time()
+    return (
+        dtime(9, 30) <= moment <= dtime(11, 30)
+        or dtime(13, 0) <= moment <= dtime(15, 0)
+    )
 
 
 class RealtimeSessionClock:
@@ -624,11 +640,20 @@ class CnQuoteEngine:
           last in-session poll;
         * before 09:30 the quote still belongs to yesterday, so no phantom bar is
           created for a day that has not traded yet.
+
+        A quote stamped inside today's opening auction (09:15–09:30) is also
+        rejected: the session has not produced a real open yet, and the cumulative
+        volume is still 0 — a row created there would be an intraday artefact that
+        the first real bar then has to overwrite. The volume check below already
+        caught this, but relying on it was luck, not a rule.
         """
         rows = [
             (code, quote)
             for code, quote in fetched.items()
-            if quote.price > 0 and quote.volume > 0 and quote.timestamp_ms > 0
+            if quote.price > 0
+            and quote.volume > 0
+            and quote.timestamp_ms > 0
+            and _has_traded(quote.timestamp_ms)
         ]
         if not rows:
             return

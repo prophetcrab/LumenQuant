@@ -492,3 +492,48 @@ def test_a_share_gap_bar_is_dropped_when_the_endpoint_is_unavailable(setup):
         ).all()
     # Nothing fabricated: the gap stays a gap until a real fetch fills it.
     assert bars == []
+
+
+def test_opening_auction_quote_does_not_create_a_daily_bar(setup):
+    """09:15–09:30 has a price but no cumulative volume or O/H/L.
+
+    A daily row written then would be an artefact the first real bar has to
+    overwrite. It happened to be blocked by the `volume > 0` filter, but that was
+    luck: a source that reports a stale volume would have slipped through.
+    """
+    state, source, engine, db = setup
+    pre_open = at(9, 20)
+    source.payload["600519.SH"] = quote("600519.SH", 10.5, 0.0, pre_open)
+    engine.poll_once()
+
+    with db.session() as session:
+        daily = session.scalars(
+            select(Candle).where(Candle.symbol == "600519.SH", Candle.timeframe == "1d")
+        ).all()
+    assert daily == []
+
+    # A quote stamped 09:30 exactly is a real session print and must be stored.
+    state["now"] = at(9, 40)
+    source.payload["600519.SH"] = quote("600519.SH", 10.6, 500.0, at(9, 35))
+    engine.poll_once()
+    with db.session() as session:
+        daily = session.scalars(
+            select(Candle).where(Candle.symbol == "600519.SH", Candle.timeframe == "1d")
+        ).all()
+    assert len(daily) == 1
+
+
+def test_closing_auction_print_at_1500_is_accepted(setup):
+    """15:00:00 is the closing print; rejecting it would freeze the last price."""
+    state, source, engine, db = setup
+    state["now"] = at(15, 2)
+    source.payload["600519.SH"] = quote("600519.SH", 10.9, 9_000.0, at(15, 0))
+    engine.poll_once()
+
+    with db.session() as session:
+        daily = session.scalars(
+            select(Candle).where(Candle.symbol == "600519.SH", Candle.timeframe == "1d")
+        ).all()
+    assert len(daily) == 1
+    assert daily[0].close == pytest.approx(10.9)
+    assert daily[0].volume == pytest.approx(9_000.0)
