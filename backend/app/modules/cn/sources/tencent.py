@@ -108,18 +108,8 @@ class TencentSource:
         return f"{market}{digits}"
 
     # ---------------------------------------------------------------- quotes
-    def quote(self, code: str) -> Quote:
-        ticker = self._ticker(code)
-        response = self._get(QUOTE_URL.format(ticker=ticker))
-        # GBK, not UTF-8: Chinese names would otherwise mojibake or raise.
-        text = response.content.decode("gbk", errors="replace")
-        payload = text.split('"')
-        if len(payload) < 2 or "~" not in payload[1]:
-            raise SourceUnavailable(f"无法解析 {code} 的行情响应")
-        fields = payload[1].split("~")
-        if len(fields) < 33:
-            raise SourceUnavailable(f"{code} 行情字段不足（{len(fields)}）")
-
+    @staticmethod
+    def _fields_to_quote(code: str, fields: list[str]) -> Quote:
         def num(value: str, default: float = 0.0) -> float:
             try:
                 return float(value)
@@ -129,8 +119,12 @@ class TencentSource:
         timestamp = fields[30]
         ts_ms = int(time.time() * 1000)
         if len(timestamp) == 14:
-            parsed = datetime.strptime(timestamp, "%Y%m%d%H%M%S").replace(tzinfo=CN_TZ)
-            ts_ms = int(parsed.timestamp() * 1000)
+            try:
+                parsed = datetime.strptime(timestamp, "%Y%m%d%H%M%S").replace(tzinfo=CN_TZ)
+            except ValueError:
+                pass
+            else:
+                ts_ms = int(parsed.timestamp() * 1000)
         return Quote(
             code=code.upper(),
             name=fields[1],
@@ -142,6 +136,66 @@ class TencentSource:
             volume=num(fields[6]),
             timestamp_ms=ts_ms,
         )
+
+    def quote(self, code: str) -> Quote:
+        ticker = self._ticker(code)
+        response = self._get(QUOTE_URL.format(ticker=ticker))
+        # GBK, not UTF-8: Chinese names would otherwise mojibake or raise.
+        text = response.content.decode("gbk", errors="replace")
+        payload = text.split('"')
+        if len(payload) < 2 or "~" not in payload[1]:
+            raise SourceUnavailable(f"无法解析 {code} 的行情响应")
+        fields = payload[1].split("~")
+        if len(fields) < 33:
+            raise SourceUnavailable(f"{code} 行情字段不足（{len(fields)}）")
+        return self._fields_to_quote(code, fields)
+
+    def quotes(self, codes: list[str]) -> dict[str, Quote]:
+        """Batch quotes: one HTTP request covers many symbols.
+
+        The endpoint accepts comma-separated tickers and answers with one
+        `v_<ticker>="..."` line per symbol. Polling a whole watchlist one request
+        per symbol would multiply latency and rate-limit exposure, so the realtime
+        loop always uses this path. Symbols missing from the response are simply
+        absent from the result; a chunk that fails entirely is skipped rather
+        than discarding quotes from the other chunks.
+        """
+        unique: list[str] = []
+        for code in codes:
+            normalized = code.strip().upper()
+            if normalized and normalized not in unique:
+                unique.append(normalized)
+        if not unique:
+            return {}
+
+        out: dict[str, Quote] = {}
+        errors: list[str] = []
+        chunk_size = 60
+        for start in range(0, len(unique), chunk_size):
+            chunk = unique[start : start + chunk_size]
+            by_ticker = {self._ticker(code): code for code in chunk}
+            url = QUOTE_URL.format(ticker=",".join(by_ticker))
+            try:
+                response = self._get(url)
+            except SourceUnavailable as exc:
+                errors.append(str(exc))
+                continue
+            text = response.content.decode("gbk", errors="replace")
+            for line in text.split(";"):
+                line = line.strip()
+                if not line.startswith("v_") or "=" not in line:
+                    continue
+                ticker, _, payload = line.partition("=")
+                code = by_ticker.get(ticker[2:])
+                if code is None:
+                    continue
+                fields = payload.strip().strip('"').split("~")
+                if len(fields) < 33:
+                    continue
+                out[code] = self._fields_to_quote(code, fields)
+        if not out and errors:
+            raise SourceUnavailable(f"腾讯行情不可达：{errors[0]}")
+        return out
 
     # ------------------------------------------------------------------ bars
     def daily_bars(self, code: str, *, limit: int = 800) -> BarBatch:

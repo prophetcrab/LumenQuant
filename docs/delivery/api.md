@@ -97,6 +97,19 @@ Base URL：`http://127.0.0.1:8000/api`　完整交互式文档：`/docs`
 - `POST /api/cn/symbols/{code}/suspend?suspended=` — 模拟停牌
 - `POST /api/cn/settle`、`POST /api/trading/settle` — 释放 T+1 冻结
 
+## A股行情数据
+- `GET /api/cn/data/source` — 数据源健康：模式（synthetic / on-demand / realtime-poll）、轮询间隔、延迟
+- `GET /api/cn/data/quotes` — 全部标的的实时报价，含 `age_ms` 与 `fresh`
+- `POST /api/cn/data/poll` — 立即拉取一次报价，不等待下一个轮询周期
+- `POST /api/cn/data/sync?codes=` — 同步历史（会替换该标的原有 K 线）
+- `GET /api/cn/data/staleness` — 每个标的日线的滞后期
+
+## 加密行情数据
+- `GET /api/market/data/source` — 数据源健康（synthetic / realtime-poll）
+- `GET /api/market/data/quotes` — 全部标的的实时报价，含 `age_ms` 与 `fresh`
+- `POST /api/market/data/poll` — 立即拉取一次
+- `POST /api/market/data/sync` — 强制重导 Binance 历史（替换原有序列）
+
 ## 实盘通道
 - `GET /api/brokers/status` — 各通道（binance / ths）就绪状态
 - `GET /api/brokers/ths/health` — 同花顺网关健康与余额

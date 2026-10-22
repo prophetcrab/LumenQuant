@@ -7,6 +7,7 @@
 - **前端** React 19 / TypeScript / Vite / ECharts，面向 2560×1440 浅色高密度工作台
 - **架构** 模块化单体：13 个业务模块，跨模块只走 Protocol 端口、领域事件与只读服务
 - **市场** 加密货币（24/7）与 A 股（T+1、涨跌停、手数、时段门控）双模式
+- **数据** 默认离线合成；可切换 Binance / 腾讯公开实时行情（轮询，免 API Key）
 - **安全** 模拟交易开箱即用；实盘默认关闭，需开关 + 网关 + 确认头三重条件
 
 ## 启动
@@ -63,6 +64,8 @@ powershell -ExecutionPolicy Bypass -File .\scripts\run-tests.ps1
 |---|---|---|
 | `LQ_DATABASE_URL` | `sqlite:///data/lumenquant.db` | 可换 PostgreSQL |
 | `LQ_MARKET_TICK_SECONDS` | `5` | 合成行情推进节奏 |
+| `LQ_CRYPTO_DATA_SOURCE` | `synthetic` | 改 `binance` 用真实加密行情 |
+| `LQ_CN_DATA_SOURCE` | `synthetic` | 改 `tencent` 用真实 A 股行情 |
 | `LQ_RISK_MAX_DAILY_LOSS_PCT` | `0.05` | 日损失熔断，0 关闭 |
 | `LQ_AUTH_ENABLED` / `LQ_AUTH_TOKEN` | `false` / 空 | 对外部署时开启 |
 | `LQ_LIVE_TRADING_ENABLED` | `false` | 实盘总开关 |

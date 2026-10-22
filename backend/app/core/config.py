@@ -39,6 +39,13 @@ class Settings(BaseSettings):
     market_tick_seconds: float = 5.0
     market_timeframe: str = "15m"
 
+    # Crypto real market data. `synthetic` keeps the deterministic generator;
+    # `binance` replaces it with public tickers + klines (no API key, no orders).
+    crypto_data_source: str = "synthetic"
+    crypto_data_base_url: str = "https://data-api.binance.vision"
+    crypto_realtime_enabled: bool = True
+    crypto_quote_poll_seconds: float = 5.0
+
     # Background runtime (strategy runners, matching loop, equity snapshots).
     runtime_enabled: bool = True
     engine_interval_seconds: float = 2.0
@@ -62,6 +69,11 @@ class Settings(BaseSettings):
     cn_sync_on_start: bool = False
     cn_sync_daily_limit: int = 800
     cn_sync_intraday_limit: int = 320
+    # Realtime A-share quote polling. Requires cn_data_source=tencent. In that
+    # mode the synthetic CN engine is reduced to symbol registration: letting it
+    # keep ticking would write synthetic bars over real ones at a different price
+    # level, the defect that made change% and limit bands meaningless.
+    cn_realtime_enabled: bool = True
     cn_quote_poll_seconds: float = 15.0
     cn_commission_bps: float = 2.5
     cn_min_commission: float = 5.0

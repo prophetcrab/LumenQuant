@@ -45,6 +45,16 @@ class CompositeLiveProvider:
         provider = self._provider(symbol)
         return provider.live_candle(symbol) if provider is not None else None
 
+    def live_quote(self, symbol: str):
+        """Realtime quote when the owning provider has one (A-share only).
+
+        Kept optional instead of declaring it on every engine: the crypto engine
+        has no quote feed yet, and returning None is the honest answer there.
+        """
+        provider = self._provider(symbol)
+        getter = getattr(provider, "live_quote", None)
+        return getter(symbol) if getter is not None else None
+
     def is_locked(self, symbol: str) -> str:
         if self.cn is not None and self._symbol_market.get(symbol.upper()) == "cn_stock":
             return self.cn.is_locked(symbol)

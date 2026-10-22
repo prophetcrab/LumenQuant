@@ -430,6 +430,58 @@ export type CnSymbol = SymbolInfo & {
   limit_down: number;
 };
 
+export type CryptoQuoteHealth = {
+  source: string;
+  mode: string;
+  poll_seconds: number;
+  symbols: number;
+  last_poll_age_ms: number;
+  worst_age_ms: number;
+  latency_ms: number;
+  last_error: string;
+};
+
+export type CryptoLiveQuote = {
+  code: string;
+  price: number;
+  prev_close: number;
+  open: number;
+  high: number;
+  low: number;
+  volume: number;
+  timestamp: number;
+  age_ms: number;
+  fresh: boolean;
+};
+
+export type CnQuoteHealth = {
+  source: string;
+  mode: string;
+  poll_seconds: number;
+  quotes: number;
+  last_poll: number;
+  last_poll_age_ms: number;
+  worst_age_ms: number;
+  latency_ms: number;
+  last_error: string;
+  session_open: boolean;
+};
+
+export type CnLiveQuote = {
+  code: string;
+  price: number;
+  prev_close: number;
+  open: number;
+  high: number;
+  low: number;
+  volume: number;
+  timestamp: number;
+  fetched_at: number;
+  age_ms: number;
+  fresh: boolean;
+  source: string;
+};
+
 export type ThsPosition = {
   symbol: string;
   quantity: number;
@@ -802,9 +854,20 @@ export const api = {
     request<Snapshot[]>(`/market/snapshots${qs({ market })}`),
   snapshot: (symbol: string) => request<Snapshot>(`/market/snapshot${qs({ symbol })}`),
   clock: () =>
-    request<{ simulated_now: number; speed: number; timeframe: string; tick_seconds: number }>(
-      "/market/clock",
-    ),
+    request<{
+      simulated_now: number;
+      speed: number;
+      timeframe: string;
+      tick_seconds: number;
+      cn?: {
+        open: boolean;
+        day: string;
+        session: string;
+        next_open: number;
+        simulated?: boolean;
+        source?: string;
+      };
+    }>("/market/clock"),
 
   orders: (accountId: string, status?: string, limit = 200) =>
     request<Order[]>(`/trading/orders${qs({ account_id: accountId, status, limit })}`),
@@ -1035,9 +1098,34 @@ export const api = {
     request<SymbolInfo>(`/cn/symbols/${code}/suspend${qs({ suspended })}`, { method: "POST" }),
   settleT1: () => request<{ unlocked: number }>("/trading/settle", { method: "POST" }),
   cnDataSource: () =>
-    request<{ configured: string; available: boolean; detail: string; latency_ms: number }>(
-      "/cn/data/source",
-    ),
+    request<{
+      configured: string;
+      available: boolean;
+      detail: string;
+      latency_ms: number;
+      mode?: "synthetic" | "on-demand" | "realtime-poll";
+      poll_seconds?: number;
+      quotes?: number;
+      last_poll_age_ms?: number;
+      session_open?: boolean;
+    }>("/cn/data/source"),
+  cnQuotes: () =>
+    request<{ health: CnQuoteHealth; quotes: CnLiveQuote[] }>("/cn/data/quotes"),
+  cnPollOnce: () =>
+    request<{ updated: number; health: CnQuoteHealth }>("/cn/data/poll", { method: "POST" }),
+  cryptoDataSource: () =>
+    request<{
+      configured: string;
+      mode: "synthetic" | "realtime-poll";
+      available: boolean;
+      detail: string;
+      latency_ms: number;
+      poll_seconds?: number;
+      symbols?: number;
+      last_poll_age_ms?: number;
+    }>("/market/data/source"),
+  cryptoQuotes: () =>
+    request<{ health: CryptoQuoteHealth; quotes: CryptoLiveQuote[] }>("/market/data/quotes"),
   cnSync: (codes?: string) =>
     request<{
       source: string;

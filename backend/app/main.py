@@ -67,16 +67,30 @@ def create_app(settings: Settings | None = None, database: Database | None = Non
         add_holidays(settings.cn_extra_holidays)
     market_engine = None
     cn_market_engine = None
+    cn_quote_engine = None
+    cn_symbol_registrar = None
     live_provider = None
     trading_engine = None
     runtime_engine = None
     portfolio_engine = None
     reconcile_engine = None
     cn_gateway = None
-    if settings.seed_market:
+    realtime_crypto = (
+        settings.crypto_data_source == "binance" and settings.crypto_realtime_enabled
+    )
+    if realtime_crypto:
+        # Real data owns the crypto series; the synthetic engine is not started at
+        # all, because it would resume writing simulated bars between polls.
+        from app.modules.market.crypto_quotes import CryptoQuoteEngine
+
+        market_engine = CryptoQuoteEngine(db, settings)
+    elif settings.seed_market:
         from app.modules.market.engine import MarketEngine
 
         market_engine = MarketEngine(db, settings)
+    realtime_cn = (
+        settings.cn_data_source != "synthetic" and settings.cn_realtime_enabled
+    )
     if settings.cn_symbols_enabled:
         from app.modules.cn.engine import CnMarketEngine
 
@@ -84,10 +98,23 @@ def create_app(settings: Settings | None = None, database: Database | None = Non
         # Keeping it tied to seed_market meant a real-data-only deployment
         # (seed_market=false, cn_data_source=tencent) had no symbols at all, and
         # every sync failed with "本地未登记标的" before it could fetch a quote.
-        if settings.seed_market:
+        #
+        # Registration is deferred to the lifespan: create_app() runs at import
+        # time, before create_schema(), so querying the table here crashed a
+        # fresh deployment on startup with "no such table: market_symbols".
+        if realtime_cn:
+            # Real data owns the CN price series. The synthetic engine would keep
+            # writing bars at a completely different price level between syncs,
+            # so in this mode it only registers the catalog.
+            cn_symbol_registrar = CnMarketEngine(db, settings).ensure_symbols
+            from app.modules.cn.quotes import CnQuoteEngine
+
+            cn_quote_engine = CnQuoteEngine(db, settings)
+            cn_market_engine = cn_quote_engine
+        elif settings.seed_market:
             cn_market_engine = CnMarketEngine(db, settings)
         else:
-            CnMarketEngine(db, settings).ensure_symbols()
+            cn_symbol_registrar = CnMarketEngine(db, settings).ensure_symbols
     from app.modules.cn.provider import CompositeLiveProvider
 
     live_provider = CompositeLiveProvider(crypto=market_engine, cn=cn_market_engine)
@@ -118,14 +145,19 @@ def create_app(settings: Settings | None = None, database: Database | None = Non
     async def lifespan(app: FastAPI):
         settings.data_dir.mkdir(parents=True, exist_ok=True)
         db.create_schema()
+        if cn_symbol_registrar is not None:
+            await asyncio.to_thread(cn_symbol_registrar)
         if market_engine is not None:
             await market_engine.start()
+        # Import history before the realtime poller starts: the sync replaces the
+        # stored series wholesale, and a live bar written in between would be
+        # deleted by that purge and only restored 15 minutes later.
+        if settings.cn_sync_on_start and settings.cn_data_source != "synthetic":
+            await asyncio.to_thread(_startup_sync, db, settings)
         if cn_market_engine is not None:
             await cn_market_engine.start()
         if live_provider is not None:
             await asyncio.to_thread(_register_live_symbols, db, live_provider)
-        if settings.cn_sync_on_start and settings.cn_data_source != "synthetic":
-            await asyncio.to_thread(_startup_sync, db, settings)
         if trading_engine is not None:
             await trading_engine.start()
         if runtime_engine is not None:
@@ -167,6 +199,7 @@ def create_app(settings: Settings | None = None, database: Database | None = Non
     app.state.metrics = Metrics()
     app.state.market_engine = market_engine
     app.state.cn_market_engine = cn_market_engine
+    app.state.cn_quote_engine = cn_quote_engine
     app.state.live_market = live_provider
     app.state.trading_engine = trading_engine
     app.state.runtime_engine = runtime_engine

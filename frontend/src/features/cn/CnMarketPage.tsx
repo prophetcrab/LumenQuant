@@ -15,6 +15,25 @@ export function CnMarketPage() {
   const queryClient = useQueryClient();
   const dataSource = useQuery({ queryKey: ["cn-data-source"], queryFn: api.cnDataSource, refetchInterval: 30_000 });
   const staleness = useQuery({ queryKey: ["cn-staleness"], queryFn: api.cnStaleness, refetchInterval: 60_000 });
+  const realtime = dataSource.data?.mode === "realtime-poll";
+  // Poll faster than the backend (15s): the page then shows a price at most one
+  // backend poll old, instead of aging a cached value for another full interval.
+  const quotes = useQuery({
+    queryKey: ["cn-quotes"],
+    queryFn: api.cnQuotes,
+    refetchInterval: 5_000,
+    enabled: Boolean(realtime),
+  });
+  const pollNow = useMutation({
+    mutationFn: () => api.cnPollOnce(),
+    onSuccess: (result) => {
+      toast.push(`已刷新 ${result.updated} 个标的（${result.health.latency_ms.toFixed(0)}ms）`);
+      queryClient.invalidateQueries({ queryKey: ["cn-quotes"] });
+      queryClient.invalidateQueries({ queryKey: ["cn-symbols"] });
+      queryClient.invalidateQueries({ queryKey: ["cn-data-source"] });
+    },
+    onError: (error: Error) => toast.push(error.message, "error"),
+  });
   const sync = useMutation({
     mutationFn: () => api.cnSync(),
     onSuccess: (report) => {
@@ -29,6 +48,8 @@ export function CnMarketPage() {
     onError: (error: Error) => toast.push(error.message, "error"),
   });
   const staleCount = (staleness.data ?? []).filter((row) => row.stale_days > 3).length;
+  const quoteMap = new Map((quotes.data?.quotes ?? []).map((item) => [item.code, item]));
+  const quoteHealth = quotes.data?.health;
 
   const ths = channels.data?.channels.ths;
 
@@ -55,13 +76,24 @@ export function CnMarketPage() {
         />
         <Stat
           label="行情数据源"
-          value={dataSource.data?.configured === "tencent" ? "腾讯实时" : "本地合成"}
+          value={
+            realtime
+              ? "腾讯实时轮询"
+              : dataSource.data?.configured === "tencent"
+                ? "腾讯按需"
+                : "本地合成"
+          }
           accent={dataSource.data?.available ? "positive" : "neutral"}
           meta={
             <span className="muted">
-              {dataSource.data?.available
-                ? `${dataSource.data.latency_ms.toFixed(0)}ms · ${staleCount > 0 ? `${staleCount} 个标的滞后` : "数据最新"}`
-                : dataSource.data?.detail ?? "离线可用"}
+              {realtime
+                ? quoteHealth
+                  ? `${quoteHealth.quotes} 只 · ${quoteHealth.poll_seconds}s 轮询 · `
+                    + `${quoteHealth.latency_ms.toFixed(0)}ms`
+                  : "等待首次轮询…"
+                : dataSource.data?.available
+                  ? `${dataSource.data.latency_ms.toFixed(0)}ms · ${staleCount > 0 ? `${staleCount} 个标的滞后` : "数据最新"}`
+                  : dataSource.data?.detail ?? "离线可用"}
             </span>
           }
         />
@@ -78,11 +110,30 @@ export function CnMarketPage() {
       </div>
 
       {dataSource.data?.configured === "tencent" ? (
-        <div className="row" style={{ justifyContent: "flex-end" }}>
+        <div className="row" style={{ justifyContent: "flex-end", gap: 8 }}>
+          {realtime ? (
+            <ButtonField
+              size="small"
+              variant="default"
+              onClick={() => pollNow.mutate()}
+              disabled={pollNow.isPending}
+            >
+              {pollNow.isPending ? "拉取中…" : "立即刷新报价"}
+            </ButtonField>
+          ) : null}
           <ButtonField size="small" variant="default" onClick={() => sync.mutate()} disabled={sync.isPending}>
-            {sync.isPending ? "同步中…" : "从腾讯同步实时数据"}
+            {sync.isPending ? "同步中…" : "从腾讯同步历史数据"}
           </ButtonField>
         </div>
+      ) : null}
+
+      {realtime && quoteHealth && !quoteHealth.session_open ? (
+        <div className="helper">
+          当前休市，报价保持不变；轮询已自动降频至 {Math.max(60, quoteHealth.poll_seconds * 4)}s。
+        </div>
+      ) : null}
+      {realtime && quoteHealth?.last_error ? (
+        <div className="error-text">实时报价最近一次拉取失败：{quoteHealth.last_error}</div>
       ) : null}
 
       <div className="grid" style={{ gridTemplateColumns: "minmax(0, 1.6fr) minmax(320px, 1fr)" }}>
@@ -102,6 +153,7 @@ export function CnMarketPage() {
                     <th className="numeric">涨停</th>
                     <th className="numeric">跌停</th>
                     <th>状态</th>
+                    {realtime ? <th className="numeric">行情延迟</th> : null}
                   </tr>
                 </thead>
                 <tbody>
@@ -127,6 +179,11 @@ export function CnMarketPage() {
                           <Badge tone="green">正常</Badge>
                         )}
                       </td>
+                      {realtime ? (
+                        <td className="numeric">
+                          <QuoteAge quote={quoteMap.get(item.code)} />
+                        </td>
+                      ) : null}
                     </tr>
                   ))}
                 </tbody>
@@ -192,6 +249,19 @@ function Row({ label, value }: { label: string; value: string }) {
       <span className="muted">{label}</span>
       <span className="num" style={{ fontWeight: 550 }}>{value}</span>
     </div>
+  );
+}
+
+function QuoteAge({ quote }: { quote?: { age_ms: number; fresh: boolean } }) {
+  if (!quote) return <span className="muted">—</span>;
+  // A stale quote is shown as a warning rather than silently aged: reading a
+  // dead price as live is the failure mode this column exists to prevent.
+  const seconds = quote.age_ms / 1000;
+  const label = seconds < 1 ? "<1s" : seconds < 60 ? `${seconds.toFixed(0)}s` : `${(seconds / 60).toFixed(1)}m`;
+  return quote.fresh ? (
+    <span className="muted">{label}</span>
+  ) : (
+    <Badge tone="amber">滞留 {label}</Badge>
   );
 }
 

@@ -10,6 +10,7 @@ from app.modules.brokers.router import router as brokers_router
 from app.modules.cn.data_router import router as cn_data_router
 from app.modules.cn.router import router as cn_router
 from app.modules.data.router import router as data_router
+from app.modules.market.data_router import router as market_data_router
 from app.modules.market.router import router as market_router
 from app.modules.portfolio.router import router as portfolio_router
 from app.modules.risk.router import router as risk_router
@@ -22,6 +23,7 @@ from app.modules.trading.router import router as trading_router
 api_router = APIRouter()
 api_router.include_router(accounts_router)
 api_router.include_router(market_router)
+api_router.include_router(market_data_router)
 api_router.include_router(trading_router)
 api_router.include_router(strategies_router)
 api_router.include_router(backtest_router)

@@ -139,6 +139,28 @@ npx tsc --noEmit; npx vite build                # 0 errors
 | 复权口径统一为不复权 | ✅ | `test_daily_endpoint_uses_unadjusted_series` |
 | 报价与日线同尺度 | ✅ | `test_quote_and_daily_share_the_same_price_scale` |
 
+### 双市场实时行情（C74）
+
+| 项 | 状态 | 证据 |
+|---|---|---|
+| 批量报价（一次请求取多只） | ✅ | `TencentSource.quotes()` / Binance `symbols=[...]`；实测 8 只 300–400ms |
+| 盘中 15s / 休市降频轮询 | ✅ | `CnQuoteEngine._next_delay`，`/api/cn/data/source` 可见 |
+| 失败指数退避 | ✅ | 加密上限 60s、A 股上限 300s；启动 45s 内 0 次失败日志 |
+| 实时价优先于重建 bar | ✅ | `test_snapshot_prefers_the_exchange_quote` |
+| A 股日线直接由报价写入（含累计量） | ✅ | `test_daily_bar_is_written_straight_from_the_quote` |
+| 加密收盘用 klines 校正真实成交量 | ✅ | `test_closed_bar_uses_the_authoritative_kline_volume` |
+| 未收盘 bar 与导入 bar 合并而非替换 | ✅ | `_merge_partial_bar`，图表最后一根跟随实时价 |
+| 过期报价判为不新鲜而非照常展示 | ✅ | `test_stale_quote_is_reported_instead_of_served_as_live` |
+| 昨收变更后涨跌停跟着变 | ✅ | `test_quote_poll_updates_prev_close_for_the_next_limit_band` |
+| 真实模式下不再运行合成引擎 | ✅ | `test_real_data_mode_replaces_the_synthetic_engine` |
+| 合成模式下接口明确报错 | ✅ | `test_poll_and_quotes_fail_clearly_in_synthetic_mode` |
+| 函数内 import 禁止遮蔽模块名 | ✅ | `tests/unit/test_import_shadowing.py` |
+
+**真实网络实测（全新数据库，双市场）**：`crypto: 6 symbols / 5s / 702ms`、
+`cn: 8 quotes / 15s / 405ms`；CN 日线量 33514 与报价累计量完全一致；
+BTC 15m 最后一根带真实成交量 16.08；A 股模拟市价单成交价 1309.69 与同刻报价一致，
+T+1 冻结 `available_quantity=0`；`/api/market/clock` 的 `cn` 段报告 `simulated: false`。
+
 **真实数据下的策略表现（平安银行 120 日线，50 万资金）**：
 收益区间 -9.44% ~ +11.15%，有正有负；对比修复前的虚假 +70% 区间，
 说明数据口径已正确。
@@ -194,8 +216,10 @@ C 轮以"实际使用系统"为主，每轮都从真实操作中找缺陷。完�
 | 多标的回测 | C61–C63 | 一篮子标的按权重拆分、等权基准、定期再平衡、结果持久化 |
 | 告警中心 | C64–C68 | 熔断/离场/下单失败自动告警，去重、确认、保留策略、类别过滤、侧栏角标 |
 | 篮子接入组合分析 | C69–C70 | 多标的回测的 sleeve 落成普通回测，可一键导入相关性分析；删除时级联清理 |
+| 异常跳变检测 | C72–C73 | A 股在途资金未计入权益（-95%/+1785% 单根跳变）修复；引擎与多标的合并曲线均自动告警 |
+| 实时行情 | C74 | 双市场接入真实数据（腾讯 + Binance）；批量轮询、退避、新闻度、15m 重建、成交量口径、半根 bar 合并 |
 
-**当前规模**：后端 412 项测试、前端 66 项测试，全部通过。
+**当前规模**：后端 442 项测试、前端 66 项测试，全部通过。
 
 **验证方式**：除自动化测试外，每轮都在真实浏览器中操作 2K 界面确认，
 并在真实 A 股行情（腾讯数据源）上跑通同步 → 回测 → 优化 → 滚动验证 → 组合分析。

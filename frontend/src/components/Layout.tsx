@@ -126,8 +126,7 @@ export function Layout({ children }: { children: ReactNode }) {
             <span>{online ? "服务运行中" : "服务不可用"}</span>
           </div>
           <div className="helper" style={{ marginTop: 6 }}>
-            v{status.data?.version ?? "0.1.0"} · 模拟时钟{" "}
-            {clock.data ? timeLabel(clock.data.simulated_now) : "—"}
+            v{status.data?.version ?? "0.1.0"} · <ClockSummary clock={clock.data} />
           </div>
         </div>
       </aside>
@@ -169,4 +168,25 @@ export function Layout({ children }: { children: ReactNode }) {
       </div>
     </div>
   );
+}
+
+/**
+ * The footer used to claim "模拟时钟" unconditionally, which became a lie once
+ * A-shares were served by real quotes: the wall clock is the truth there. Show
+ * which clock actually drives the data instead of a fixed label.
+ */
+function ClockSummary({
+  clock,
+}: {
+  clock?: { simulated_now: number; cn?: { simulated?: boolean; day: string; session: string } };
+}) {
+  if (!clock) return <>时钟 —</>;
+  if (clock.cn && clock.cn.simulated === false) {
+    return (
+      <>
+        实时 · {clock.cn.day} {clock.cn.session === "closed" ? "休市" : clock.cn.session}
+      </>
+    );
+  }
+  return <>模拟时钟 {timeLabel(clock.simulated_now)}</>;
 }

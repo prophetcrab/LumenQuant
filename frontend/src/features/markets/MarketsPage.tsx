@@ -37,7 +37,20 @@ export function MarketsPage() {
     refetchInterval: 6_000,
   });
 
+  const cryptoSource = useQuery({
+    queryKey: ["crypto-data-source"],
+    queryFn: api.cryptoDataSource,
+    refetchInterval: 30_000,
+  });
+  const cryptoQuotes = useQuery({
+    queryKey: ["crypto-quotes"],
+    queryFn: api.cryptoQuotes,
+    refetchInterval: 5_000,
+    enabled: cryptoSource.data?.mode === "realtime-poll",
+  });
+
   const active = snapshots.data?.find((item) => item.symbol === symbol);
+  const activeQuote = cryptoQuotes.data?.quotes.find((item) => item.code === symbol);
   const overlaySeries = useMemo(() => {
     if (specs === "none" || !indicators.data) return {};
     const out: Record<string, (number | null)[]> = {};
@@ -66,11 +79,17 @@ export function MarketsPage() {
                   {price(active.price)} · {pct(active.change_24h_pct)}
                 </span>
               ) : null}
+              {activeQuote && !activeQuote.fresh ? (
+                <Badge tone="amber">报价滞留</Badge>
+              ) : null}
             </div>
           }
-          subtitle={`${timeframeLabel(timeframe)} · 模拟行情 · 本地时间 ${
-            clock.data ? timeLabel(clock.data.simulated_now) : "—"
-          }`}
+          subtitle={
+            (cryptoSource.data?.mode === "realtime-poll" ? "Binance 实时" : "模拟行情") +
+            ` · ${timeframeLabel(timeframe)} · 本地时间 ${
+              clock.data ? timeLabel(clock.data.simulated_now) : "—"
+            }`
+          }
           actions={
             <>
               <Segmented

@@ -34,6 +34,24 @@ CN_TIMEFRAMES = ("15m", "30m", "1h", "1d")
 MARKETS = ("crypto", "cn_stock")
 
 
+def _merge_partial_bar(stored: CandlePoint, live: CandlePoint) -> CandlePoint:
+    """Combine a stored partial bar with the in-memory accumulator.
+
+    The stored bar came from an import (real open/high/low/volume up to that
+    moment); the live bar knows only the prices observed since. The open and the
+    extremes must be the union, and the close must be the newest price. Volume is
+    summed because the live accumulator only reports what it saw itself.
+    """
+    return CandlePoint(
+        time=stored.time,
+        open=stored.open,
+        high=max(stored.high, live.high),
+        low=min(stored.low, live.low),
+        close=live.close,
+        volume=round(stored.volume + live.volume, 8),
+    )
+
+
 class LiveCandleProvider(Protocol):
     def live_candle(self, symbol: str) -> CandlePoint | None: ...
 
@@ -246,8 +264,16 @@ class MarketService:
         points = self._read(symbol, base_tf, limit=needed)
         if self.live is not None and not closed_only:
             current = self.live.live_candle(symbol)
-            if current is not None and (not points or current.time > points[-1].time):
-                points.append(current)
+            if current is not None:
+                if not points or current.time > points[-1].time:
+                    points.append(current)
+                elif current.time == points[-1].time:
+                    # Kline sources include the still-open candle, so an import
+                    # can leave a partial bar at the live bucket's timestamp.
+                    # Replacing it wholesale throws away the real open/high/low
+                    # and volume that the import already had; merging keeps them
+                    # and only takes the fresher price.
+                    points[-1] = _merge_partial_bar(points[-1], current)
         if timeframe != base_tf:
             if row.market == "cn_stock":
                 from app.modules.cn.aggregate import aggregate_session_bars
@@ -262,6 +288,27 @@ class MarketService:
         current = self.live.live_candle(row.code) if self.live else None
         if row.market == "cn_stock":
             return self._cn_snapshot(row, current)
+        return self._crypto_snapshot(row, current)
+
+    def _crypto_snapshot(self, row: Symbol, current: CandlePoint | None) -> Snapshot:
+        quote = self._live_quote(row.code)
+        if quote is not None and quote.price > 0:
+            # Binance's 24h ticker is itself a rolling 24-hour window, which is
+            # exactly what this field means — better than differencing 96 bars,
+            # because it does not depend on how many bars happen to be stored.
+            prev = quote.open or quote.prev_close
+            change = (quote.price / prev - 1.0) * 100.0 if prev else 0.0
+            return Snapshot(
+                symbol=row.code,
+                price=quote.price,
+                change_24h_pct=round(change, 4),
+                high_24h=quote.high,
+                low_24h=quote.low,
+                volume_24h=round(quote.volume, 4),
+                time=int(quote.timestamp_ms),
+                market=row.market,
+                prev_close=prev,
+            )
         points = self._read(row.code, row.base_timeframe or BASE_TIMEFRAME, limit=97)
         if current is not None:
             points.append(current)
@@ -283,17 +330,31 @@ class MarketService:
         )
 
     def _cn_snapshot(self, row: Symbol, current: CandlePoint | None) -> Snapshot:
+        quote = self._live_quote(row.code)
         daily = self._read(row.code, "1d", limit=3)
-        prev_close = row.prev_close or (daily[-2].close if len(daily) >= 2 else 0.0)
+        prev_close = (
+            (quote.prev_close if quote is not None else 0.0)
+            or row.prev_close
+            or (daily[-2].close if len(daily) >= 2 else 0.0)
+        )
         intraday = self._read(row.code, row.base_timeframe or BASE_TIMEFRAME, limit=24)
         if current is not None:
             intraday.append(current)
-        price = current.close if current is not None else (daily[-1].close if daily else 0.0)
+        # A polled quote is the exchange's own last price; the accumulated 15m bar
+        # is our reconstruction of it. Prefer the quote whenever it is fresh.
+        price = (
+            quote.price
+            if quote is not None and quote.price > 0
+            else (current.close if current is not None else (daily[-1].close if daily else 0.0))
+        )
         if price <= 0:
             raise NotFoundError(f"no price for {row.code}")
-        high = max((p.high for p in intraday), default=daily[-1].high if daily else price)
-        low = min((p.low for p in intraday), default=daily[-1].low if daily else price)
-        volume = sum(p.volume for p in intraday)
+        if quote is not None and quote.high > 0 and quote.low > 0:
+            high, low = quote.high, quote.low
+        else:
+            high = max((p.high for p in intraday), default=daily[-1].high if daily else price)
+            low = min((p.low for p in intraday), default=daily[-1].low if daily else price)
+        volume = quote.volume if quote is not None else sum(p.volume for p in intraday)
         change = (price / prev_close - 1.0) * 100.0 if prev_close else 0.0
         band = price_band(prev_close, row.board, row.is_st, row.tick_size or 0.01)
         return Snapshot(
@@ -303,12 +364,23 @@ class MarketService:
             high_24h=high,
             low_24h=low,
             volume_24h=round(volume, 4),
-            time=intraday[-1].time if intraday else 0,
+            time=quote.timestamp_ms
+            if quote is not None
+            else (intraday[-1].time if intraday else 0),
             market=row.market,
             prev_close=prev_close,
             limit_up=band.up if band else 0.0,
             limit_down=band.down if band else 0.0,
         )
+
+    def _live_quote(self, code: str):
+        """Realtime quote from the provider, when it has one.
+
+        The crypto engine has no quote feed, so this stays optional rather than
+        becoming a required part of the provider contract.
+        """
+        getter = getattr(self.live, "live_quote", None)
+        return getter(code) if getter is not None else None
 
     def snapshots(self, *, market: str | None = None) -> list[Snapshot]:
         out: list[Snapshot] = []
@@ -322,6 +394,11 @@ class MarketService:
     def last_price(self, symbol: str) -> float:
         row = self._symbol(symbol)
         if self.live is not None:
+            # An exchange quote outranks our reconstructed bar: the bar's close is
+            # the last polled price, the quote is the authoritative one.
+            quote = self._live_quote(row.code)
+            if quote is not None and quote.price > 0:
+                return quote.price
             current = self.live.live_candle(row.code)
             if current is not None:
                 return current.close

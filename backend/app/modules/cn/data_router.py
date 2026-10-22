@@ -33,6 +33,22 @@ def _source(request: Request):
 @router.get("/source")
 def source_status(request: Request):
     settings = settings_of(request)
+    engine = getattr(request.app.state, "cn_quote_engine", None)
+    if engine is not None:
+        health = engine.health()
+        return {
+            "configured": settings.cn_data_source,
+            "available": not health["last_error"],
+            "detail": "实时轮询中"
+            if not health["last_error"]
+            else f"最近一次轮询失败：{health['last_error']}",
+            "latency_ms": health["latency_ms"],
+            "mode": health["mode"],
+            "poll_seconds": health["poll_seconds"],
+            "quotes": health["quotes"],
+            "last_poll_age_ms": health["last_poll_age_ms"],
+            "session_open": health["session_open"],
+        }
     source = _source(request)
     if source is None:
         return {
@@ -40,6 +56,7 @@ def source_status(request: Request):
             "available": False,
             "detail": "synthetic 模式：使用本地合成行情，不访问外网",
             "latency_ms": 0.0,
+            "mode": "synthetic",
         }
     health = source.health()
     return {
@@ -47,7 +64,35 @@ def source_status(request: Request):
         "available": health.available,
         "detail": health.detail,
         "latency_ms": health.latency_ms,
+        "mode": "on-demand",
     }
+
+
+@router.get("/quotes")
+def quotes(request: Request):
+    """Latest polled quotes with their age.
+
+    `fresh=false` is reported rather than hidden: a stale price that looks live is
+    worse than an obvious gap, especially for anything a trader reads off screen.
+    """
+    engine = getattr(request.app.state, "cn_quote_engine", None)
+    if engine is None:
+        raise SourceUnavailable(
+            "实时报价未启用：设置 LQ_CN_DATA_SOURCE=tencent 后重启"
+        )
+    return {"health": engine.health(), "quotes": engine.snapshot_rows()}
+
+
+@router.post("/poll")
+def poll_now(request: Request):
+    """Force one poll; useful right after starting the app or after a network gap."""
+    engine = getattr(request.app.state, "cn_quote_engine", None)
+    if engine is None:
+        raise SourceUnavailable(
+            "实时报价未启用：设置 LQ_CN_DATA_SOURCE=tencent 后重启"
+        )
+    updated = engine.poll_once()
+    return {"updated": updated, "health": engine.health()}
 
 
 @router.post("/sync")
@@ -77,6 +122,13 @@ def sync(
     for item in report.symbols:
         if not item.error:
             invalidate_symbol_caches(request.app.state, item.code)
+    # The purge replaced every bar the poller had been accumulating against, so
+    # its in-memory live state now refers to deleted timestamps. Dropping it makes
+    # the next poll rebuild from the imported history instead of re-emitting a
+    # bar that already exists with different volume.
+    engine = getattr(request.app.state, "cn_quote_engine", None)
+    if engine is not None:
+        engine.reset_live()
     return report.as_dict()
 
 
