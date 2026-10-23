@@ -378,7 +378,7 @@ export function CnTradingPanel() {
           </Card>
 
           {account.kind === "live" ? (
-            <Card title="实盘对账" subtitle="本地持仓 vs 网关持仓" padded={false}>
+            <Card title="实盘对账" subtitle="本地持仓与资金 vs 网关" padded={false}>
               {reconcile.isError ? (
                 <EmptyState title="对账不可用" text={(reconcile.error as Error).message} />
               ) : reconcile.data ? (
@@ -402,6 +402,28 @@ export function CnTradingPanel() {
                         </tr>
                       </thead>
                       <tbody>
+                        {/* Cash is reconciled too: a local balance can drift from
+                            the broker's with no position change at all. */}
+                        <tr>
+                          <td style={{ fontWeight: 600 }}>资金 {reconcile.data.cash.currency}</td>
+                          <td className="numeric">{cash(reconcile.data.cash.local_cash, reconcile.data.cash.currency)}</td>
+                          <td className="numeric">
+                            {reconcile.data.cash.gateway_cash === null
+                              ? "—"
+                              : cash(reconcile.data.cash.gateway_cash, reconcile.data.cash.currency)}
+                          </td>
+                          <td>
+                            {reconcile.data.cash.match === null ? (
+                              <Badge tone="amber">未获取</Badge>
+                            ) : (
+                              <Badge tone={reconcile.data.cash.match ? "green" : "red"}>
+                                {reconcile.data.cash.match
+                                  ? "一致"
+                                  : `差 ${reconcile.data.cash.difference?.toFixed(2)}`}
+                              </Badge>
+                            )}
+                          </td>
+                        </tr>
                         {reconcile.data.positions.map((row) => (
                           <tr key={row.symbol}>
                             <td>{row.symbol}</td>

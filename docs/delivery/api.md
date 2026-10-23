@@ -129,7 +129,7 @@ Base URL：`http://127.0.0.1:8000/api`　完整交互式文档：`/docs`
 - `GET /api/brokers/status` — 各通道（binance / ths）就绪状态
 - `GET /api/brokers/ths/health` — 同花顺网关健康与余额
 - `GET /api/brokers/ths/positions` — 网关侧持仓
-- `GET /api/brokers/ths/reconcile?account_id=` — 本地与网关持仓对账
+- `GET /api/brokers/ths/reconcile?account_id=` — 本地持仓与资金 vs 网关；返回 `positions_match`、`cash_match`（`null` 表示网关未报告）、`cash` 明细
 
 > 实盘下单：`POST /api/trading/orders` 且必须携带 `X-Live-Confirm: true`。
 

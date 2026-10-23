@@ -88,10 +88,17 @@ def ths_positions(request: Request, session: Session = Depends(get_session)):
 
 @router.get("/ths/reconcile")
 def ths_reconcile(request: Request, account_id: str, session: Session = Depends(get_session)):
-    """Compare gateway positions with the platform's ledger of positions."""
+    """Compare gateway state with the platform's ledger.
+
+    Cash is part of the comparison, not just share counts. A live balance can drift
+    from the broker's without any position changing: an external transfer, a manual
+    trade in the broker app, or a fee the gateway charged and the platform never
+    saw. Reporting `all_match: true` while the two balances disagree told the
+    operator there was nothing to look at.
+    """
     gateway = _ths(request, session)
     accounts = build_accounts(request, session)
-    accounts.require(account_id)
+    account = accounts.require(account_id)
     from app.api.wiring import build_trading
 
     local = {p.symbol: p for p in build_trading(request, session).positions(account_id)}
@@ -110,9 +117,39 @@ def ths_reconcile(request: Request, account_id: str, session: Session = Depends(
                 "match": abs(local_qty - remote_qty) < 1e-6,
             }
         )
+
+    currency = account.base_currency
+    local_cash = accounts.cash(account_id)
+    cash_note = ""
+    try:
+        balances = gateway.verify_credentials().balances
+    except Exception as exc:  # gateway down: reconciliation is unavailable, not clean
+        balances = {}
+        cash_note = f"网关余额不可用：{exc}"[:200]
+    gateway_cash = balances.get(currency)
+    cash_row = {
+        "currency": currency,
+        "local_cash": round(local_cash, 2),
+        "gateway_cash": None if gateway_cash is None else round(float(gateway_cash), 2),
+        "difference": None
+        if gateway_cash is None
+        else round(float(gateway_cash) - local_cash, 2),
+        # One cent of tolerance: gateways round to the cent, and a float compare
+        # would otherwise flag that rounding as a discrepancy.
+        "match": None
+        if gateway_cash is None
+        else abs(float(gateway_cash) - local_cash) <= 0.01,
+        "note": cash_note,
+    }
+    positions_match = all(row["match"] for row in rows)
+    cash_match = cash_row["match"]
     return {
         "account_id": account_id,
         "gateway": gateway.name,
-        "all_match": all(row["match"] for row in rows),
+        "positions_match": positions_match,
+        "cash_match": cash_match,
+        # Unknown cash is not agreement: `all_match` requires both sides compared.
+        "all_match": positions_match and cash_match is True,
         "positions": rows,
+        "cash": cash_row,
     }

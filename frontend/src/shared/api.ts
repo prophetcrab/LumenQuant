@@ -584,7 +584,18 @@ export type ThsHealth = {
 export type ThsReconcile = {
   account_id: string;
   gateway: string;
+  positions_match: boolean;
+  /** null when the gateway did not report a balance for the account currency. */
+  cash_match: boolean | null;
   all_match: boolean;
+  cash: {
+    currency: string;
+    local_cash: number;
+    gateway_cash: number | null;
+    difference: number | null;
+    match: boolean | null;
+    note: string;
+  };
   positions: {
     symbol: string;
     local_quantity: number;

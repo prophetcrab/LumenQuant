@@ -209,3 +209,30 @@ def test_reconciler_keeps_polling_after_a_status_failure(live_client):
 
     assert polled == ["b0", "b1", "b2"]
     assert result["polled"] == 3
+
+
+def test_reconcile_reports_a_cash_difference(live_client):
+    """A cash drift with matching positions must not read as "all consistent".
+
+    The gateway balance can move without any share changing hands: an external
+    transfer, a manual trade in the broker app, or a fee the platform never saw.
+    The old response only compared positions, so `all_match` was true while the two
+    balances disagreed by the entire initial deposit.
+    """
+    client, _app = live_client
+    account = _live_account(client)
+
+    body = client.get(
+        "/api/brokers/ths/reconcile", params={"account_id": account["id"]}
+    ).json()
+
+    assert body["positions_match"] is True
+    assert body["cash_match"] is False
+    assert body["all_match"] is False
+    cash_row = body["cash"]
+    assert cash_row["currency"] == "CNY"
+    assert cash_row["local_cash"] == pytest.approx(500_000)
+    # The mock gateway starts with 1,000,000, which is exactly the kind of drift
+    # this check exists to surface.
+    assert cash_row["gateway_cash"] == pytest.approx(1_000_000)
+    assert cash_row["difference"] == pytest.approx(500_000)
