@@ -192,6 +192,7 @@ npx tsc --noEmit; npx vite build                # 0 errors
 | 在途离场不重复告警 | ✅ | `test_a_pending_exit_does_not_alert_every_tick`；5 tick 仅 1 条 |
 | 重启不沿用陈旧移动止损峰值 | ✅ | `test_restarting_does_not_reuse_a_stale_trailing_peak`；修复前重启即误平仓 |
 | 在途买单不被下一根 bar 重复提交 | ✅ | `test_a_pending_entry_is_not_duplicated_on_the_next_bar`；修复前 4 根 bar 4 单 |
+| 价格中断时告警止损失效 | ✅ | `test_a_broken_price_feed_raises_a_critical_alert`；3 tick 仅 1 条 critical |
 | 测试不受 .env 真实数据配置影响 | ✅ | .env 配 tencent+binance 时全量 496 项仍在 2.5 分钟内通过 |
 
 **真实网络实测（全新数据库，双市场）**：`crypto: 6 symbols / 5s / 702ms`、
@@ -278,8 +279,9 @@ C 轮以"实际使用系统"为主，每轮都从真实操作中找缺陷。完�
 | 选股排序 | C94 | 修复请求字段名与数据字段名不一致导致排序全部失效 |
 | 自动交易稳定性 | C95 | 实盘在途离场单复用而非撤销重发；重启重置移动止损峰值 |
 | 开仓去重 | C96 | 在途买单阻塞新开仓，异步成交下不再叠加仓位 |
+| 裸奔告警 | C97 | 价格无法读取时抛 critical 告警，与离场失败同级 |
 
-**当前规模**：后端 529 项测试、前端 66 项测试，全部通过。
+**当前规模**：后端 530 项测试、前端 66 项测试，全部通过。
 
 **验证方式**：除自动化测试外，每轮都在真实浏览器中操作 2K 界面确认，
 并在真实 A 股行情（腾讯数据源）上跑通同步 → 回测 → 优化 → 滚动验证 → 组合分析。

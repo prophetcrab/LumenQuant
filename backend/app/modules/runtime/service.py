@@ -480,13 +480,30 @@ class RuntimeService:
                 price = self.market.last_price(row.symbol)
             except Exception as exc:
                 # Silent failure here would hide a broken price feed while the
-                # position kept running without any protection.
+                # position kept running without any protection. A log line is not
+                # enough: nobody is watching the log, and the position is naked
+                # until the feed returns — the same severity as a failed exit, so
+                # it raises the same kind of alert (deduped by the alert service,
+                # so a long outage produces one entry, not one per tick).
                 row.last_error = f"无法获取 {row.symbol} 价格：{exc}"[:400]
                 self._log(
                     row.id, "error", "price_unavailable", row.last_error,
                     bar_time=row.last_bar_time,
                 )
                 outcomes[row.id] = "price_unavailable"
+                if self.alerts is not None:
+                    self.alerts.raise_alert(
+                        category="price_unavailable",
+                        level="critical",
+                        account_id=row.account_id,
+                        title=f"{row.symbol} 无法获取价格，止损失效",
+                        message=(
+                            f"{row.strategy_key} · {row.symbol}：{exc}。"
+                            "持仓在价格恢复前没有任何止损保护。"
+                        ),
+                        ref_type="strategy_instance",
+                        ref_id=row.id,
+                    )
                 continue
             if price <= 0:
                 continue

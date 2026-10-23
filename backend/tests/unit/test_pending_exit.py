@@ -230,3 +230,33 @@ def test_restarting_does_not_reuse_a_stale_trailing_peak(tmp_path):
     assert outcomes == {view.id: "trailing_stop"}
     session.close()
     db.dispose()
+
+
+def test_a_broken_price_feed_raises_a_critical_alert(tmp_path):
+    """A naked position must be visible, not just a line in a log.
+
+    When the price cannot be read the stop cannot be evaluated, so the position
+    runs without protection. That is the same severity as a failed exit, which
+    already alerts; this path only wrote `last_error` and a log row.
+    """
+    from app.core.errors import NotFoundError
+
+    class DeadFeed(CryptoMarket):
+        def last_price(self, symbol: str) -> float:
+            raise NotFoundError("no price")
+
+    gateway = PendingGateway()
+    db, session, service, view = _stack(tmp_path, gateway, alerts=True, initial_price=110.0)
+    service.market = DeadFeed()
+    service.market.prices["BTCUSDT"] = 110.0
+
+    for _ in range(3):
+        outcomes = service.protect_positions()
+        assert outcomes[view.id] == "price_unavailable"
+
+    rows = session.scalars(select(Alert).where(Alert.category == "price_unavailable")).all()
+    assert len(rows) == 1, "a sustained outage must produce one alert, not one per tick"
+    assert rows[0].level == "critical"
+    assert "止损失效" in rows[0].title
+    session.close()
+    db.dispose()
