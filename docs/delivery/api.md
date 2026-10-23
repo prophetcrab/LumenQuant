@@ -109,7 +109,9 @@ Base URL：`http://127.0.0.1:8000/api`　完整交互式文档：`/docs`
 - `GET /api/screener/presets` — 6 个预设方案及其条件
 - `POST /api/screener/screen?force=` — 全市场筛选；body 为筛选条件（价格/涨跌/成交额/换手/PE/PB/市值/板块/排序）
 - `POST /api/screener/presets/{key}?force=` — 套用预设
-- `POST /api/screener/add-symbol` — `{code, name?}` 把选中的标的加入本地目录
+- `POST /api/screener/add-symbol?sync=` — `{code, name?}` 把选中的标的加入本地目录；
+  默认 `sync=true` 同时导入历史（返回 `synced`、`daily_bars`、`intraday_bars`），
+  `sync=false` 仅登记，适合批量后再统一同步
   全市场快照缓存 60 秒；`force=true` 强制刷新。单次约 8–12 秒。
 
 ## A股行情数据

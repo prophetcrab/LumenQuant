@@ -103,7 +103,9 @@ export function ScreenerPage() {
   const addSymbol = useMutation({
     mutationFn: ({ code, name }: { code: string; name: string }) => api.addScreenedSymbol(code, name),
     onSuccess: (data) => {
-      toast.push(data.created ? `${data.symbol} 已加入标的列表` : data.detail);
+      // Report the outcome, not just "added": a symbol registered without bars
+      // cannot be backtested, and saying only "added" hides that.
+      toast.push(data.detail || `${data.symbol} 已加入标的列表`);
       queryClient.invalidateQueries({ queryKey: ["cn-symbols"] });
       queryClient.invalidateQueries({ queryKey: ["symbols"] });
     },
@@ -316,7 +318,10 @@ export function ScreenerPage() {
                           disabled={addSymbol.isPending}
                           onClick={() => addSymbol.mutate({ code: item.code, name: item.name })}
                         >
-                          加入标的
+                          {addSymbol.isPending &&
+                          addSymbol.variables?.code === item.code
+                            ? "导入中…"
+                            : "加入并可回测"}
                         </ButtonField>
                       </td>
                     </tr>

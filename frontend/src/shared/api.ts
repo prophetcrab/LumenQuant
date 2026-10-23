@@ -1271,7 +1271,16 @@ export const api = {
       "/screener/source",
     ),
   addScreenedSymbol: (code: string, name = "") =>
-    request<{ created: boolean; symbol: string; detail: string }>("/screener/add-symbol", {
+    request<{
+      created: boolean;
+      symbol: string;
+      name: string;
+      /** True once history was imported; a registered symbol without bars cannot be backtested. */
+      synced: boolean;
+      daily_bars: number;
+      intraday_bars: number;
+      detail: string;
+    }>(`/screener/add-symbol${qs({ sync: true })}`, {
       method: "POST",
       body: JSON.stringify({ code, name }),
     }),

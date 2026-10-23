@@ -148,3 +148,83 @@ def test_board_is_inferred_for_an_added_symbol(client):
     client.post("/api/screener/add-symbol", json={"code": "300750.SZ", "name": "宁德时代"})
     symbols = {item["code"]: item for item in client.get("/api/cn/symbols").json()}
     assert symbols["300750.SZ"]["board"] == "gem"
+
+
+def test_add_symbol_imports_history_so_it_can_be_backtested(client, monkeypatch):
+    """Registering a code alone leaves a symbol that looks usable and is not.
+
+    `initial_price=1.0` made the list show a 1 元 price with a 0.9–1.1 limit band,
+    and every backtest answered "数据不足". The import must be part of the same
+    action, or the user has to discover a second, differently-placed step.
+    """
+    from app.modules.cn.sources.base import BarBatch
+    from app.modules.market.service_types import CandlePoint
+
+    class StubSource:
+        name = "stub"
+
+        def __init__(self, **_kwargs):
+            pass
+
+        def daily_bars(self, code, *, limit=800):
+            base = 1_792_512_000_000
+            return BarBatch(
+                code=code,
+                timeframe="1d",
+                bars=[
+                    CandlePoint(
+                        time=base - (30 - i) * 86_400_000,
+                        open=9.5, high=9.6, low=9.4, close=9.53, volume=1000.0,
+                    )
+                    for i in range(30)
+                ],
+            )
+
+        def intraday_bars(self, code, *, limit=320):
+            return BarBatch(code=code, timeframe="15m", bars=[])
+
+        def quote(self, code):
+            from app.modules.cn.sources.base import Quote
+
+            return Quote(
+                code=code, name="浦发银行", price=9.53, prev_close=9.62,
+                open=9.6, high=9.7, low=9.4, volume=1000.0, timestamp_ms=1_792_512_000_000,
+            )
+
+        def health(self):
+            raise AssertionError("unused")
+
+    monkeypatch.setattr(
+        "app.modules.cn.sources.tencent.TencentSource", StubSource, raising=True
+    )
+    # The fixture's app is configured for synthetic mode, where there is nothing
+    # to fetch. The import path only exists for a real source, so flip the setting
+    # on the running app rather than rebuilding it.
+    client.app.state.settings.cn_data_source = "tencent"
+
+    response = client.post(
+        "/api/screener/add-symbol", json={"code": "600000.SH", "name": "浦发银行"}
+    )
+    assert response.status_code == 201, response.text
+    body = response.json()
+    assert body["synced"] is True
+    # Days that are not trading days are dropped by the sync (16 of 30 calendar
+    # days here), so assert the import actually happened rather than an exact count.
+    assert body["daily_bars"] >= 10
+
+    # The catalog row now carries a real reference price, so the band is sane.
+    symbols = {item["code"]: item for item in client.get("/api/cn/symbols").json()}
+    row = symbols["600000.SH"]
+    assert row["price"] == pytest.approx(9.53)
+    assert row["limit_up"] > row["price"] > row["limit_down"]
+
+
+def test_add_symbol_can_still_skip_the_import(client):
+    """`sync=false` keeps the staged-catalog path for batch workflows."""
+    response = client.post(
+        "/api/screener/add-symbol?sync=false", json={"code": "600001.SH"}
+    )
+    assert response.status_code == 201
+    body = response.json()
+    assert body["synced"] is False
+    assert "同步" in body["detail"]
