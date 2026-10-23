@@ -1,10 +1,11 @@
 from __future__ import annotations
 
-from datetime import date
+from datetime import date, timedelta
 
 import pytest
 
 from app.modules.cn.calendar import (
+    day_key,
     add_holidays,
     is_trading_day,
     next_trading_day,
@@ -172,7 +173,6 @@ def test_prev_close_rolls_to_the_previous_trading_day_close(tmp_path):
     engine = CnMarketEngine(db, settings)
     engine.seed()
 
-    target = date(2026, 10, 23)
     with db.session() as session:
         row = session.scalar(select(Symbol).where(Symbol.code == "600519.SH"))
         previous = session.scalar(
@@ -181,7 +181,12 @@ def test_prev_close_rolls_to_the_previous_trading_day_close(tmp_path):
             .order_by(Candle.open_time.desc())
             .limit(1)
         )
+        # Target the day AFTER the newest seeded bar: that is exactly the rollover
+        # this method serves. Hard-coding a date made the test depend on the wall
+        # clock — it passed on 2026-10-22 and failed the next day, when the seed
+        # itself already included that date.
         previous.close = 1500.0
+        target = day_key(previous.open_time) + timedelta(days=1)
         row.prev_close = 1631.6
         session.commit()
 
@@ -219,12 +224,18 @@ def test_prev_close_roll_ignores_todays_partial_bar(tmp_path):
     engine = CnMarketEngine(db, settings)
     engine.seed()
 
-    target = date(2026, 10, 23)
-    day_start = int(
-        datetime.combine(target, datetime.min.time(), tzinfo=CN_TZ).timestamp() * 1000
-    )
     with db.session() as session:
         row = session.scalar(select(Symbol).where(Symbol.code == "600519.SH"))
+        newest = session.scalar(
+            select(Candle)
+            .where(Candle.symbol == row.code, Candle.timeframe == "1d")
+            .order_by(Candle.open_time.desc())
+            .limit(1)
+        )
+        target = day_key(newest.open_time) + timedelta(days=1)
+        day_start = int(
+            datetime.combine(target, datetime.min.time(), tzinfo=CN_TZ).timestamp() * 1000
+        )
         # A partial bar for the target day, priced very differently.
         session.add(
             Candle(

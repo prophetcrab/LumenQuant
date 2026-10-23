@@ -196,6 +196,9 @@ def create_app(settings: Settings | None = None, database: Database | None = Non
     app.state.market_cache = TTLCache(ttl_seconds=1.5, max_entries=32)
     app.state.candle_cache = TTLCache(ttl_seconds=2.0, max_entries=256)
     app.state.stats_cache = TTLCache(ttl_seconds=30.0, max_entries=32)
+    # Whole-market rows are ~5,400 dicts; a short TTL keeps interactive
+    # re-filtering instant without hammering the upstream source.
+    app.state.screener_cache = TTLCache(ttl_seconds=60.0, max_entries=4)
     app.state.metrics = Metrics()
     app.state.market_engine = market_engine
     app.state.cn_market_engine = cn_market_engine

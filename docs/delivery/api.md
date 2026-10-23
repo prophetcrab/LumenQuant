@@ -104,6 +104,14 @@ Base URL：`http://127.0.0.1:8000/api`　完整交互式文档：`/docs`
 - `POST /api/cn/symbols/{code}/suspend?suspended=` — 模拟停牌
 - `POST /api/cn/settle`、`POST /api/trading/settle` — 释放 T+1 冻结
 
+## A股选股
+- `GET /api/screener/source` — 选股数据源健康（新浪行情）
+- `GET /api/screener/presets` — 6 个预设方案及其条件
+- `POST /api/screener/screen?force=` — 全市场筛选；body 为筛选条件（价格/涨跌/成交额/换手/PE/PB/市值/板块/排序）
+- `POST /api/screener/presets/{key}?force=` — 套用预设
+- `POST /api/screener/add-symbol` — `{code, name?}` 把选中的标的加入本地目录
+  全市场快照缓存 60 秒；`force=true` 强制刷新。单次约 8–12 秒。
+
 ## A股行情数据
 - `GET /api/cn/data/source` — 数据源健康：模式（synthetic / on-demand / realtime-poll）、轮询间隔、延迟
 - `GET /api/cn/data/quotes` — 全部标的的实时报价，含 `age_ms` 与 `fresh`

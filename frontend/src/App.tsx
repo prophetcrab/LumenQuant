@@ -16,6 +16,9 @@ const TradingPage = lazy(() =>
 const CnMarketPage = lazy(() =>
   import("./features/cn/CnMarketPage").then((m) => ({ default: m.CnMarketPage })),
 );
+const ScreenerPage = lazy(() =>
+  import("./features/screener/ScreenerPage").then((m) => ({ default: m.ScreenerPage })),
+);
 const RiskPage = lazy(() =>
   import("./features/risk/RiskPage").then((m) => ({ default: m.RiskPage })),
 );
@@ -56,6 +59,7 @@ export default function App() {
           <Route path="/markets" element={<MarketsPage />} />
           <Route path="/trading" element={<TradingPage />} />
           <Route path="/cn" element={<CnMarketPage />} />
+          <Route path="/screener" element={<ScreenerPage />} />
           <Route path="/risk" element={<RiskPage />} />
           <Route path="/alerts" element={<AlertsPage />} />
           <Route path="/runtime" element={<RuntimePage />} />

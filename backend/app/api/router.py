@@ -14,6 +14,7 @@ from app.modules.market.data_router import router as market_data_router
 from app.modules.market.router import router as market_router
 from app.modules.portfolio.router import router as portfolio_router
 from app.modules.risk.router import router as risk_router
+from app.modules.screener.router import router as screener_router
 from app.modules.runtime.router import router as runtime_router
 from app.modules.strategies.router import router as strategies_router
 from app.modules.system.router import router as system_router
@@ -37,6 +38,7 @@ api_router.include_router(system_router)
 api_router.include_router(data_router)
 api_router.include_router(cn_router)
 api_router.include_router(cn_data_router)
+api_router.include_router(screener_router)
 
 
 @api_router.get("/meta")
@@ -56,6 +58,7 @@ def meta():
             "system",
             "data",
             "cn",
+            "screener",
         ],
         "capabilities": {
             "paper_trading": True,

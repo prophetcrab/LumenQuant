@@ -440,6 +440,74 @@ export type CnCalendar = {
   upcoming_coverage: CalendarCoverage;
 };
 
+export type ScreenFilter = {
+  boards?: string[];
+  exclude_st?: boolean;
+  min_listed_days?: number | null;
+  price_min?: number | null;
+  price_max?: number | null;
+  change_pct_min?: number | null;
+  change_pct_max?: number | null;
+  amount_min?: number | null;
+  turnover_min?: number | null;
+  turnover_max?: number | null;
+  pe_min?: number | null;
+  pe_max?: number | null;
+  pb_min?: number | null;
+  pb_max?: number | null;
+  market_cap_min?: number | null;
+  market_cap_max?: number | null;
+  sort_by?: string;
+  ascending?: boolean;
+  limit?: number;
+  with_technicals?: boolean;
+};
+
+export type ScreenCandidate = {
+  code: string;
+  name: string;
+  board: string;
+  is_st: boolean;
+  price: number;
+  change_pct: number;
+  amount_yi: number;
+  turnover_pct: number;
+  pe: number | null;
+  pb: number | null;
+  market_cap_yi: number;
+  float_cap_yi: number;
+  technicals?: {
+    ma5: number;
+    ma20: number;
+    ma60: number | null;
+    price_vs_ma20_pct: number;
+    rsi14: number | null;
+    return_5d_pct: number | null;
+    return_20d_pct: number | null;
+    volume_ratio_5_20: number | null;
+    distance_from_20d_high_pct: number;
+    bars: number;
+  } | null;
+};
+
+export type ScreenResult = {
+  total_universe: number;
+  matched: number;
+  returned: number;
+  source: string;
+  latency_ms: number;
+  criteria: ScreenFilter;
+  candidates: ScreenCandidate[];
+  warnings: string[];
+};
+
+export type ScreenPreset = {
+  key: string;
+  name: string;
+  description: string;
+  filter: ScreenFilter;
+};
+
 export type CnSymbol = SymbolInfo & {
   price: number;
   change_pct: number;
@@ -1179,6 +1247,23 @@ export const api = {
     request<{ code: string; name: string; latest_daily: number; stale_days: number }[]>(
       "/cn/data/staleness",
     ),
+  screenPresets: () => request<ScreenPreset[]>("/screener/presets"),
+  screen: (filter: ScreenFilter, force = false) =>
+    request<ScreenResult>(`/screener/screen${qs({ force })}`, {
+      method: "POST",
+      body: JSON.stringify(filter),
+    }),
+  screenPreset: (key: string, force = false) =>
+    request<ScreenResult>(`/screener/presets/${key}${qs({ force })}`, { method: "POST" }),
+  screenerSource: () =>
+    request<{ source: string; available: boolean; detail: string; latency_ms: number }>(
+      "/screener/source",
+    ),
+  addScreenedSymbol: (code: string, name = "") =>
+    request<{ created: boolean; symbol: string; detail: string }>("/screener/add-symbol", {
+      method: "POST",
+      body: JSON.stringify({ code, name }),
+    }),
   brokerChannels: () => request<BrokerChannels>("/brokers/status"),
   thsHealth: () => request<ThsHealth>("/brokers/ths/health"),
   thsPositions: () => request<ThsPosition[]>("/brokers/ths/positions"),
