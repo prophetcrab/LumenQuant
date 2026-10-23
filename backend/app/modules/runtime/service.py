@@ -378,7 +378,23 @@ class RuntimeService:
         position = self._position_quantity(row.account_id, row.symbol)
         try:
             if signal.action == "buy" and position <= 0:
-                self._place_entry(row, last.close)
+                # An entry already working must not be duplicated. The position stays
+                # at 0 until the gateway fills, so a new bar would otherwise place a
+                # second buy on top of the first: measured 500 + 250 shares in flight
+                # for one configured position, i.e. double the intended exposure if
+                # both filled.
+                pending = self._pending_entries(row)
+                if pending:
+                    self._log(
+                        row.id,
+                        "info",
+                        "entry_pending",
+                        f"买入委托在途，等待成交（{pending[0].id[:8]}）",
+                        order_id=pending[0].id,
+                        bar_time=last.time,
+                    )
+                else:
+                    self._place_entry(row, last.close)
             elif signal.action == "buy" and position > 0:
                 # Another instance (or a manual trade) already holds this symbol.
                 # Without this note the row keeps logging "signal: buy" and looks
@@ -634,6 +650,22 @@ class RuntimeService:
             order_id=order.id,
             bar_time=row.last_bar_time,
         )
+
+    def _pending_entries(self, row: StrategyInstance):
+        """Buy orders for this instance that have not reached a final state."""
+        from app.modules.trading.models import Order
+
+        return self.session.scalars(
+            select(Order)
+            .where(
+                Order.account_id == row.account_id,
+                Order.symbol == row.symbol.upper(),
+                Order.side == "buy",
+                Order.status.in_(("new", "open", "partially_filled")),
+                Order.source.contains(f"strategy:{row.id[:8]}"),
+            )
+            .order_by(Order.created_at.asc())
+        ).all()
 
     def _position_quantity(self, account_id: str, symbol: str) -> float:
         for position in self.trading.positions(account_id):
