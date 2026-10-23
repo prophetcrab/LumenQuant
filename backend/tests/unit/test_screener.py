@@ -234,3 +234,51 @@ def test_numeric_strings_and_blanks_are_tolerated():
     assert by_code["600036.SH"]["pe"] == pytest.approx(8.5)
     assert by_code["000001.SZ"]["amount_yi"] == 0.0
     assert by_code["000001.SZ"]["pe"] is None
+
+
+def test_every_sort_field_actually_orders_the_rows():
+    """The request's field names must map onto the keys the rows carry.
+
+    The rows hold `amount_yi` / `turnover_pct` / `market_cap_yi` (the unit is part
+    of the name), while the request says "amount" / "turnover" / "market_cap".
+    Treating the two as identical made every sort a silent no-op: the table came
+    back in source order while `criteria.sort_by` echoed what was asked for.
+    """
+    rows = []
+    for index, (amount, turnover, cap, pe, pb, price) in enumerate(
+        [
+            (3.0, 1.0, 500.0, 30.0, 3.0, 10.0),
+            (1.0, 5.0, 100.0, 10.0, 1.0, 50.0),
+            (2.0, 3.0, 300.0, 20.0, 2.0, 30.0),
+        ]
+    ):
+        rows.append(
+            row(
+                symbol=f"sh60000{index}", code=f"60000{index}", name=f"股票{index}",
+                trade=price, change=float(index), amount=amount * 1e8,
+                turnover=turnover, per=pe, pb=pb,
+                mktcap=cap * 1_0000, nmc=cap * 1_0000,
+            )
+        )
+    svc = service(rows)
+
+    expected_desc = {
+        "amount": [3.0, 2.0, 1.0],
+        "turnover": [5.0, 3.0, 1.0],
+        "market_cap": [500.0, 300.0, 100.0],
+        "pe": [30.0, 20.0, 10.0],
+        "pb": [3.0, 2.0, 1.0],
+        "price": [50.0, 30.0, 10.0],
+        "change_pct": [2.0, 1.0, 0.0],
+    }
+    observed = {
+        "amount": [c["amount_yi"] for c in svc.screen(ScreenFilter(sort_by="amount"))["candidates"]],
+        "turnover": [c["turnover_pct"] for c in svc.screen(ScreenFilter(sort_by="turnover"))["candidates"]],
+        "market_cap": [c["market_cap_yi"] for c in svc.screen(ScreenFilter(sort_by="market_cap"))["candidates"]],
+        "pe": [c["pe"] for c in svc.screen(ScreenFilter(sort_by="pe"))["candidates"]],
+        "pb": [c["pb"] for c in svc.screen(ScreenFilter(sort_by="pb"))["candidates"]],
+        "price": [c["price"] for c in svc.screen(ScreenFilter(sort_by="price"))["candidates"]],
+        "change_pct": [c["change_pct"] for c in svc.screen(ScreenFilter(sort_by="change_pct"))["candidates"]],
+    }
+    for field, values in expected_desc.items():
+        assert values == pytest.approx(observed[field]), field

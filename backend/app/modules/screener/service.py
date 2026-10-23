@@ -25,6 +25,18 @@ YUAN_PER_YI = 1_0000_0000.0
 WAN_PER_YI = 1_0000.0
 
 
+# Reader-facing sort field -> the key the normalised row actually carries.
+SORT_KEYS = {
+    "change_pct": "change_pct",
+    "amount": "amount_yi",
+    "turnover": "turnover_pct",
+    "pe": "pe",
+    "pb": "pb",
+    "market_cap": "market_cap_yi",
+    "price": "price",
+}
+
+
 def _num(value) -> float | None:
     try:
         number = float(value)
@@ -142,14 +154,16 @@ class ScreenerService:
 
     def screen(self, f: ScreenFilter, *, force: bool = False) -> dict:
         boards = f.normalised_boards()
-        if f.sort_by not in {
-            "change_pct", "amount", "turnover", "pe", "pb", "market_cap", "price"
-        }:
+        if f.sort_by not in SORT_KEYS:
             raise ValueError(f"unknown sort field: {f.sort_by}")
         rows, latency = self.universe(force=force)
         matched = [row for row in rows if _passes(row, f, boards)]
 
-        key = f.sort_by
+        # The request uses reader-facing names ("amount", "market_cap"); the rows
+        # carry their unit in the key ("amount_yi"). Mapping explicitly instead of
+        # assuming they match: a silent mismatch left every sort a no-op, so the
+        # table came back in source order while `sort_by` echoed the request.
+        key = SORT_KEYS[f.sort_by]
         # Missing values collect at the end regardless of direction: a loss-maker
         # with no PE must not win a "cheapest PE" screen, and reversing the whole
         # list would otherwise float it to the top.
