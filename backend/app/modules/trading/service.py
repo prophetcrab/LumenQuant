@@ -40,6 +40,17 @@ from app.modules.trading.models import CashHold, Fill, Order, Position, new_id
 from app.modules.trading.ports import CashPort, PricePort
 
 OPEN_STATUSES = ("new", "open", "partially_filled")
+
+
+def _is_exit_source(source: str) -> bool:
+    """True for orders this platform submitted to close a position.
+
+    Live orders carry a `live:` prefix (see `place_order`), so the marker is looked
+    for after stripping it. A plain substring test would also match an unrelated
+    source that happens to contain "exit".
+    """
+    value = source[5:] if source.startswith("live:") else source
+    return value.startswith("exit:")
 TERMINAL_STATUSES = ("filled", "cancelled", "rejected")
 
 
@@ -1003,20 +1014,44 @@ class TradingService:
         self.session.refresh(order)
         return self._order_view(order)
 
-    def close_position(self, account_id: str, symbol: str) -> OrderView | None:
+    def close_position(
+        self, account_id: str, symbol: str, *, source: str = "manual-close"
+    ) -> OrderView | None:
+        """Close a position, reusing an exit order that is already working.
+
+        Callers that need to distinguish "I just submitted this" from "this was
+        already pending" should use `close_position_ex`.
+        """
         position = self._position(account_id, symbol)
         if position is None or position.quantity <= 0:
             raise ConflictError(f"no open position for {symbol.upper()}")
         code = symbol.upper()
-        # A resting sell for this symbol reserves part of the holding, so a full
-        # exit could not be placed while it stood — "hold 0.6, sell 1.0". That made
-        # a stop unable to fire: the protective exit takes this path, and an
-        # unrelated limit order would block it indefinitely. Closing a position
-        # means the position is gone, so the orders working against it are
-        # cancelled first.
+
+        # An exit already in flight is reused rather than cancelled and resent.
+        # A live gateway fills asynchronously, so the scheduler sees the position
+        # still open on every tick; cancelling and resubmitting each time meant a
+        # stop produced one order every 2 seconds and filled none of them (measured:
+        # 4 submitted, 3 cancelled in 8 seconds).
+        # Live orders are stored with a `live:` prefix, so match the marker rather
+        # than the start of the string.
+        inflight = [
+            order
+            for order in self.open_orders(account_id=account_id)
+            if order.symbol.upper() == code
+            and order.side == "sell"
+            and _is_exit_source(order.source)
+        ]
+        if inflight:
+            # Return the oldest so callers can log which order is being waited on.
+            return self._order_view(sorted(inflight, key=lambda o: o.created_at)[0])
+
+        # Anything else working against this position is cancelled first: a resting
+        # sell reserves part of the holding, so a full exit could not be placed
+        # while it stood ("hold 0.6, sell 1.0").
         for order in self.open_orders(account_id=account_id):
             if order.symbol.upper() == code and order.side == "sell":
                 self.cancel_order(order.id, account_id=account_id)
+
         quantity = round_qty(position.quantity)
         if quantity <= 0:
             raise ConflictError("无可卖数量（T+1：当日买入次日可用）")
@@ -1026,8 +1061,28 @@ class TradingService:
             side="sell",
             order_type="market",
             quantity=quantity,
-            source="manual-close",
+            source=source,
         )
+
+    def close_position_ex(
+        self, account_id: str, symbol: str, *, source: str = "manual-close"
+    ) -> tuple[OrderView | None, bool]:
+        """Like `close_position`, but also says whether the order was reused.
+
+        A live gateway acknowledges immediately with `open`, so the order's status
+        cannot tell a fresh submission from one still waiting to fill. Without that
+        distinction the scheduler counted every tick as a new execution and raised a
+        critical alert each time.
+        """
+        code = symbol.upper()
+        before = {
+            order.id
+            for order in self.open_orders(account_id=account_id)
+            if order.symbol.upper() == code and order.side == "sell" and _is_exit_source(order.source)
+        }
+        order = self.close_position(account_id, symbol, source=source)
+        reused = order is not None and order.id in before
+        return order, reused
 
     # --------------------------------------------------------------- match
     def match_open_orders(self, *, account_id: str | None = None) -> int:

@@ -295,6 +295,13 @@ class RuntimeService:
             if account.status != "active":
                 raise ConflictError("account is archived")
         row.running = running
+        if running:
+            # A trailing peak recorded before the instance was stopped describes a
+            # price the position may never see again. Restarting with it made the
+            # first tick compare today's price against a stale high and fire the
+            # trailing stop immediately (measured: peak 200, price 120 on restart
+            # → instant exit). Protection resumes from the restart price.
+            row.peak_price = 0.0
         self._log(row.id, "info", "started" if running else "stopped", "运行状态切换")
         record_audit(
             self.session,
@@ -385,8 +392,21 @@ class RuntimeService:
                     bar_time=last.time,
                 )
             elif signal.action == "sell" and position > 0:
-                order = self.trading.close_position(row.account_id, row.symbol)
-                if order is not None:
+                order, reused = self.trading.close_position_ex(
+                    row.account_id, row.symbol, source=f"exit:{row.id[:8]}"
+                )
+                if order is not None and reused:
+                    # The exit is still working from an earlier bar; do not count it
+                    # again or a slow fill would inflate the execution tally.
+                    self._log(
+                        row.id,
+                        "info",
+                        "exit_pending",
+                        f"离场委托在途，等待成交（{order.id[:8]}）",
+                        order_id=order.id,
+                        bar_time=last.time,
+                    )
+                elif order is not None:
                     row.executions += 1
                     self._log(
                         row.id,
@@ -466,7 +486,9 @@ class RuntimeService:
             if not decision.triggered:
                 continue
             try:
-                order = self.trading.close_position(row.account_id, row.symbol)
+                order, reused = self.trading.close_position_ex(
+                    row.account_id, row.symbol, source=f"exit:{row.id[:8]}"
+                )
             except Exception as exc:
                 row.last_error = str(exc)[:400]
                 self._log(row.id, "error", "exit_failed", str(exc), bar_time=row.last_bar_time)
@@ -482,6 +504,22 @@ class RuntimeService:
                         ref_id=row.id,
                     )
                 continue
+            # An order that was already working is *waited on*, not re-reported.
+            # Counting it as a new execution inflated `executions` once per tick and
+            # raised a fresh critical alert each time, which both buried the real
+            # event and made a healthy in-flight exit look like a loop.
+            if reused:
+                outcomes[row.id] = f"{decision.reason}_pending"
+                self._log(
+                    row.id,
+                    "info",
+                    "exit_pending",
+                    f"{decision.reason} 离场委托在途，等待成交（{order.id[:8]}）",
+                    order_id=order.id,
+                    bar_time=row.last_bar_time,
+                )
+                continue
+
             row.executions += 1
             row.peak_price = 0.0
             self._log(
