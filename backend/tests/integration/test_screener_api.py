@@ -228,3 +228,43 @@ def test_add_symbol_can_still_skip_the_import(client):
     body = response.json()
     assert body["synced"] is False
     assert "同步" in body["detail"]
+
+
+def test_add_symbols_registers_the_whole_batch(client):
+    """One request for many candidates: 50 individual clicks is two minutes."""
+    response = client.post(
+        "/api/screener/add-symbols?sync=false",
+        json={"codes": ["600000.SH", "600015.SH", "600016.SH", "600000.SH"], "sync": False},
+    )
+    assert response.status_code == 201, response.text
+    body = response.json()
+    assert body["requested"] == 4
+    assert body["created"] == 3          # the duplicate is collapsed
+    # 600519.SH etc. from the seed are not in this list, so nothing is pre-existing.
+    assert body["already_present"] == 0
+    symbols = {item["code"] for item in client.get("/api/cn/symbols").json()}
+    assert {"600000.SH", "600015.SH", "600016.SH"} <= symbols
+
+
+def test_add_symbols_reports_bad_codes_without_failing_the_batch(client):
+    """One malformed code must not discard the valid ones beside it."""
+    response = client.post(
+        "/api/screener/add-symbols?sync=false",
+        json={"codes": ["600000.SH", "BADCODE"], "sync": False},
+    )
+    assert response.status_code == 201
+    body = response.json()
+    assert body["created"] == 1
+    assert len(body["failed"]) == 1
+    assert body["failed"][0]["code"] == "BADCODE"
+    assert "后缀" in body["failed"][0]["reason"]
+
+
+def test_add_symbols_counts_already_present_names(client):
+    """Re-adding a seeded symbol reports it separately instead of duplicating."""
+    body = client.post(
+        "/api/screener/add-symbols?sync=false",
+        json={"codes": ["600519.SH", "600000.SH"], "sync": False},
+    ).json()
+    assert body["already_present"] == 1
+    assert body["created"] == 1

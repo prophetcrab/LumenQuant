@@ -8,7 +8,7 @@ from sqlalchemy.orm import Session
 from app.api.deps import get_session
 from app.api.wiring import build_market, settings_of
 from app.modules.market.service import MarketService
-from app.modules.screener.schemas import AddSymbolRequest, ScreenFilter
+from app.modules.screener.schemas import AddBatchRequest, AddSymbolRequest, ScreenFilter
 from app.modules.screener.service import ScreenerService, preset_filters
 from app.modules.screener.sources.sina import SinaMarketSource, SinaUnavailable
 
@@ -183,6 +183,98 @@ def add_symbol(
         f"{result['intraday_bars']} 根 15 分钟线"
     )
     invalidate_symbol_caches(request.app.state, code)
+    return result
+
+
+@router.post("/add-symbols", status_code=201)
+def add_symbols(
+    payload: AddBatchRequest,
+    request: Request,
+    session: Session = Depends(get_session),
+):
+    """Register (and by default import) several screened names in one pass.
+
+    One sync call covers the whole batch, so adding ten candidates costs one
+    upstream round-trip per symbol instead of ten separate requests plus ten
+    cache invalidations from the client.
+    """
+    settings = settings_of(request)
+    market: MarketService = build_market(request, session)
+
+    cleaned: list[str] = []
+    rejected: list[dict] = []
+    for raw in payload.codes:
+        code = raw.strip().upper()
+        if not code.endswith((".SH", ".SZ", ".BJ")):
+            rejected.append({"code": raw, "reason": "缺少交易所后缀"})
+            continue
+        if code not in cleaned:
+            cleaned.append(code)
+
+    existing = {view.code for view in market.list_symbols(market="cn_stock")}
+    created_codes = [code for code in cleaned if code not in existing]
+    for code in created_codes:
+        market.add_symbol(
+            code=code,
+            name=code.split(".")[0],
+            initial_price=1.0,
+            market="cn_stock",
+            board=_board_of(code),
+            prev_close=0.0,
+        )
+
+    result = {
+        "requested": len(payload.codes),
+        "created": len(created_codes),
+        "already_present": len(cleaned) - len(created_codes),
+        "synced": 0,
+        "failed": rejected,
+        "daily_bars": 0,
+        "intraday_bars": 0,
+        "detail": "",
+    }
+    if not payload.sync or settings.cn_data_source == "synthetic":
+        result["detail"] = (
+            "已登记，合成模式没有可同步的数据源"
+            if settings.cn_data_source == "synthetic"
+            else "已登记，尚未同步历史数据"
+        )
+        return result
+    if not cleaned:
+        result["detail"] = "没有可同步的代码"
+        return result
+
+    from app.core.cache import invalidate_symbol_caches
+    from app.modules.cn.sources.tencent import TencentSource
+    from app.modules.cn.sync import CnDataSyncService
+
+    try:
+        report = CnDataSyncService(
+            session, TencentSource(timeout=settings.request_timeout_seconds)
+        ).sync_symbols(
+            cleaned,
+            daily_limit=settings.cn_sync_daily_limit,
+            intraday_limit=settings.cn_sync_intraday_limit,
+        )
+    except Exception as exc:
+        result["detail"] = f"已登记，但同步异常：{type(exc).__name__}: {exc}"[:200]
+        return result
+
+    for item in report.symbols:
+        if item.error:
+            result["failed"].append({"code": item.code, "reason": item.error[:160]})
+            continue
+        result["synced"] += 1
+        result["daily_bars"] += item.daily_bars
+        result["intraday_bars"] += item.intraday_bars
+        invalidate_symbol_caches(request.app.state, item.code)
+
+    result["detail"] = (
+        f"新增 {result['created']} 只、同步 {result['synced']} 只"
+        f"（{result['daily_bars']} 根日线、{result['intraday_bars']} 根 15 分钟线）"
+    )
+    if result["failed"]:
+        result["detail"] += f"，{len(result['failed'])} 只失败"
     return result
 
 

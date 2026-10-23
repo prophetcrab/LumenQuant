@@ -77,6 +77,7 @@ export function ScreenerPage() {
   const [ascending, setAscending] = useState(false);
   const [withTechnicals, setWithTechnicals] = useState(false);
   const [result, setResult] = useState<ScreenResult | null>(null);
+  const [picked, setPicked] = useState<string[]>([]);
 
   const presets = useQuery({ queryKey: ["screen-presets"], queryFn: api.screenPresets, staleTime: 600_000 });
   const source = useQuery({
@@ -89,6 +90,7 @@ export function ScreenerPage() {
     mutationFn: (filter: ScreenFilter) => api.screen(filter, true),
     onSuccess: (data) => {
       setResult(data);
+      setPicked([]);
       if (data.matched === 0) toast.push("没有标的同时满足这些条件，试着放宽阈值", "error");
     },
     onError: (error: Error) => toast.push(error.message, "error"),
@@ -96,7 +98,10 @@ export function ScreenerPage() {
 
   const runPreset = useMutation({
     mutationFn: (key: string) => api.screenPreset(key, true),
-    onSuccess: (data) => setResult(data),
+    onSuccess: (data) => {
+      setResult(data);
+      setPicked([]);
+    },
     onError: (error: Error) => toast.push(error.message, "error"),
   });
 
@@ -108,6 +113,26 @@ export function ScreenerPage() {
       toast.push(data.detail || `${data.symbol} 已加入标的列表`);
       queryClient.invalidateQueries({ queryKey: ["cn-symbols"] });
       queryClient.invalidateQueries({ queryKey: ["symbols"] });
+    },
+    onError: (error: Error) => toast.push(error.message, "error"),
+  });
+
+  const addBatch = useMutation({
+    mutationFn: (codes: string[]) => api.addScreenedSymbols(codes, true),
+    onSuccess: (data) => {
+      toast.push(data.detail);
+      setPicked([]);
+      queryClient.invalidateQueries({ queryKey: ["cn-symbols"] });
+      queryClient.invalidateQueries({ queryKey: ["symbols"] });
+      if (data.failed.length > 0) {
+        toast.push(
+          `${data.failed.length} 只失败：${data.failed
+            .slice(0, 3)
+            .map((item) => `${item.code} ${item.reason}`)
+            .join("；")}`,
+          "error",
+        );
+      }
     },
     onError: (error: Error) => toast.push(error.message, "error"),
   });
@@ -261,6 +286,25 @@ export function ScreenerPage() {
           title="候选标的"
           subtitle={result ? `命中 ${result.matched} 只，显示 ${result.returned} 只` : "运行一次筛选查看结果"}
           padded={false}
+          actions={
+            result && result.candidates.length > 0 ? (
+              <div className="row" style={{ gap: 8 }}>
+                {picked.length > 0 ? (
+                  <span className="helper">已选 {picked.length} 只</span>
+                ) : null}
+                <ButtonField
+                  size="small"
+                  variant="default"
+                  disabled={picked.length === 0 || addBatch.isPending}
+                  onClick={() => addBatch.mutate(picked)}
+                >
+                  {addBatch.isPending
+                    ? "导入中…"
+                    : `批量加入并导入${picked.length > 0 ? ` ${picked.length}` : ""}`}
+                </ButtonField>
+              </div>
+            ) : null
+          }
         >
           {run.isPending || runPreset.isPending ? (
             <Loader />
@@ -276,6 +320,23 @@ export function ScreenerPage() {
               <table className="table">
                 <thead>
                   <tr>
+                    <th style={{ width: 36 }}>
+                      <input
+                        type="checkbox"
+                        aria-label="全选"
+                        checked={
+                          result.candidates.length > 0 &&
+                          picked.length === result.candidates.length
+                        }
+                        onChange={(event) =>
+                          setPicked(
+                            event.target.checked
+                              ? result.candidates.map((item) => item.code)
+                              : [],
+                          )
+                        }
+                      />
+                    </th>
                     <th>代码</th>
                     <th>名称</th>
                     <th>板块</th>
@@ -292,6 +353,20 @@ export function ScreenerPage() {
                 <tbody>
                   {result.candidates.map((item) => (
                     <tr key={item.code}>
+                      <td>
+                        <input
+                          type="checkbox"
+                          aria-label={`选择 ${item.code}`}
+                          checked={picked.includes(item.code)}
+                          onChange={(event) =>
+                            setPicked((prev) =>
+                              event.target.checked
+                                ? [...prev, item.code]
+                                : prev.filter((code) => code !== item.code),
+                            )
+                          }
+                        />
+                      </td>
                       <td className="mono" style={{ fontWeight: 600 }}>{item.code}</td>
                       <td>
                         {item.name}

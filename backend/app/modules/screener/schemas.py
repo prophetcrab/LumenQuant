@@ -101,3 +101,16 @@ class AddSymbolRequest(BaseModel):
 
     code: str = Field(min_length=6, max_length=12)
     name: str = ""
+
+
+class AddBatchRequest(BaseModel):
+    """Register several screened names in one action.
+
+    The UI offers 50 candidates; clicking "add" fifty times at ~1.5s each is two
+    minutes of waiting for something the backend can do in a single sync pass.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    codes: list[str] = Field(min_length=1, max_length=50)
+    sync: bool = True

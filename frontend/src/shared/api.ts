@@ -1284,6 +1284,20 @@ export const api = {
       method: "POST",
       body: JSON.stringify({ code, name }),
     }),
+  addScreenedSymbols: (codes: string[], sync = true) =>
+    request<{
+      requested: number;
+      created: number;
+      already_present: number;
+      synced: number;
+      failed: { code: string; reason: string }[];
+      daily_bars: number;
+      intraday_bars: number;
+      detail: string;
+    }>(`/screener/add-symbols${qs({ sync })}`, {
+      method: "POST",
+      body: JSON.stringify({ codes, sync }),
+    }),
   brokerChannels: () => request<BrokerChannels>("/brokers/status"),
   thsHealth: () => request<ThsHealth>("/brokers/ths/health"),
   thsPositions: () => request<ThsPosition[]>("/brokers/ths/positions"),

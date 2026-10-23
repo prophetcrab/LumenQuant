@@ -112,6 +112,8 @@ Base URL：`http://127.0.0.1:8000/api`　完整交互式文档：`/docs`
 - `POST /api/screener/add-symbol?sync=` — `{code, name?}` 把选中的标的加入本地目录；
   默认 `sync=true` 同时导入历史（返回 `synced`、`daily_bars`、`intraday_bars`），
   `sync=false` 仅登记，适合批量后再统一同步
+- `POST /api/screener/add-symbols` — `{codes[], sync?}` 批量登记并同步；
+  返回 `created`/`already_present`/`synced`/`failed` 与累计 K 线数
   全市场快照缓存 60 秒；`force=true` 强制刷新。单次约 8–12 秒。
 
 ## A股行情数据
