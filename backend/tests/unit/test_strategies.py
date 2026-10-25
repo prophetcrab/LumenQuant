@@ -61,13 +61,14 @@ EXPECTED_KEYS = {
     "stochastic_reversal",
     "buy_and_hold",
     "xgb_hybrid",
+    "cn_hybrid",
 }
 
 
 def test_catalog_contains_all_builtins():
     keys = {meta["key"] for meta in catalog()}
     assert keys == EXPECTED_KEYS
-    assert len(list(all_strategies())) == 10
+    assert len(list(all_strategies())) == 11
 
 
 def test_catalog_exposes_param_schema():
