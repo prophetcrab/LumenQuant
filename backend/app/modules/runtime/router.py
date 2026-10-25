@@ -1,7 +1,5 @@
 from __future__ import annotations
 
-from dataclasses import asdict
-
 from fastapi import APIRouter, Depends, Query, Request
 from sqlalchemy.orm import Session
 
@@ -111,11 +109,14 @@ def tick(request: Request, session: Session = Depends(get_session)):
     """
     service = build_service(request, session)
     results = {}
+    # Same one-read set as the scheduler, so the manual pass cannot disagree with
+    # production about which instances were running when it started.
+    running = service.running_instances()
     try:
-        results.update(service.protect_positions())
+        results.update(service.protect_positions(running))
     except Exception:  # a broken stop check must not block signal evaluation
         pass
-    for row in service.running_instances():
+    for row in running:
         # One malformed instance (bad stored params, a timeframe its market no
         # longer supports) must not abort the pass and starve every other
         # instance. The background scheduler already isolates per instance; the

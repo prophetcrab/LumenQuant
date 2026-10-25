@@ -121,7 +121,7 @@ def test_manual_tick_runs_the_protective_sweep(runtime_client, monkeypatch):
     calls: list[bool] = []
     original = RuntimeService.protect_positions
 
-    def spy(self):
+    def spy(self, rows=None):
         calls.append(True)
         return {"probe": "swept"}
 

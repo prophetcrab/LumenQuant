@@ -153,6 +153,45 @@ def test_risk_overview_warns_about_unprotected_instances(risk_client):
     assert not body["warnings"]
 
 
+def test_stopping_an_instance_with_an_open_position_is_reported(risk_client):
+    """Stopping disarms the stop sweep, so an open position must be flagged.
+
+    "停止" reads as "stop sending new signals", but it also stops
+    `protect_positions` for that row. A position left behind after a stop has no
+    automated protection, and the stopped row looks inactive everywhere else.
+    """
+    account = risk_client.post(
+        "/api/accounts", json={"name": "停用后裸奔", "initial_balance": 200_000}
+    ).json()
+    instance = risk_client.post(
+        "/api/runtime/instances",
+        json={
+            "account_id": account["id"],
+            "strategy_key": "buy_and_hold",
+            "symbol": "BTCUSDT",
+            "timeframe": "1h",
+            "params": {},
+            "position_pct": 0.2,
+            "max_order_notional": 20_000,
+            "stop_loss_pct": 5,
+            "start": True,
+        },
+    ).json()
+    # Open the position, then stop the instance.
+    risk_client.post("/api/runtime/tick")
+    assert risk_client.get(
+        "/api/trading/positions", params={"account_id": account["id"]}
+    ).json()
+
+    risk_client.post(f"/api/runtime/instances/{instance['id']}/toggle", json={"running": False})
+    body = risk_client.get(
+        "/api/risk/overview", params={"account_id": account["id"]}
+    ).json()
+    joined = " ".join(body["warnings"])
+    assert "已停止" in joined
+    assert "BTCUSDT" in joined
+
+
 def test_quote_outage_does_not_trip_the_breakers(risk_client, monkeypatch):
     """A missing price must not be read as a total loss.
 

@@ -171,6 +171,51 @@ def test_crypto_15m_bar_is_excluded_until_its_bucket_ends(tmp_path):
     db.dispose()
 
 
+def test_next_close_after_answers_per_market(cn_db):
+    """The scheduler's clock gate must agree with `closed_only` for both markets.
+
+    A crypto bucket closes one timeframe after it opens. An A-share intraday bar
+    closes one step after it opens, but only after a session break; a daily bar
+    is final at 15:00 on the following trading day, not at midnight.
+    """
+    with cn_db.session() as session:
+        market = MarketService(session, live=FakeLive(FixedClock(ms(11, 0))))
+        # A morning 30m bar (10:00-10:30) is followed by 10:30-11:00.
+        assert market.next_close_after("600519.SH", "30m", ms(10, 0)) == ms(11, 0)
+        # The 11:30 bar rolls into the afternoon session: 13:00-13:30.
+        assert market.next_close_after("600519.SH", "30m", ms(11, 0)) == ms(13, 30)
+        # Today's daily bar is not final until the next trading day's 15:00.
+        from app.modules.cn.calendar import next_trading_day
+
+        expected = to_ms(
+            next_trading_day(TRADING_DAY), datetime.min.time().replace(hour=15)
+        )
+        assert market.next_close_after("600519.SH", "1d", ms(0)) == expected
+
+
+def test_next_close_after_for_crypto_is_two_timeframes(tmp_path):
+    settings = make_settings(tmp_path)
+    db = Database(settings.database_url)
+    db.create_schema()
+    with db.session() as session:
+        session.add(
+            Symbol(
+                code="BTCUSDT",
+                name="Bitcoin / USDT",
+                market="crypto",
+                base="BTC",
+                quote="USDT",
+                initial_price=80_000.0,
+            )
+        )
+        session.commit()
+        market = MarketService(session)
+        start = 1_792_576_800_000
+        assert market.next_close_after("BTCUSDT", "15m", start) == start + 2 * 900_000
+        assert market.next_close_after("BTCUSDT", "1h", start) == start + 2 * 3_600_000
+    db.dispose()
+
+
 class FakeEngine:
     def __init__(self, now_ms: int) -> None:
         self.clock = FixedClock(now_ms)
@@ -211,3 +256,51 @@ def test_a_share_bar_is_judged_by_the_a_share_clock(cn_db):
         closed = market.candles("600519.SH", timeframe="1d", limit=10, closed_only=True)
     assert len(closed) == 2
     assert closed[-1].close == pytest.approx(1012.0)
+
+
+# --------------------------------------------------------------- clock payload
+class _FakeQuoteEngine:
+    """Minimal stand-in for CnQuoteEngine: the clock only needs now_ms."""
+
+    def __init__(self, now_ms_value: int) -> None:
+        self._now = now_ms_value
+        self.poll_seconds = 15.0
+
+    def now_ms(self) -> int:
+        return self._now
+
+
+def test_realtime_cn_clock_reports_the_same_shape_as_the_synthetic_one():
+    """One frontend card reads both engines' clock payloads.
+
+    The realtime clock used to return only `session_state()`'s keys, so
+    `simulated_now` and `speed` were missing whenever A-shares ran on real
+    quotes — the footer and market cards then had no timestamp to show. The two
+    engines must be interchangeable without the caller branching on which one is
+    active.
+    """
+    from app.modules.cn.quotes import RealtimeSessionClock
+
+    engine = _FakeQuoteEngine(ms(11, 0))
+    payload = RealtimeSessionClock(engine).info()
+
+    # Keys the synthetic engine always provides.
+    for key in ("simulated_now", "speed", "timeframe", "open", "day", "session"):
+        assert key in payload, f"{key} missing from the realtime clock payload"
+    assert payload["simulated_now"] == ms(11, 0)
+    assert payload["speed"] == 1.0
+    # And it says which clock it is, so the UI can label it honestly.
+    assert payload["simulated"] is False
+    assert payload["source"]
+
+
+def test_market_clock_speed_is_configurable():
+    """It was read via getattr but never declared, so the env var was ignored.
+
+    The synthetic clock was therefore always 60x, and charts drifted days ahead
+    of wall time with no way to turn it off short of editing code.
+    """
+    from app.core.config import Settings
+
+    assert Settings(market_clock_speed=1).market_clock_speed == 1.0
+    assert Settings().market_clock_speed == 60.0

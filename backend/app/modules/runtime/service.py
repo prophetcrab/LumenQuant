@@ -7,9 +7,8 @@ through the trading module. All execution rules (risk, fees, fills) stay there.
 from __future__ import annotations
 
 import json
-import math
+import logging
 from dataclasses import dataclass
-from datetime import datetime
 
 from sqlalchemy import delete, select
 from sqlalchemy.orm import Session
@@ -28,6 +27,8 @@ from app.modules.runtime.models import RuntimeLog, StrategyInstance, new_id
 from app.modules.risk.stops import StopRules, evaluate_tick, parse_rules
 from app.modules.strategies.registry import get
 from app.modules.trading.service import TradingService
+
+logger = logging.getLogger(__name__)
 
 MAX_LOGS = 200
 # Hard cap on rows kept per instance; the API never returns more than MAX_LOGS,
@@ -347,9 +348,15 @@ class RuntimeService:
         # Flipping LQ_LIVE_AUTO_TRADING_ENABLED off must take effect immediately;
         # an instance created while it was on would otherwise keep sending real
         # orders after the operator believed they had disabled automation.
-        balance = self._live_guard(row)
+        balance = self._live_guard(row, account)
         if balance is not None:
             return balance
+        # Cheap clock gate before reading the series. A fresh instance has
+        # last_bar_time 0 and must take the normal path; after that, two clock
+        # reads replace a full read-and-aggregate when the next bar cannot have
+        # closed yet.
+        if row.last_bar_time > 0 and not self._bar_may_have_closed(row):
+            return "no_new_bar"
         # Never act on an in-progress candle: only closed bars drive live signals.
         candles = self.market.candles(
             row.symbol, timeframe=row.timeframe, limit=600, closed_only=True
@@ -360,10 +367,17 @@ class RuntimeService:
         last = candles[-1]
         if last.time <= row.last_bar_time:
             return "no_new_bar"
-        row.last_bar_time = last.time
         state = strategy.prepare(candles, params)
         signal = strategy.evaluate(state, len(candles) - 1)
+        # The cursor advances only once this bar's evaluation has a definitive
+        # outcome. Advancing it before `prepare`/`evaluate` meant a crash there
+        # consumed the bar for good: the scheduler stores last_error on the row
+        # and commits, which also persisted the advanced cursor, so that signal
+        # could never be produced. Order placement runs before the cursor is
+        # stored as well; a retry cannot duplicate anything, because an in-flight
+        # entry (C96) or exit (C95) is recognised on the next pass.
         if not signal.is_actionable:
+            row.last_bar_time = last.time
             self.session.commit()
             return "hold"
 
@@ -394,7 +408,7 @@ class RuntimeService:
                         bar_time=last.time,
                     )
                 else:
-                    self._place_entry(row, last.close)
+                    self._place_entry(row, last.close, bar_time=last.time)
             elif signal.action == "buy" and position > 0:
                 # Another instance (or a manual trade) already holds this symbol.
                 # Without this note the row keeps logging "signal: buy" and looks
@@ -433,6 +447,9 @@ class RuntimeService:
                         bar_time=last.time,
                     )
         except AppError as exc:
+            # A rejection (risk limit, market gate, insufficient funds) *is* this
+            # bar's outcome. The cursor still advances so the same refused order
+            # is not retried every few seconds until the next bar arrives.
             row.last_error = str(exc)[:400]
             self._log(row.id, "error", "rejected", str(exc), bar_time=last.time)
             if self.alerts is not None:
@@ -445,141 +462,225 @@ class RuntimeService:
                     ref_type="strategy_instance",
                     ref_id=row.id,
                 )
+        row.last_bar_time = last.time
         self.session.commit()
         return "executed"
 
-    def protect_positions(self) -> dict[str, str]:
+    def _bar_may_have_closed(self, row: StrategyInstance) -> bool:
+        """Whether a bar newer than `last_bar_time` could be complete by now.
+
+        The scheduler ticks every few seconds but most timeframes close every
+        15 minutes or longer, so the common case is "nothing new". Reading and
+        re-aggregating 600 bars per instance per tick just to discover that is
+        wasted work that grows with the number of instances.
+
+        Any provider that cannot answer (an older deployment, a test double)
+        reports "maybe", which is the pre-existing behaviour: one candle read.
+        """
+        helper = getattr(self.market, "next_close_after", None)
+        now = getattr(self.market, "now_ms", None)
+        if helper is None or now is None:
+            return True
+        try:
+            now_ms = int(now(row.symbol))
+            if row.last_bar_time > now_ms:
+                # The cursor is ahead of this symbol's clock — the synthetic
+                # history ran on a 60x clock and outlived it. Gating on it would
+                # wait for a bar that has already "happened", so fall through and
+                # let the normal read decide.
+                return True
+            ready_at = helper(row.symbol, row.timeframe, row.last_bar_time)
+            return now_ms >= int(ready_at)
+        except Exception:
+            # A clock we cannot read must never suppress a signal.
+            return True
+
+    def protect_positions(self, rows: list[StrategyInstance] | None = None) -> dict[str, str]:
         """Check every running instance's open position against its stop rules.
 
         Runs on every scheduler tick rather than only on new bars: a 10% intrabar
         drop should exit at the stop, not wait for the bar to close. This is the
         live counterpart of the backtester's intrabar stop check — without it the
         same strategy behaves completely differently in research and production.
+
+        `rows` lets a caller that already listed the running instances hand them
+        in, so a tick does not query the same set twice.
         """
         outcomes: dict[str, str] = {}
-        for row in self.running_instances():
-            # Deliberately NOT gated on live_auto_trading_enabled: turning off new
-            # automated entries must not also disable protective exits. Blocking a
-            # stop would leave a real position unprotected, which is strictly worse
-            # than the exposure the operator was trying to avoid.
-            rules = StopRules(
-                stop_loss_pct=row.stop_loss_pct,
-                take_profit_pct=row.take_profit_pct,
-                trailing_stop_pct=row.trailing_stop_pct,
-            )
-            if not rules.enabled:
-                continue
-            position = self._position_row(row.account_id, row.symbol)
-            if position is None or position.quantity <= 0:
-                # Flat: reset the trailing peak so the next entry starts fresh.
-                if row.peak_price:
-                    row.peak_price = 0.0
-                    self.session.flush()
-                continue
+        # Several instances can share one symbol; read its price once per sweep
+        # instead of once per instance, and keep the failure so each instance
+        # still reports its own unprotected position.
+        prices: dict[str, float | Exception] = {}
+        for row in self.running_instances() if rows is None else rows:
             try:
-                price = self.market.last_price(row.symbol)
+                outcome = self._protect_one(row, prices)
             except Exception as exc:
-                # Silent failure here would hide a broken price feed while the
-                # position kept running without any protection. A log line is not
-                # enough: nobody is watching the log, and the position is naked
-                # until the feed returns — the same severity as a failed exit, so
-                # it raises the same kind of alert (deduped by the alert service,
-                # so a long outage produces one entry, not one per tick).
-                row.last_error = f"无法获取 {row.symbol} 价格：{exc}"[:400]
-                self._log(
-                    row.id, "error", "price_unavailable", row.last_error,
-                    bar_time=row.last_bar_time,
-                )
-                outcomes[row.id] = "price_unavailable"
-                if self.alerts is not None:
-                    self.alerts.raise_alert(
-                        category="price_unavailable",
-                        level="critical",
-                        account_id=row.account_id,
-                        title=f"{row.symbol} 无法获取价格，止损失效",
-                        message=(
-                            f"{row.strategy_key} · {row.symbol}：{exc}。"
-                            "持仓在价格恢复前没有任何止损保护。"
-                        ),
-                        ref_type="strategy_instance",
-                        ref_id=row.id,
+                # One malformed instance (a stored stop that no longer parses, a
+                # symbol removed from the catalog) must not abort the sweep and
+                # leave every later instance unstopped. The signal loop already
+                # isolates per instance; this is the same guarantee for exits.
+                #
+                # No savepoint here: the collaborators this calls into
+                # (`place_order`, `raise_alert`) commit on their own, which
+                # terminates a nested transaction on the first success. Catching
+                # and carrying on is what the rest of the codebase does, and the
+                # work already written for earlier instances stays written.
+                outcomes[row.id] = "protect_failed"
+                try:
+                    row.last_error = f"止损检查失败：{exc}"[:400]
+                    self._log(
+                        row.id, "error", "protect_failed", row.last_error,
+                        bar_time=row.last_bar_time,
                     )
+                    if self.alerts is not None:
+                        self.alerts.raise_alert(
+                            category="protect_failed",
+                            level="critical",
+                            account_id=row.account_id,
+                            title=f"{row.symbol} 止损检查失败",
+                            message=(
+                                f"{row.strategy_key} · {row.symbol}：{exc}。"
+                                "该实例的仓位在本轮没有任何止损保护。"
+                            ),
+                            ref_type="strategy_instance",
+                            ref_id=row.id,
+                        )
+                except Exception:
+                    # Recording the failure must not kill the sweep either. The
+                    # outcome above still reports it to the caller.
+                    logger.exception("could not record a failed stop check")
                 continue
-            if price <= 0:
-                continue
+            if outcome is not None:
+                outcomes[row.id] = outcome
+        self.session.commit()
+        return outcomes
 
-            decision = evaluate_tick(
-                entry_price=position.avg_price,
-                current_peak=row.peak_price,
-                last_price=price,
-                rules=rules,
-            )
-            if decision.new_peak != row.peak_price:
-                row.peak_price = decision.new_peak
-            if not decision.triggered:
-                continue
+    def _protect_one(
+        self, row: StrategyInstance, prices: dict[str, float | Exception]
+    ) -> str | None:
+        """Stop check for one instance; None when it had nothing to report."""
+        # Deliberately NOT gated on live_auto_trading_enabled: turning off new
+        # automated entries must not also disable protective exits. Blocking a
+        # stop would leave a real position unprotected, which is strictly worse
+        # than the exposure the operator was trying to avoid.
+        rules = StopRules(
+            stop_loss_pct=row.stop_loss_pct,
+            take_profit_pct=row.take_profit_pct,
+            trailing_stop_pct=row.trailing_stop_pct,
+        )
+        if not rules.enabled:
+            return None
+        position = self._position_row(row.account_id, row.symbol)
+        if position is None or position.quantity <= 0:
+            # Flat: reset the trailing peak so the next entry starts fresh.
+            if row.peak_price:
+                row.peak_price = 0.0
+                self.session.flush()
+            return None
+        if row.symbol not in prices:
             try:
-                order, reused = self.trading.close_position_ex(
-                    row.account_id, row.symbol, source=f"exit:{row.id[:8]}"
-                )
+                prices[row.symbol] = self.market.last_price(row.symbol)
             except Exception as exc:
-                row.last_error = str(exc)[:400]
-                self._log(row.id, "error", "exit_failed", str(exc), bar_time=row.last_bar_time)
-                outcomes[row.id] = "exit_failed"
-                if self.alerts is not None:
-                    self.alerts.raise_alert(
-                        category="exit_failed",
-                        level="critical",
-                        account_id=row.account_id,
-                        title=f"{row.symbol} 保护性离场失败",
-                        message=f"{row.strategy_key} · {row.symbol}：{exc}",
-                        ref_type="strategy_instance",
-                        ref_id=row.id,
-                    )
-                continue
-            # An order that was already working is *waited on*, not re-reported.
-            # Counting it as a new execution inflated `executions` once per tick and
-            # raised a fresh critical alert each time, which both buried the real
-            # event and made a healthy in-flight exit look like a loop.
-            if reused:
-                outcomes[row.id] = f"{decision.reason}_pending"
-                self._log(
-                    row.id,
-                    "info",
-                    "exit_pending",
-                    f"{decision.reason} 离场委托在途，等待成交（{order.id[:8]}）",
-                    order_id=order.id,
-                    bar_time=row.last_bar_time,
-                )
-                continue
-
-            row.executions += 1
-            row.peak_price = 0.0
+                prices[row.symbol] = exc
+        cached = prices[row.symbol]
+        if isinstance(cached, Exception):
+            # Silent failure here would hide a broken price feed while the
+            # position kept running without any protection. A log line is not
+            # enough: nobody is watching the log, and the position is naked
+            # until the feed returns — the same severity as a failed exit, so
+            # it raises the same kind of alert (deduped by the alert service,
+            # so a long outage produces one entry, not one per tick).
+            row.last_error = f"无法获取 {row.symbol} 价格：{cached}"[:400]
             self._log(
-                row.id,
-                "info",
-                decision.reason,
-                f"{decision.reason} 触发：{row.symbol} @ {price:.4f}"
-                + (f"（委托 {order.id[:8]}）" if order else ""),
-                order_id=order.id if order else "",
+                row.id, "error", "price_unavailable", row.last_error,
                 bar_time=row.last_bar_time,
             )
-            outcomes[row.id] = decision.reason
             if self.alerts is not None:
                 self.alerts.raise_alert(
-                    category=decision.reason,
+                    category="price_unavailable",
                     level="critical",
                     account_id=row.account_id,
-                    title=f"{row.symbol} 触发{'止损' if 'stop' in decision.reason else '离场'}",
+                    title=f"{row.symbol} 无法获取价格，止损失效",
                     message=(
-                        f"{row.strategy_key} · {row.symbol} 于 {price:.4f} 离场"
-                        f"（{decision.reason}）"
+                        f"{row.strategy_key} · {row.symbol}：{cached}。"
+                        "持仓在价格恢复前没有任何止损保护。"
                     ),
                     ref_type="strategy_instance",
                     ref_id=row.id,
                 )
-        self.session.commit()
-        return outcomes
+            return "price_unavailable"
+        price = cached
+        if price <= 0:
+            return None
+
+        decision = evaluate_tick(
+            entry_price=position.avg_price,
+            current_peak=row.peak_price,
+            last_price=price,
+            rules=rules,
+        )
+        if decision.new_peak != row.peak_price:
+            row.peak_price = decision.new_peak
+        if not decision.triggered:
+            return None
+        try:
+            order, reused = self.trading.close_position_ex(
+                row.account_id, row.symbol, source=f"exit:{row.id[:8]}"
+            )
+        except Exception as exc:
+            row.last_error = str(exc)[:400]
+            self._log(row.id, "error", "exit_failed", str(exc), bar_time=row.last_bar_time)
+            if self.alerts is not None:
+                self.alerts.raise_alert(
+                    category="exit_failed",
+                    level="critical",
+                    account_id=row.account_id,
+                    title=f"{row.symbol} 保护性离场失败",
+                    message=f"{row.strategy_key} · {row.symbol}：{exc}",
+                    ref_type="strategy_instance",
+                    ref_id=row.id,
+                )
+            return "exit_failed"
+        # An order that was already working is *waited on*, not re-reported.
+        # Counting it as a new execution inflated `executions` once per tick and
+        # raised a fresh critical alert each time, which both buried the real
+        # event and made a healthy in-flight exit look like a loop.
+        if reused:
+            self._log(
+                row.id,
+                "info",
+                "exit_pending",
+                f"{decision.reason} 离场委托在途，等待成交（{order.id[:8]}）",
+                order_id=order.id,
+                bar_time=row.last_bar_time,
+            )
+            return f"{decision.reason}_pending"
+
+        row.executions += 1
+        row.peak_price = 0.0
+        self._log(
+            row.id,
+            "info",
+            decision.reason,
+            f"{decision.reason} 触发：{row.symbol} @ {price:.4f}"
+            + (f"（委托 {order.id[:8]}）" if order else ""),
+            order_id=order.id if order else "",
+            bar_time=row.last_bar_time,
+        )
+        if self.alerts is not None:
+            self.alerts.raise_alert(
+                category=decision.reason,
+                level="critical",
+                account_id=row.account_id,
+                title=f"{row.symbol} 触发{'止损' if 'stop' in decision.reason else '离场'}",
+                message=(
+                    f"{row.strategy_key} · {row.symbol} 于 {price:.4f} 离场"
+                    f"（{decision.reason}）"
+                ),
+                ref_type="strategy_instance",
+                ref_id=row.id,
+            )
+        return decision.reason
 
     def _position_row(self, account_id: str, symbol: str):
         from app.modules.trading.models import Position
@@ -590,13 +691,14 @@ class RuntimeService:
             )
         )
 
-    def _live_guard(self, row: StrategyInstance) -> str | None:
+    def _live_guard(self, row: StrategyInstance, account=None) -> str | None:
         """Block automated orders on a live account when the opt-in is off.
 
         Returns the outcome string to report, or None when trading may proceed.
         Logged once per dedupe window rather than every tick.
         """
-        account = self.accounts.require(row.account_id)
+        if account is None:
+            account = self.accounts.require(row.account_id)
         if account.kind != "live" or self.live_auto_trading_enabled:
             return None
         message = (
@@ -606,8 +708,7 @@ class RuntimeService:
         self.session.commit()
         return "live_auto_disabled"
 
-    def _place_entry(self, row: StrategyInstance, price: float) -> None:
-        account = self.accounts.get(row.account_id)
+    def _place_entry(self, row: StrategyInstance, price: float, *, bar_time: int) -> None:
         symbol = self.market.require_symbol(row.symbol)
         # Size against *available* cash, not the book balance: resting limit orders
         # have already committed part of the balance. Using cash_balance let an
@@ -647,7 +748,7 @@ class RuntimeService:
                 reason = (
                     f"可用资金 {cash_budget:,.2f} 不足以买入一手（约需 {lot_cost:,.2f}）"
                 )
-            self._log(row.id, "warn", "skipped", reason, bar_time=row.last_bar_time)
+            self._log(row.id, "warn", "skipped", reason, bar_time=bar_time)
             return
         order = self.trading.place_order(
             account_id=row.account_id,
@@ -665,7 +766,7 @@ class RuntimeService:
             "entry",
             f"买入 {order.filled_quantity} {row.symbol} @ {order.avg_fill_price}",
             order_id=order.id,
-            bar_time=row.last_bar_time,
+            bar_time=bar_time,
         )
 
     def _pending_entries(self, row: StrategyInstance):
@@ -685,10 +786,10 @@ class RuntimeService:
         ).all()
 
     def _position_quantity(self, account_id: str, symbol: str) -> float:
-        for position in self.trading.positions(account_id):
-            if position.symbol == symbol:
-                return position.quantity
-        return 0.0
+        # Direct row lookup instead of `trading.positions()`, which builds a view
+        # for every holding (two extra queries each) just to read one quantity.
+        row = self._position_row(account_id, symbol)
+        return max(0.0, row.quantity) if row is not None else 0.0
 
     def _log(
         self,
@@ -706,28 +807,31 @@ class RuntimeService:
         data, a dead price feed, a sizing limit below one board lot — would otherwise
         write one row per tick for as long as it lasts: ~14k rows per day per
         instance for a single unresolved warning.
+
+        Only warnings and errors are deduped, so only they pay for the lookup:
+        state changes ("started", "updated") are user intent and stay in the audit
+        trail even when they happen twice in quick succession, and info rows
+        (signals, fills) describe distinct events.
         """
-        # autoflush is off, so flush first or a row written earlier in this tick
-        # would be invisible to the query below.
-        self.session.flush()
-        latest = self.session.scalar(
-            select(RuntimeLog)
-            .where(
-                RuntimeLog.instance_id == instance_id,
-                RuntimeLog.event == event,
-                RuntimeLog.message == message,
+        if level in {"warn", "error"}:
+            # autoflush is off, so flush first or a row written earlier in this
+            # tick would be invisible to the query below.
+            self.session.flush()
+            latest = self.session.scalar(
+                select(RuntimeLog)
+                .where(
+                    RuntimeLog.instance_id == instance_id,
+                    RuntimeLog.event == event,
+                    RuntimeLog.message == message,
+                )
+                .order_by(RuntimeLog.created_at.desc())
+                .limit(1)
             )
-            .order_by(RuntimeLog.created_at.desc())
-            .limit(1)
-        )
-        # Only suppress repeated warnings/errors. State changes ("started",
-        # "updated") are user intent and stay in the audit trail even when they
-        # happen twice in quick succession.
-        if latest is not None and level in {"warn", "error"}:
-            # SQLite returns naive datetimes even for timezone-aware columns.
-            age = (utcnow() - ensure_utc(latest.created_at)).total_seconds()
-            if age < LOG_DEDUPE_SECONDS:
-                return
+            if latest is not None:
+                # SQLite returns naive datetimes even for timezone-aware columns.
+                age = (utcnow() - ensure_utc(latest.created_at)).total_seconds()
+                if age < LOG_DEDUPE_SECONDS:
+                    return
         self.session.add(
             RuntimeLog(
                 instance_id=instance_id,

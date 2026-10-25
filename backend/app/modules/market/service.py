@@ -30,6 +30,13 @@ from app.modules.market.service_types import CandlePoint, Snapshot, SymbolView
 
 BASE_TIMEFRAME = "15m"
 SUPPORTED_TIMEFRAMES = ("15m", "30m", "1h", "4h", "1d")
+# Hard ceiling on one read. The backtest layer accepts `bars <= 20_000`, so this
+# has to be at least that; a smaller cap here made the two contracts disagree and
+# silently returned fewer bars than requested.
+MAX_CANDLE_LIMIT = 20_000
+# Aggregation reads `ratio` base bars per output bar. This bounds the temporary
+# working set for derived timeframes (20_000 1h bars needs 80_000 15m bars).
+MAX_AGGREGATE_BASE_BARS = 100_000
 # A-shares trade 4 hours a day; a 4h "bar" would be a half-session, which no
 # broker or charting tool calls 4h. Offering it invites misleading comparisons.
 CN_TIMEFRAMES = ("15m", "30m", "1h", "1d")
@@ -45,7 +52,7 @@ def _bar_close_ms(market: str, timeframe: str, open_time: int) -> int:
     from every `closed_only` caller.
     """
     if market == "cn_stock" and timeframe == "1d":
-        from app.modules.cn.calendar import CN_TZ, day_key, to_ms
+        from app.modules.cn.calendar import day_key, to_ms
 
         return to_ms(day_key(open_time), dtime(15, 0))
     return open_time + timeframe_ms(timeframe)
@@ -262,7 +269,12 @@ class MarketService:
     ) -> list[CandlePoint]:
         if timeframe not in SUPPORTED_TIMEFRAMES:
             raise ValidationError(f"timeframe must be one of {', '.join(SUPPORTED_TIMEFRAMES)}")
-        limit = max(1, min(int(limit), 5000))
+        # Matches the backtest contract (`bars <= 20_000`). The old 5,000 cap
+        # silently truncated a 20,000-bar request to 5,000, so a caller asking for
+        # ~2 years of hourly bars got two months — and machine-learning strategies
+        # that need a long first training window then had almost nothing to
+        # predict on.
+        limit = max(1, min(int(limit), MAX_CANDLE_LIMIT))
         row = self._symbol(symbol)
         base_tf = row.base_timeframe or BASE_TIMEFRAME
         symbol = row.code
@@ -285,7 +297,7 @@ class MarketService:
             return points
 
         ratio = timeframe_ms(timeframe) // timeframe_ms(base_tf)
-        needed = min(limit * ratio + ratio, 20_000)
+        needed = min(limit * ratio + ratio, MAX_AGGREGATE_BASE_BARS)
         points = self._read(symbol, base_tf, limit=needed)
         if self.live is not None and not closed_only:
             current = self.live.live_candle(symbol)
@@ -339,6 +351,47 @@ class MarketService:
                 pass
         return int(time.time() * 1000)
 
+    def now_ms(self, symbol: str) -> int:
+        """The clock that decides whether this symbol's bar has closed."""
+        return self._now_ms(symbol)
+
+    def next_close_after(self, symbol: str, timeframe: str, open_time: int) -> int:
+        """Earliest instant at which a bar *newer* than `open_time` can be complete.
+
+        Polling callers (the strategy runtime evaluates every few seconds) use
+        this to skip a full series read while the next bar cannot have closed
+        yet. The value is a lower bound, not a schedule: a session break only
+        pushes the real close later, so a caller may check too often but can
+        never conclude that a bar is ready before it is.
+        """
+        row = self._symbol(symbol)
+        allowed = self.supported_timeframes(row.market)
+        if timeframe not in allowed:
+            raise ValidationError(
+                f"{row.market} 支持 {', '.join(allowed)}，不支持 {timeframe}"
+            )
+        step = timeframe_ms(timeframe)
+        if row.market == "cn_stock":
+            from app.modules.cn.calendar import (
+                day_key,
+                next_open_ms,
+                next_trading_day,
+                session_bounds,
+                to_ms,
+            )
+
+            if timeframe == "1d":
+                # A daily bar is final at 15:00, and only on a trading day.
+                return to_ms(next_trading_day(day_key(open_time)), dtime(15, 0))
+            following = open_time + step
+            if session_bounds(following) is None:
+                # The next bar starts in the following session (lunch, overnight).
+                following = next_open_ms(following)
+            return following + step
+        # Crypto buckets are contiguous, so the next bucket opens exactly one
+        # timeframe later and closes one timeframe after that.
+        return open_time + 2 * step
+
     def _drop_in_progress(
         self, row: Symbol, timeframe: str, points: list[CandlePoint]
     ) -> list[CandlePoint]:
@@ -386,7 +439,7 @@ class MarketService:
         if current is not None:
             points.append(current)
         if not points:
-            raise NotFoundError(f"no candles for {symbol}")
+            raise NotFoundError(f"no candles for {row.code}")
         window = points[-96:]
         first = window[0]
         last = window[-1]

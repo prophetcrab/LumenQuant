@@ -82,6 +82,43 @@ def test_indicators_alignment(market_client):
     assert body["series"]["SMA(20)"][19] is not None
 
 
+def test_snapshot_without_candles_reports_not_found(tmp_path):
+    """A symbol with no price history is a 404, not an internal error.
+
+    The crypto snapshot path raised `NameError: name 'symbol' is not defined`
+    instead of the intended NotFoundError, so a freshly added symbol with no
+    bars answered 500 — an error page where the UI expected "no data yet".
+    """
+    from app.modules.market.models import Symbol
+
+    settings = Settings(
+        database_url=f"sqlite:///{(tmp_path / 'snapshot.db').as_posix()}",
+        seed_market=False,
+        cn_symbols_enabled=False,
+        runtime_enabled=False,
+    )
+    db = Database(settings.database_url)
+    db.create_schema()
+    app = create_app(settings, db)
+    with TestClient(app) as client:
+        # Register the symbol directly: the create endpoint is not the subject here.
+        session = db.session_factory()
+        session.add(
+            Symbol(
+                code="NODATAUSDT", name="No Data", market="crypto",
+                asset_class="crypto", base="NODATA", quote="USDT",
+                initial_price=1.0,
+            )
+        )
+        session.commit()
+        session.close()
+
+        response = client.get("/api/market/snapshot", params={"symbol": "NODATAUSDT"})
+        assert response.status_code == 404, response.text
+        assert response.json()["error"]["code"] == "not_found"
+    db.dispose()
+
+
 def test_validation_errors(market_client):
     bad_frame = market_client.get(
         "/api/market/candles", params={"symbol": "BTCUSDT", "timeframe": "2m"}

@@ -74,6 +74,9 @@ class StrategyRuntimeEngine:
                 clock=getattr(self.market_engine, "clock", None),
                 live=self.market_engine,
             )
+            # One alert service per tick, shared by every collaborator. It holds
+            # only the session, so three separate instances were pure overhead.
+            alerts = AlertService(session)
             trading = TradingService(
                 session,
                 cash=AccountCashAdapter(accounts),
@@ -89,8 +92,8 @@ class StrategyRuntimeEngine:
                 ),
                 cn_session_enforced=self.settings.cn_session_enforced,
                 live_market=self.market_engine,
-                risk=RiskService(session, alerts=AlertService(session)),
-                alerts=AlertService(session),
+                risk=RiskService(session, alerts=alerts),
+                alerts=alerts,
             )
             service = RuntimeService(
                 session,
@@ -98,16 +101,21 @@ class StrategyRuntimeEngine:
                 market=market,
                 trading=trading,
                 live_auto_trading_enabled=self.settings.live_auto_trading_enabled,
-                alerts=AlertService(session),
+                alerts=alerts,
             )
             results: dict[str, str] = {}
+            # One read of the running set for both phases. The sweep used to
+            # query it again on its own, so every tick listed the same rows twice
+            # and the two phases could even disagree if the set changed between
+            # them.
+            running = service.running_instances()
             # Protective exits run first: a stop must fire even when no new bar
             # has closed, and even if the strategy loop below throws.
             try:
-                results.update(service.protect_positions())
+                results.update(service.protect_positions(running))
             except Exception:
                 logger.exception("protective exit sweep failed")
-            for row in service.running_instances():
+            for row in running:
                 try:
                     results[row.id] = service.evaluate_instance(row)
                 except Exception as exc:  # one bad instance must not stop the rest

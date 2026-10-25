@@ -64,6 +64,17 @@ def build_overview(
         for item in instances
         if item["running"] and not item["protected"]
     ]
+    # Stopping an instance also stops `protect_positions` for it, so a position
+    # that is still open is left with no automated stop at all. Users click
+    # "停止" to pause *new* signals, not to disarm protection they configured —
+    # and a stopped row looks reassuringly inactive on every page.
+    held = {position.symbol for position in positions}
+    stopped_with_position = [
+        f"{item['strategy']}·{item['symbol']} 已停止，但该标的仍有持仓，"
+        "止损止盈不会再运行"
+        for item in instances
+        if not item["running"] and item["symbol"] in held
+    ]
     # Two running instances on the same symbol never stack positions: whichever
     # evaluates first opens it and the other's buy signals are ignored. That is
     # safe but surprising, so it is surfaced rather than left to the logs.
@@ -121,5 +132,6 @@ def build_overview(
         "warnings": [
             f"自动运行实例未设置任何止损保护：{name}" for name in unprotected
         ]
+        + stopped_with_position
         + duplicated,
     }
