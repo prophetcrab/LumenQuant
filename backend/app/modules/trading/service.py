@@ -26,6 +26,7 @@ from app.core.events import EventBus, OrderFilled
 from app.core.money import round_money, round_price, round_qty
 from app.core.timeutil import iso, utcnow
 from app.modules.brokers.base import BrokerOrderRequest, BrokerPort
+from app.modules.brokers.booking import book_broker_fill
 from app.modules.cn.calendar import is_session_open
 from app.modules.cn.fees import CnFeeSchedule
 from app.modules.cn.rules import (
@@ -571,6 +572,19 @@ class TradingService:
 
         if account_kind == "live":
             gateway = self.cn_broker if market == "cn_stock" else self.broker
+            # Exchanges reject a quantity that is not a multiple of the symbol's
+            # lot step (-1111 on Binance), and the local row would otherwise
+            # record a size the broker never accepted. Normalise before the row
+            # is written so the two agree. A gateway that cannot report steps
+            # leaves the value untouched.
+            normalise = getattr(gateway, "normalize_quantity", None)
+            if normalise is not None:
+                try:
+                    adjusted = round_qty(normalise(symbol, quantity))
+                    if 0 < adjusted < quantity:
+                        quantity = adjusted
+                except Exception:
+                    pass
             return self._place_live_order(
                 account_id=account_id,
                 symbol=symbol,
@@ -757,6 +771,40 @@ class TradingService:
             raise ConflictError(
                 f"下单网关调用失败，订单未确认提交：{exc}"
             ) from exc
+        if not result.broker_order_id:
+            # Without a broker id the reconciler cannot poll this order (its
+            # query requires a non-empty id), and `match_open_orders` would treat
+            # the row as a paper order and fill it locally against our own price
+            # feed — inventing a trade the broker never made. Refusing is the
+            # only safe reading of an acknowledgement with no identifier.
+            self._record_gateway_failure(
+                account_id=account_id,
+                symbol=symbol,
+                side=side,
+                order_type=order_type,
+                quantity=quantity,
+                limit_price=limit_price,
+                source=source,
+                client_order_id=client_order_id,
+                reason="gateway acknowledged the order without an order id",
+            )
+            if self.alerts is not None:
+                self.alerts.raise_alert(
+                    category="gateway_failure",
+                    level="critical",
+                    account_id=account_id,
+                    title=f"{symbol} 网关未返回委托编号",
+                    message=(
+                        f"{side} {quantity} {symbol} 已提交但网关未返回 order_id，"
+                        "无法跟踪成交。请在券商侧人工确认这笔委托的状态。"
+                    ),
+                    ref_type="account",
+                    ref_id=account_id,
+                    commit=True,
+                )
+            raise ConflictError(
+                "网关已受理但未返回委托编号，无法跟踪成交；请在券商侧核对"
+            )
         order = Order(
             id=new_id(),
             account_id=account_id,
@@ -774,19 +822,6 @@ class TradingService:
         )
         self.session.add(order)
         self.session.flush()
-
-        fill_price = result.avg_price or market_price
-        if result.filled_quantity > 0 and fill_price > 0:
-            if band is not None:
-                fill_price = min(max(fill_price, band.down), band.up)
-            self._book_fill(
-                order,
-                result.filled_quantity,
-                fill_price,
-                market=market,
-                status=result.status,
-            )
-
         record_audit(
             self.session,
             action="order.placed_live",
@@ -803,7 +838,62 @@ class TradingService:
                 }
             ),
         )
+        # Persist the acknowledgement before booking any immediate fill. The
+        # broker already has this order: the local row — and with it the
+        # `broker_order_id` the reconciler polls by — must survive a failure in
+        # the booking step below. Booking can legitimately fail (available cash
+        # moved between the risk check and the exchange's actual fill price,
+        # which can be worse than the market price used for sizing), and letting
+        # that raise roll the row back left a real position at the broker with no
+        # local trace of the order at all.
         self.session.commit()
+
+        fill_price = result.avg_price or market_price
+        if result.filled_quantity > 0 and fill_price > 0:
+            if band is not None:
+                fill_price = min(max(fill_price, band.down), band.up)
+            try:
+                self._book_fill(
+                    order,
+                    result.filled_quantity,
+                    fill_price,
+                    market=market,
+                    status=result.status,
+                )
+                self.session.commit()
+            except Exception as exc:
+                # Roll the partial booking back and leave the order pollable so
+                # the reconciler mirrors the fill from broker state — that path
+                # does not depend on the local cash check that just failed.
+                self.session.rollback()
+                order = self.session.get(Order, order.id)
+                if order is not None:
+                    order.status = "open"
+                    order.filled_quantity = 0.0
+                    order.avg_fill_price = 0.0
+                    order.reject_reason = (
+                        f"本地记账失败，等待对账回写：{exc}"
+                    )[:240]
+                    self.session.commit()
+                if self.alerts is not None:
+                    self.alerts.raise_alert(
+                        category="exit_failed",
+                        level="critical",
+                        account_id=account_id,
+                        title=f"{symbol} 实盘成交未能本地入账",
+                        message=(
+                            f"{side} {quantity} {symbol} 已在券商成交，但本地记账失败：{exc}。"
+                            "订单已保持「挂起」等待对账器回写；请核对持仓与资金。"
+                        ),
+                        ref_type="order",
+                        ref_id=order.id if order is not None else "",
+                        commit=True,
+                    )
+                if order is not None:
+                    self.session.refresh(order)
+                    return self._order_view(order)
+                raise ConflictError(f"实盘订单已提交但本地记账失败：{exc}") from exc
+
         self.session.refresh(order)
         return self._order_view(order)
 
@@ -1000,6 +1090,20 @@ class TradingService:
                 raise ConflictError(
                     f"撤单请求失败，委托可能仍在券商侧有效：{exc}"
                 ) from exc
+            # A cancel does not undo fills that already happened. The broker can
+            # have traded part of this order in the window since the last poll
+            # (up to one reconcile interval), and writing `cancelled` here would
+            # take the order out of the polled set — dropping that fill from the
+            # ledger for ever while the broker keeps the money and the asset.
+            # Ask for the broker's final state once, and book whatever it says
+            # before closing the order.
+            if not self._settle_before_closing(order, gateway):
+                # The broker's state could not be established (or reported a
+                # fill without a price). Leave the order open: the reconciler
+                # keeps polling it, so a late fill is still mirrored.
+                self.session.commit()
+                self.session.refresh(order)
+                return self._order_view(order)
         order.status = "cancelled"
         record_audit(
             self.session,
@@ -1013,6 +1117,79 @@ class TradingService:
         self.session.commit()
         self.session.refresh(order)
         return self._order_view(order)
+
+    def _settle_before_closing(self, order: Order, gateway) -> bool:
+        """Book any fill the broker reports before the order leaves the open set.
+
+        Returns False when the order must stay open, which happens in two cases:
+        the final state cannot be read, or it reports a fill whose price is not
+        known yet. Both are recoverable by polling; closing the order over them is
+        not — the user would believe the order never traded while the broker holds
+        the money and the asset.
+        """
+        try:
+            result = gateway.order_status(
+                order.broker_order_id, symbol=order.symbol
+            )
+        except Exception as exc:
+            order.reject_reason = (
+                f"撤单已提交，但无法读取券商终态：{exc}。订单保持挂起，等待对账"
+            )[:240]
+            if self.alerts is not None:
+                self.alerts.raise_alert(
+                    category="gateway_failure",
+                    level="warning",
+                    account_id=order.account_id,
+                    title=f"{order.symbol} 撤单后无法确认成交",
+                    message=(
+                        f"委托 {order.broker_order_id} 已请求撤销，但读取终态失败：{exc}。"
+                        "该订单保持挂起，由对账器继续跟踪。"
+                    ),
+                    ref_type="order",
+                    ref_id=order.id,
+                )
+            return False
+        booked = book_broker_fill(
+            self.session,
+            order,
+            result,
+            fees=self.cn_fees,
+            fee_bps=self.fee_bps,
+            live_trading_enabled=self.cash.kind(order.account_id) == "live",
+        )
+        if booked:
+            record_audit(
+                self.session,
+                action="order.filled_during_cancel",
+                entity="order",
+                entity_id=order.id,
+                detail=json.dumps(
+                    {
+                        "broker_order_id": order.broker_order_id,
+                        "filled_quantity": order.filled_quantity,
+                        "avg_fill_price": order.avg_fill_price,
+                    }
+                ),
+            )
+            return True
+        if result.filled_quantity > order.filled_quantity + 1e-9:
+            # The broker has a fill we still cannot price. Keep the order open so
+            # the reconciler retries instead of closing it over a real trade.
+            if self.alerts is not None:
+                self.alerts.raise_alert(
+                    category="gateway_failure",
+                    level="critical",
+                    account_id=order.account_id,
+                    title=f"{order.symbol} 撤单时存在无法入账的成交",
+                    message=(
+                        f"委托 {order.broker_order_id} 已请求撤销，券商回报成交 "
+                        f"{result.filled_quantity:g} 但缺少可用价格。订单保持挂起。"
+                    ),
+                    ref_type="order",
+                    ref_id=order.id,
+                )
+            return False
+        return True
 
     def close_position(
         self, account_id: str, symbol: str, *, source: str = "manual-close"
@@ -1090,7 +1267,10 @@ class TradingService:
         orders = self.open_orders(account_id=account_id)
         filled = 0
         for order in orders:
-            if order.broker_order_id:
+            # Live orders belong to the broker. Checking the source as well as
+            # the id matters because an ack that carried no order id would
+            # otherwise be filled here against our own price feed.
+            if order.broker_order_id or order.source.startswith("live:"):
                 continue  # live orders are advanced by the reconciler
             try:
                 symbol_view = self.prices.symbol(order.symbol)

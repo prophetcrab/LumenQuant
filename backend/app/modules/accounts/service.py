@@ -7,8 +7,7 @@ through the read-only protocols defined at the bottom of this file.
 from __future__ import annotations
 
 import json
-from dataclasses import asdict, dataclass
-from datetime import datetime
+from dataclasses import dataclass
 from typing import Protocol
 
 from sqlalchemy import func, select
@@ -301,6 +300,52 @@ class AccountService:
             entity="account",
             entity_id=account.id,
             detail=json.dumps({"amount": round_money(amount)}),
+        )
+        self.session.commit()
+        self.session.refresh(account)
+        return self.view(account)
+
+    def align_to_broker_cash(
+        self, account_id: str, broker_cash: float, *, note: str = ""
+    ) -> AccountView:
+        """Move the local cash book to the broker's reported balance.
+
+        A live account is created with an `initial_balance` that is only a local
+        bookkeeping starting point; the money that can actually be spent sits at
+        the broker. Until the two agree, every real order is sized against a
+        number that has nothing to do with reality — a live account funded with
+        the documented `initial_balance=1` can never buy anything, and one funded
+        too high tries to spend money that is not there.
+
+        The adjustment is a ledger entry, not a silent field edit, so the
+        difference stays visible as a funding event in the account history.
+        """
+        if broker_cash < 0:
+            raise ValidationError("broker cash must not be negative")
+        account = self.require(account_id)
+        if account.kind != "live":
+            raise ConflictError("only live accounts are funded from a broker balance")
+        if account.status != "active":
+            raise ConflictError("cannot adjust an archived account")
+        cash = self._cash(account.id)
+        delta = round_money(broker_cash - cash)
+        if abs(delta) < 0.0001:
+            return self.view(account)
+        self._append_ledger(
+            account.id,
+            amount=delta,
+            kind="deposit" if delta > 0 else "withdraw",
+            note=note or f"对齐券商余额：{cash:,.2f} -> {broker_cash:,.2f}",
+            current_cash=cash,
+        )
+        record_audit(
+            self.session,
+            action="account.aligned_to_broker",
+            entity="account",
+            entity_id=account.id,
+            detail=json.dumps(
+                {"before": round_money(cash), "broker": round_money(broker_cash)}
+            ),
         )
         self.session.commit()
         self.session.refresh(account)

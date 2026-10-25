@@ -69,7 +69,9 @@ class ThsGatewayPort:
     def place_order(self, request: BrokerOrderRequest) -> BrokerOrderResult: ...
     def cancel_order(self, symbol: str, broker_order_id: str) -> None: ...
     def open_orders(self, symbol: str) -> list[dict]: ...
-    def order_status(self, broker_order_id: str) -> BrokerOrderResult: ...
+    def order_status(
+        self, broker_order_id: str, *, symbol: str = ""
+    ) -> BrokerOrderResult: ...
     def positions(self) -> list[ThsPosition]: ...
     def trades_since(self, since_ms: int) -> list[dict]: ...
 
@@ -95,12 +97,26 @@ class ThsHttpGateway:
         self.token = token
         self.timeout = timeout
         self._transport = transport
+        # The reconciler polls every few seconds; a fresh client per call meant a
+        # TLS handshake per poll, exactly as it did for Binance.
+        self._http: httpx.Client | None = None
+
+    def _client(self) -> httpx.Client:
+        if self._http is None:
+            self._http = httpx.Client(timeout=self.timeout, transport=self._transport)
+        return self._http
+
+    def close(self) -> None:
+        if self._http is not None:
+            self._http.close()
+            self._http = None
 
     def _request(self, method: str, path: str, **kwargs) -> dict:
         headers = {"Authorization": f"Bearer {self.token}"} if self.token else {}
         try:
-            with httpx.Client(timeout=self.timeout, transport=self._transport) as client:
-                response = client.request(method, f"{self.base_url}{path}", headers=headers, **kwargs)
+            response = self._client().request(
+                method, f"{self.base_url}{path}", headers=headers, **kwargs
+            )
         except httpx.HTTPError as exc:
             raise ThsGatewayError(f"同花顺网关不可达：{exc}") from exc
         if response.status_code >= 400:
@@ -151,7 +167,9 @@ class ThsHttpGateway:
         data = self._request("GET", "/api/orders", params={"status": "open"})
         return list(data.get("orders", []))
 
-    def order_status(self, broker_order_id: str) -> BrokerOrderResult:
+    def order_status(
+        self, broker_order_id: str, *, symbol: str = ""
+    ) -> BrokerOrderResult:
         data = self._request("GET", f"/api/orders/{broker_order_id}")
         raw = str(data.get("status", "accepted"))
         return BrokerOrderResult(
@@ -298,7 +316,9 @@ class MockThsGateway:
             if order["symbol"] == symbol and order["status"] not in FINAL_STATUSES
         ]
 
-    def order_status(self, broker_order_id: str) -> BrokerOrderResult:
+    def order_status(
+        self, broker_order_id: str, *, symbol: str = ""
+    ) -> BrokerOrderResult:
         order = self._orders.get(broker_order_id)
         if order is None:
             raise ConflictError("gateway order not found")

@@ -84,7 +84,9 @@ def build_trading(
     market = market or build_market(request, session)
     broker = cn_broker = None
     if with_brokers:
-        broker = build_broker(settings)
+        # Prefer the process-wide instance: the reconciler holds the same object,
+        # so cached exchange metadata (lot steps) is not fetched twice per order.
+        broker = getattr(request.app.state, "crypto_broker", None) or build_broker(settings)
         cn_broker = getattr(request.app.state, "cn_gateway", None) or build_ths_gateway(
             settings, price_feed=market.last_price
         )

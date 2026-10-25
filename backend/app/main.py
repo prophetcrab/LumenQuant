@@ -123,7 +123,20 @@ def create_app(settings: Settings | None = None, database: Database | None = Non
     # adapter) is not recreated on every request.
     from app.modules.brokers.ths import build_ths_gateway
 
-    cn_gateway = build_ths_gateway(settings)
+    # `price_feed` is what lets the mock gateway fill market orders. Without it
+    # every rehearsal order sat at `accepted` for ever, which looks exactly like
+    # a broken gateway rather than an unfilled simulation. The provider exposes
+    # the in-progress candle per symbol, whose close is the newest price.
+    def _gateway_price(symbol: str) -> float:
+        candle = live_provider.live_candle(symbol) if live_provider is not None else None
+        return float(candle.close) if candle is not None else 0.0
+
+    cn_gateway = build_ths_gateway(settings, price_feed=_gateway_price)
+    # Same reasoning for crypto: one signed client, one set of cached symbol
+    # filters, shared by the request path and the reconciler.
+    from app.modules.brokers.binance import build_broker
+
+    crypto_broker = build_broker(settings)
     if settings.runtime_enabled and (market_engine is not None or cn_market_engine is not None):
         from app.modules.runtime.engine import StrategyRuntimeEngine
         from app.modules.trading.engine import TradingEngine
@@ -137,9 +150,17 @@ def create_app(settings: Settings | None = None, database: Database | None = Non
         from app.modules.portfolio.engine import PortfolioEngine
 
         portfolio_engine = PortfolioEngine(db, settings, market_engine=live_provider)
+    # The reconciler is deliberately outside the block above. Mirroring live
+    # fills is a money-safety duty, not a strategy feature: with
+    # LQ_RUNTIME_ENABLED=false (the supported "manual live orders only" mode)
+    # or no market engine, it was never constructed, so live orders never moved
+    # off `open` and their cash stayed reserved for ever.
+    if settings.live_trading_enabled and (cn_gateway is not None or crypto_broker is not None):
         from app.modules.brokers.reconciler import LiveReconciler
 
-        reconcile_engine = LiveReconciler(db, settings, gateway=cn_gateway)
+        reconcile_engine = LiveReconciler(
+            db, settings, gateway=cn_gateway, broker=crypto_broker
+        )
 
     @asynccontextmanager
     async def lifespan(app: FastAPI):
@@ -209,6 +230,7 @@ def create_app(settings: Settings | None = None, database: Database | None = Non
     app.state.portfolio_engine = portfolio_engine
     app.state.reconcile_engine = reconcile_engine
     app.state.cn_gateway = cn_gateway
+    app.state.crypto_broker = crypto_broker
 
     app.add_middleware(RequestContextMiddleware, metrics=app.state.metrics)
     app.add_middleware(

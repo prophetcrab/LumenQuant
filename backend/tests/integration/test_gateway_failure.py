@@ -191,7 +191,7 @@ def test_reconciler_keeps_polling_after_a_status_failure(live_client):
     reconciler = LiveReconciler(db, settings, gateway=app.state.cn_gateway)
     polled: list[str] = []
 
-    def flaky(broker_order_id: str):
+    def flaky(broker_order_id: str, *, symbol: str = ""):
         polled.append(broker_order_id)
         if broker_order_id == "b1":
             raise RuntimeError("gateway hiccup")

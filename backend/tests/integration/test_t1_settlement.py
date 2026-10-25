@@ -14,7 +14,6 @@ from sqlalchemy import select
 
 from app.core.config import Settings
 from app.core.db import Database
-from app.modules.accounts.models import Account
 from app.modules.accounts.service import AccountService
 from app.modules.market.models import Candle, Symbol
 from app.modules.market.service import MarketService
@@ -115,14 +114,16 @@ def test_settlement_runs_without_a_cn_engine(real_mode_db):
             db, settings, market_engine=_NoCnProvider(), bus=None
         )
         # Force the duty to run regardless of the wall clock's session state.
-        import app.modules.trading.engine as engine_module
+        # The release itself now lives in `brokers.settlement`, because the live
+        # reconciler performs the same duty when this engine is not running.
+        import app.modules.brokers.settlement as settlement_module
 
-        original = engine_module.is_session_open
-        engine_module.is_session_open = lambda _ts=None: True
+        original = settlement_module.is_session_open
+        settlement_module.is_session_open = lambda _ts=None: True
         try:
             engine._session_duties(session)
         finally:
-            engine_module.is_session_open = original
+            settlement_module.is_session_open = original
 
         session.refresh(position)
         assert position.quantity == pytest.approx(100)

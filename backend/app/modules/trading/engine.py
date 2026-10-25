@@ -11,13 +11,11 @@ import logging
 import time
 from datetime import date
 
-from sqlalchemy import select
-
 from app.core.config import Settings
 from app.core.db import Database
 from app.modules.accounts.service import AccountService
-from app.modules.cn.calendar import day_key, is_session_open
-from app.modules.market.models import Symbol
+from app.modules.brokers import settlement
+from app.modules.cn.calendar import day_key
 from app.modules.market.service import MarketService
 from app.modules.risk.policy import RiskLimits, RiskPolicy
 from app.modules.risk.service import RiskService
@@ -106,6 +104,10 @@ class TradingEngine:
         return meant T+1 was *never* released: a position bought today stayed
         unsellable forever because nothing else clears `available_quantity`.
         Falling back to the wall clock keeps the duty running in both modes.
+
+        The release itself lives in `brokers.settlement` because the live
+        reconciler runs the same duty when this engine is not constructed at all
+        (`LQ_RUNTIME_ENABLED=false`).
         """
         cn_engine = getattr(self.market_engine, "cn", None)
         clock = getattr(cn_engine, "clock", None)
@@ -113,33 +115,14 @@ class TradingEngine:
         today = day_key(now)
         if self._last_settlement_day == today:
             return
-        if not is_session_open(now):
+        if not settlement.session_is_open(now):
             return
-        rows = session.scalars(
-            select(Symbol).where(Symbol.market == "cn_stock")
-        ).all()
-        from app.modules.accounts.models import Account
-        from app.modules.trading.models import Position
-
-        # Only A-shares are T+1. Releasing every position would silently unlock
-        # anything that happens to have available < quantity for another reason.
-        cn_account_ids = session.scalars(
-            select(Account.id).where(Account.market == "cn_stock")
-        ).all()
-        positions = session.scalars(
-            select(Position).where(
-                Position.quantity > Position.available_quantity,
-                Position.account_id.in_(cn_account_ids),
-            )
-        ).all()
-        for position in positions:
-            position.available_quantity = position.quantity
-        if cn_engine is not None:
-            for row in rows:
-                last = cn_engine.prev_close(row.code)
-                if last:
-                    row.prev_close = last
-        session.commit()
+        positions, holds = settlement.release_t1(session, now_ms=now)
+        settlement.refresh_prev_close(session, cn_engine)
         self._last_settlement_day = today
-        if positions:
-            logger.info("T+1 settlement: released %s position(s)", len(positions))
+        if positions or holds:
+            logger.info(
+                "T+1 settlement: released %s position(s), %s hold(s)",
+                positions,
+                holds,
+            )
