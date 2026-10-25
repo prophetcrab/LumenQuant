@@ -164,13 +164,15 @@ export type BacktestMetrics = {
   initial_capital: number;
   final_equity: number;
   total_return_pct: number;
-  cagr_pct: number;
+  /** Null when the sample is shorter than the annualisation threshold: a
+   *  fortnight of 15m bars compounded to a year is an artefact, not a result. */
+  cagr_pct: number | null;
   max_drawdown_pct: number;
   max_drawdown_duration_bars: number;
-  volatility_pct: number;
-  sharpe: number;
-  sortino: number;
-  calmar: number;
+  volatility_pct: number | null;
+  sharpe: number | null;
+  sortino: number | null;
+  calmar: number | null;
   trade_count: number;
   win_rate_pct: number;
   profit_factor: number | null;
@@ -183,6 +185,9 @@ export type BacktestMetrics = {
   buy_hold_pct: number;
   market?: string;
   periods_per_year?: number;
+  /** Span the sample covers, in calendar days (crypto) or trading days (A股). */
+  sample_days?: number;
+  annualised_available?: boolean;
   blocked_orders?: {
     limit_up: number;
     limit_down: number;
@@ -196,9 +201,11 @@ export type BacktestMetrics = {
     strategy_return_pct: number;
     benchmark_return_pct: number;
     excess_return_pct: number;
+    /** Annualised; 0 when the sample is too short to annualise. */
     alpha_pct: number;
     beta: number;
     correlation: number;
+    /** Annualised; 0 when the sample is too short to annualise. */
     tracking_error_pct: number;
     information_ratio: number;
     up_capture_pct: number;
@@ -421,6 +428,9 @@ export type CnSession = {
   session_open: number;
   session_close: number;
   next_open: number;
+  /** false when the engine follows the real Beijing wall clock. */
+  simulated?: boolean;
+  source?: string;
 };
 
 export type CalendarCoverage = {
@@ -606,20 +616,6 @@ export type ThsReconcile = {
   }[];
 };
 
-export type BrokerChannels = {
-  live_trading_enabled: boolean;
-  channels: Record<
-    string,
-    {
-      market: string;
-      ready: boolean;
-      credentials_configured?: boolean;
-      gateway_configured?: boolean;
-      mock_enabled?: boolean;
-    }
-  >;
-};
-
 export type AssistantTool = {
   name: string;
   description: string;
@@ -692,11 +688,22 @@ export type RiskOverview = {
   warnings: string[];
 };
 
+export type BrokerChannel = {
+  market: string;
+  ready: boolean;
+  credentials_configured?: boolean;
+  gateway_configured?: boolean;
+  mock_enabled?: boolean;
+};
+
 export type BrokerStatus = {
   live_trading_enabled: boolean;
-  broker: string;
-  credentials_configured: boolean;
-  ready: boolean;
+  live_auto_trading_enabled: boolean;
+  /** True only when the fill-polling loop is actually running. Credentials
+   *  being configured does not mean a live order will ever reach `filled`. */
+  reconciler_running: boolean;
+  reconcile_seconds: number;
+  channels: Record<"binance" | "ths", BrokerChannel>;
 };
 
 export type Analytics = {
@@ -750,7 +757,8 @@ export type OptimisationCandidate = {
   params: Record<string, number | boolean | string>;
   total_return_pct: number;
   max_drawdown_pct: number;
-  sharpe: number;
+  /** Null when the sample is too short for an annualised Sharpe to mean anything. */
+  sharpe: number | null;
   trade_count: number;
   win_rate_pct: number;
   profit_factor: number | null;
@@ -800,7 +808,8 @@ export type WalkForwardWindow = {
   test_return_pct: number;
   test_drawdown_pct: number;
   test_trades: number;
-  test_sharpe: number;
+  /** Null when the test window is too short to annualise. */
+  test_sharpe: number | null;
   degradation_pct: number;
 };
 
@@ -955,6 +964,9 @@ export const api = {
       speed: number;
       timeframe: string;
       tick_seconds: number;
+      /** false when a real public feed owns the series (wall-clock time). */
+      simulated?: boolean;
+      source?: string;
       cn?: {
         open: boolean;
         day: string;
@@ -1298,7 +1310,7 @@ export const api = {
       method: "POST",
       body: JSON.stringify({ codes, sync }),
     }),
-  brokerChannels: () => request<BrokerChannels>("/brokers/status"),
+  brokerChannels: () => request<BrokerStatus>("/brokers/status"),
   thsHealth: () => request<ThsHealth>("/brokers/ths/health"),
   thsPositions: () => request<ThsPosition[]>("/brokers/ths/positions"),
   thsReconcile: (accountId: string) =>

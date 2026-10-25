@@ -86,9 +86,12 @@ export function MarketsPage() {
           }
           subtitle={
             (cryptoSource.data?.mode === "realtime-poll" ? "Binance 实时" : "模拟行情") +
-            ` · ${timeframeLabel(timeframe)} · 本地时间 ${
-              clock.data ? timeLabel(clock.data.simulated_now) : "—"
-            }`
+            ` · ${timeframeLabel(timeframe)} · ${
+              // Label the clock by what it actually is. Calling a 60x simulated
+              // timestamp "本地时间" made the chart look hours ahead of the wall
+              // clock for no visible reason; with a real feed it is real time.
+              clock.data?.simulated === false ? "交易所时间" : "模拟时钟"
+            } ${clock.data ? timeLabel(clock.data.simulated_now) : "—"}`
           }
           actions={
             <>

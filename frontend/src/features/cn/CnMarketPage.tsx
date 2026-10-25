@@ -65,6 +65,11 @@ export function CnMarketPage() {
               {session.data?.open
                 ? timeLabel(session.data.session_close) + " 收盘"
                 : "下一开盘 " + (session.data ? timeLabel(session.data.next_open) : "—")}
+              {/* With the synthetic feed the gate above is the 60x simulated
+                  clock, which can say "交易中" while real A-shares are closed.
+                  Live orders are judged against the wall clock, so the mismatch
+                  otherwise shows up as a rejected order out of nowhere. */}
+              {session.data?.simulated === false ? null : "（模拟时钟）"}
             </span>
           }
         />

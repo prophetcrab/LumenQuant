@@ -182,9 +182,20 @@ export function Layout({ children }: { children: ReactNode }) {
 function ClockSummary({
   clock,
 }: {
-  clock?: { simulated_now: number; cn?: { simulated?: boolean; day: string; session: string } };
+  clock?: {
+    simulated_now: number;
+    simulated?: boolean;
+    source?: string;
+    cn?: { simulated?: boolean; day: string; session: string };
+  };
 }) {
   if (!clock) return <>时钟 —</>;
+  // A real feed reports `simulated: false` and follows the wall clock. Labelling
+  // that "模拟时钟" (or a simulated timestamp without saying so) is what made the
+  // page look like it had a broken system clock.
+  if (clock.simulated === false) {
+    return <>实时 · {timeLabel(clock.simulated_now)}</>;
+  }
   if (clock.cn && clock.cn.simulated === false) {
     return (
       <>

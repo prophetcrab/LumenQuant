@@ -96,9 +96,22 @@ class RealtimeSessionClock:
         return self._engine.now_ms()
 
     def info(self) -> dict:
-        payload = session_state(self.now_ms()).as_dict()
+        """Same shape as the synthetic engine's clock payload.
+
+        `session_state()` alone omits `simulated_now` and `speed`, which the
+        synthetic engine always provides. Callers that read one engine's payload
+        therefore read a different shape from the other's — and `/api/market/clock`
+        is consumed by a single frontend card, so a missing `simulated_now` is a
+        missing field, not an absent feature.
+        """
+        now = self.now_ms()
+        payload = session_state(now).as_dict()
         payload.update(
             {
+                "simulated_now": now,
+                "speed": 1.0,
+                "timeframe": "15m",
+                "market": "cn_stock",
                 "source": "tencent-realtime",
                 "simulated": False,
                 "quote_poll_seconds": self._engine.poll_seconds,
