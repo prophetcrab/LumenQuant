@@ -266,7 +266,15 @@ class MarketService:
         timeframe: str = BASE_TIMEFRAME,
         limit: int = 300,
         closed_only: bool = False,
+        end_ms: int | None = None,
     ) -> list[CandlePoint]:
+        """Bars for one symbol.
+
+        `end_ms` makes the window explicit: without it the answer is always "the
+        newest N bars", so a study cannot ask for "2019-2021" and a walk-forward
+        test cannot hold out a later period. When it is given, `limit` counts
+        backwards from that instant instead of from now.
+        """
         if timeframe not in SUPPORTED_TIMEFRAMES:
             raise ValidationError(f"timeframe must be one of {', '.join(SUPPORTED_TIMEFRAMES)}")
         # Matches the backtest contract (`bars <= 20_000`). The old 5,000 cap
@@ -291,14 +299,14 @@ class MarketService:
             # than `limit` native bars, and aggregating from a base series that
             # does not exist returns *nothing* — an empty chart where the data was
             # actually present.
-            points = self._read(symbol, timeframe, limit=limit)
+            points = self._read(symbol, timeframe, limit=limit, end_ms=end_ms)
             if closed_only:
                 points = self._drop_in_progress(row, timeframe, points)
             return points
 
         ratio = timeframe_ms(timeframe) // timeframe_ms(base_tf)
         needed = min(limit * ratio + ratio, MAX_AGGREGATE_BASE_BARS)
-        points = self._read(symbol, base_tf, limit=needed)
+        points = self._read(symbol, base_tf, limit=needed, end_ms=end_ms)
         if self.live is not None and not closed_only:
             current = self.live.live_candle(symbol)
             if current is not None:

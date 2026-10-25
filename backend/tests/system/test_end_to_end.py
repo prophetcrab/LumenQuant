@@ -89,7 +89,7 @@ def test_full_trader_workflow(live_app):
 
         # 5) Strategy catalog + signal preview + backtest for every strategy.
         catalog = client.get("/api/strategies").json()
-        assert len(catalog) == 10
+        assert len(catalog) == 11
         # The fixture seeds 600 bars. A strategy whose warmup exceeds that is
         # refused by the data guard — correct behaviour, covered separately — so
         # here every strategy that *can* run must return a sane result.

@@ -7,6 +7,7 @@ from sqlalchemy.orm import Session
 
 from app.api.deps import get_session
 from app.api.wiring import build_market, settings_of
+from app.modules.cn.rules import limit_pct
 from app.modules.market.service import MarketService
 from app.modules.screener.schemas import AddBatchRequest, AddSymbolRequest, ScreenFilter
 from app.modules.screener.service import ScreenerService, preset_filters
@@ -201,30 +202,40 @@ def add_symbols(
     settings = settings_of(request)
     market: MarketService = build_market(request, session)
 
+    # Name and ST flag come from the screen that produced the candidate. Writing
+    # the numeric code as the name and defaulting `is_st=False` meant an ST stock
+    # was registered as a normal one, so its 5% limit band never applied — the
+    # board alone decides 10%/20%.
     cleaned: list[str] = []
     rejected: list[dict] = []
-    for raw in payload.codes:
-        code = raw.strip().upper()
+    for item in payload.normalised_items():
+        code = item.code.strip().upper()
         if not code.endswith((".SH", ".SZ", ".BJ")):
-            rejected.append({"code": raw, "reason": "缺少交易所后缀"})
+            rejected.append({"code": item.code, "reason": "缺少交易所后缀"})
             continue
         if code not in cleaned:
             cleaned.append(code)
 
+    by_code = {
+        item.code.strip().upper(): item for item in payload.normalised_items()
+    }
     existing = {view.code for view in market.list_symbols(market="cn_stock")}
     created_codes = [code for code in cleaned if code not in existing]
     for code in created_codes:
+        meta = by_code.get(code)
         market.add_symbol(
             code=code,
-            name=code.split(".")[0],
+            name=(meta.name if meta and meta.name else code.split(".")[0]),
             initial_price=1.0,
             market="cn_stock",
             board=_board_of(code),
             prev_close=0.0,
+            is_st=bool(meta.is_st) if meta else False,
+            limit_pct_value=limit_pct(_board_of(code), bool(meta.is_st) if meta else False),
         )
 
     result = {
-        "requested": len(payload.codes),
+        "requested": len(payload.normalised_items()),
         "created": len(created_codes),
         "already_present": len(cleaned) - len(created_codes),
         "synced": 0,

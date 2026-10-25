@@ -40,6 +40,7 @@ def run_backtest(
         bars=payload.bars,
         params=payload.params,
         config=payload.config,
+        end_ms=payload.end_ms,
     )
 
 

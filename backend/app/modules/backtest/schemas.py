@@ -14,6 +14,11 @@ class BacktestRequest(BaseModel):
     bars: int = Field(default=1500, ge=50, le=20_000)
     params: dict[str, Any] = Field(default_factory=dict)
     config: dict[str, Any] = Field(default_factory=dict)
+    # Scope the window to bars *ending* at this epoch-ms instant. Without it a
+    # backtest can only look at the newest N bars, so a study cannot hold out a
+    # later period and a walk-forward test cannot train on the past and test on
+    # the future.
+    end_ms: int | None = Field(default=None, ge=0)
 
 
 class OptimiseRequest(BaseModel):

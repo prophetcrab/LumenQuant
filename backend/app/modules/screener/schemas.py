@@ -103,14 +103,39 @@ class AddSymbolRequest(BaseModel):
     name: str = ""
 
 
+class AddBatchItem(BaseModel):
+    """One candidate to register, with the metadata the screen already knows."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    code: str = Field(min_length=6, max_length=12)
+    name: str = ""
+    # The screener infers this from the name; registering without it lost the
+    # flag, so an ST stock was later treated as a normal one and its 5% limit
+    # band never applied.
+    is_st: bool = False
+
+
 class AddBatchRequest(BaseModel):
     """Register several screened names in one action.
 
     The UI offers 50 candidates; clicking "add" fifty times at ~1.5s each is two
     minutes of waiting for something the backend can do in a single sync pass.
+
+    Accepts either bare code strings (legacy) or objects carrying name/is_st.
     """
 
     model_config = ConfigDict(extra="forbid")
 
-    codes: list[str] = Field(min_length=1, max_length=50)
+    codes: list[str] = Field(default_factory=list, max_length=50)
+    items: list[AddBatchItem] = Field(default_factory=list, max_length=50)
     sync: bool = True
+
+    def normalised_items(self) -> list[AddBatchItem]:
+        """Every submitted entry, duplicates included.
+
+        Callers report `requested` as the number of entries the client sent, so
+        collapsing duplicates here would make that count disagree with the
+        request. De-duplication happens where registration happens.
+        """
+        return list(self.items) + [AddBatchItem(code=code) for code in self.codes]

@@ -30,7 +30,7 @@ def test_catalog_and_detail(strategy_client):
     response = strategy_client.get("/api/strategies")
     assert response.status_code == 200
     catalog = response.json()
-    assert len(catalog) == 10
+    assert len(catalog) == 11
     sma = next(item for item in catalog if item["key"] == "sma_cross")
     assert sma["defaults"]["fast"] == 10
     assert sma["defaults"]["slow"] == 30

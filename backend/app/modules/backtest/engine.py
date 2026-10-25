@@ -22,7 +22,7 @@ from typing import Any
 from app.core.money import round_money, round_price, round_qty
 from app.modules.backtest.metrics import TradeRecord, compute_metrics
 from app.modules.cn.fees import CnFeeSchedule
-from app.modules.cn.rules import price_band, round_tick
+from app.modules.cn.rules import build_backtest_band, round_tick
 from app.modules.market.service_types import CandlePoint
 from app.modules.risk.stops import StopRules, evaluate
 from app.modules.strategies.base import Strategy, StrategyParams
@@ -96,9 +96,18 @@ class BacktestEngine:
         return round_money(notional * self.config.fee_bps / 10_000.0)
 
     def _band(self, prev_close: float):
+        """Daily limit band for the symbol under test.
+
+        The percentage comes from `config.limit_pct`, which the service layer
+        fills from the symbol's board and ST flag. Hard-coding `("main", False)`
+        here meant every 创业板/科创板 symbol was compared against a 10% band:
+        a legitimate 15% move was treated as "limit-up, no counterparty" and the
+        order was silently blocked. Measured on real data, that cost 300017.SZ
+        six blocked orders, 300750.SZ and 688981.SH two each.
+        """
         if self.config.market != "cn_stock" or self.config.limit_pct <= 0:
             return None
-        return price_band(prev_close, "main", False, self.config.tick_size)
+        return build_backtest_band(prev_close, self.config.limit_pct, self.config.tick_size)
 
     def _day(self, ts_ms: int) -> str:
         return datetime.fromtimestamp(ts_ms / 1000, timezone.utc).strftime("%Y-%m-%d")
@@ -131,7 +140,10 @@ class BacktestEngine:
         # (release_day, amount) pairs; `spendable` is what entries may use.
         settling: list[tuple[str, float]] = []
         position: _OpenPosition | None = None
-        pending: str | None = None
+        # (action, strength). Strength scales the entry size, which is the
+        # only channel a strategy has for expressing "how much" rather than
+        # "whether". It was previously discarded, so every entry was full size.
+        pending: tuple[str, float] | None = None
         trades: list[TradeRecord] = []
         equity_points: list[dict] = []
         equity_values: list[float] = []
@@ -176,7 +188,7 @@ class BacktestEngine:
             at_limit_down = band is not None and candle.open <= band.down + cfg.tick_size / 2
 
             # 1) Execute the previous bar's pending signal at this bar's open.
-            if pending == "buy" and position is None:
+            if pending is not None and pending[0] == "buy" and position is None:
                 if at_limit_up:
                     blocked["limit_up"] += 1  # cannot buy a locked limit-up open
                 else:
@@ -188,7 +200,7 @@ class BacktestEngine:
                         blocked["insufficient_capital"] += 1
                         pending = None
                         continue
-                    budget = spendable * cfg.position_pct
+                    budget = spendable * cfg.position_pct * pending[1]
                     # Reserve the fee (which may be a fixed minimum) before sizing.
                     gross = budget / price
                     gross = (budget - self._fee("buy", gross * price)) / price
@@ -214,7 +226,7 @@ class BacktestEngine:
                                 candle.time, price, quantity, fee, self._day(candle.time),
                                 peak_price=price,
                             )
-            elif pending == "sell" and position is not None:
+            elif pending is not None and pending[0] == "sell" and position is not None:
                 if at_limit_down:
                     blocked["limit_down"] += 1
                 elif cfg.t_plus_one and position.entry_day == self._day(candle.time):
@@ -283,9 +295,9 @@ class BacktestEngine:
             if index >= strategy.warmup(params):
                 signal = strategy.evaluate(state, index)
                 if signal.action == "buy" and position is None:
-                    pending = "buy"
+                    pending = ("buy", max(0.0, min(1.0, signal.strength)))
                 elif signal.action == "sell" and position is not None:
-                    pending = "sell"
+                    pending = ("sell", max(0.0, min(1.0, signal.strength)))
 
         # Close any open position at the final close so metrics are comparable.
         # Settling cash counts as equity here for the same reason as in the loop.

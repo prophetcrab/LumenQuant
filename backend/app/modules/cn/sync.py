@@ -22,9 +22,10 @@ from sqlalchemy import delete, select
 from sqlalchemy.orm import Session
 
 from app.core.audit import record_audit
+from app.modules.cn.adjust import forward_adjusted
 from app.modules.cn.calendar import day_key, is_trading_day
 from app.modules.cn.rules import limit_pct
-from app.modules.cn.sources.base import MarketDataSource, SourceUnavailable
+from app.modules.cn.sources.base import BarBatch, MarketDataSource, SourceUnavailable
 from app.modules.market.models import Candle, Symbol
 
 logger = logging.getLogger(__name__)
@@ -122,6 +123,44 @@ class CnDataSyncService:
         self.session.commit()
         return report
 
+    def _fetch_daily(self, code: str, *, daily_limit: int) -> BarBatch:
+        """Forward-adjusted daily bars.
+
+        Stored daily history feeds every indicator, so it must be adjusted: an
+        unadjusted split shows up as a −67% day (measured on 002594.SZ, which
+        then dragged MA20 down for 20 sessions).
+
+        Two routes, tried in order:
+
+        1. the source's own adjusted series (exchange grade), when it answers;
+        2. local reconstruction from raw gaps (`cn.adjust`) — the exchange's
+           adjusted endpoint is rate-limited to the point of being unusable for
+           bulk imports (measured 2026-10: every `fqkline` request from one IP
+           returned HTTP 501 while the raw endpoint kept working).
+
+        Both anchor the newest bar at its real price, so `prev_close` and the
+        limit band derived from it stay correct.
+        """
+        adjusted = getattr(self.source, "adjusted_daily_bars", None)
+        if adjusted is not None:
+            try:
+                return adjusted(code, limit=daily_limit)
+            except SourceUnavailable as exc:
+                logger.info(
+                    "adjusted daily unavailable for %s (%s); deriving locally",
+                    code,
+                    exc,
+                )
+        raw = self.source.daily_bars(code, limit=daily_limit)
+        if not raw.bars:
+            return raw
+        result = forward_adjusted(raw.bars)
+        if result.events:
+            logger.info(
+                "derived %s adjustment event(s) for %s", len(result.events), code
+            )
+        return BarBatch(code=raw.code, timeframe=raw.timeframe, bars=result.bars)
+
     def _sync_one(
         self,
         result: SymbolSyncResult,
@@ -134,7 +173,7 @@ class CnDataSyncService:
         if symbol is None:
             raise SourceUnavailable(f"本地未登记标的 {code}")
 
-        daily = self.source.daily_bars(code, limit=daily_limit)
+        daily = self._fetch_daily(code, daily_limit=daily_limit)
         # Real data supersedes synthetic history. Price levels differ entirely
         # (synthetic ~1695, real ~1331 for the same code), so mixing them makes
         # change% and limit bands meaningless. A successful fetch replaces the

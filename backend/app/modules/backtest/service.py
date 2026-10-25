@@ -45,6 +45,7 @@ class BacktestService:
         bars: int,
         params: dict | None = None,
         config: dict | None = None,
+        end_ms: int | None = None,
     ) -> dict:
         if timeframe not in SUPPORTED_TIMEFRAMES:
             raise ValidationError(f"unsupported timeframe {timeframe}")
@@ -73,8 +74,11 @@ class BacktestService:
 
         # closed_only: an in-progress daily bar keeps moving, so including it would
         # make the same backtest return different results depending on when it ran.
+        # `end_ms` scopes the window: with it, "1500 bars" means 1500 bars
+        # ending at that instant, which is what a walk-forward test needs (train
+        # on 2019-2021, test on 2022) rather than "the newest 1500 bars".
         candles = self.market.candles(
-            symbol, timeframe=timeframe, limit=bars, closed_only=True
+            symbol, timeframe=timeframe, limit=bars, closed_only=True, end_ms=end_ms
         )
         required = strategy.warmup(parsed) + 3
         if len(candles) < required:
