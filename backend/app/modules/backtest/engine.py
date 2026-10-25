@@ -330,6 +330,15 @@ class BacktestEngine:
             )
         if not trades and not warnings:
             warnings.append("区间内没有产生可执行交易（策略未触发或被规则拦截）。")
+        # Annualised figures below half a year are extrapolation, not a forecast.
+        # Saying so once is better than letting the reader discover that
+        # "年化收益" was computed from two weeks of bars.
+        if not metrics.get("annualised_available", True):
+            warnings.append(
+                f"样本仅 {metrics.get('sample_days', 0):.0f} 天，不足以年化："
+                "年化收益、年化波动、Sharpe、Sortino、Calmar、Alpha 已置空。"
+                "请增加 K 线数量或改用更长周期后再看年化指标。"
+            )
         # Aggregate metrics only compare the first and last equity points, so a
         # curve that collapses and recovers mid-series looks healthy. Flag any
         # single bar whose return could not plausibly come from price movement.

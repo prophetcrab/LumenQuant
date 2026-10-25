@@ -63,7 +63,8 @@ class WindowResult:
     test_return_pct: float = 0.0
     test_drawdown_pct: float = 0.0
     test_trades: int = 0
-    test_sharpe: float = 0.0
+    # None when the test window is too short to annualise.
+    test_sharpe: float | None = 0.0
     degradation_pct: float = 0.0
 
     def as_dict(self) -> dict:
@@ -78,7 +79,9 @@ class WindowResult:
             "test_return_pct": round(self.test_return_pct, 4),
             "test_drawdown_pct": round(self.test_drawdown_pct, 4),
             "test_trades": self.test_trades,
-            "test_sharpe": round(self.test_sharpe, 4),
+            "test_sharpe": None
+            if self.test_sharpe is None
+            else round(self.test_sharpe, 4),
             "degradation_pct": round(self.degradation_pct, 4),
         }
 
@@ -245,7 +248,7 @@ class WalkForwardService:
             window.test_return_pct = tested.metrics["total_return_pct"]
             window.test_drawdown_pct = tested.metrics["max_drawdown_pct"]
             window.test_trades = tested.metrics["trade_count"]
-            window.test_sharpe = tested.metrics["sharpe"]
+            window.test_sharpe = tested.metrics.get("sharpe")
             window.degradation_pct = window.train_return_pct - window.test_return_pct
             report.windows.append(window)
 

@@ -67,7 +67,8 @@ class CandidateResult:
     params: dict[str, Any]
     total_return_pct: float = 0.0
     max_drawdown_pct: float = 0.0
-    sharpe: float = 0.0
+    # None when the optimiser's sample is too short to annualise.
+    sharpe: float | None = 0.0
     trade_count: int = 0
     win_rate_pct: float = 0.0
     profit_factor: float | None = None
@@ -83,7 +84,7 @@ class CandidateResult:
             "params": self.params,
             "total_return_pct": round(self.total_return_pct, 4),
             "max_drawdown_pct": round(self.max_drawdown_pct, 4),
-            "sharpe": round(self.sharpe, 4),
+            "sharpe": None if self.sharpe is None else round(self.sharpe, 4),
             "trade_count": self.trade_count,
             "win_rate_pct": round(self.win_rate_pct, 4),
             "profit_factor": self.profit_factor,
@@ -140,12 +141,23 @@ class OptimisationReport:
 
 # Scoring: return per unit of drawdown, with a Sharpe bonus. Raw return alone
 # rewards strategies that take enormous risk.
+#
+# The Sharpe term is optional: on a sample too short to annualise, `sharpe` comes
+# back as None, and scoring must fall back to the non-annualised ratios instead of
+# crashing on a comparison with None. Ranking is unaffected in practice — every
+# candidate in one grid shares the same sample length, so they are withheld
+# together and the comparison stays like-for-like.
+def _sharpe_of(metrics: dict) -> float:
+    value = metrics.get("sharpe")
+    return 0.0 if value is None else float(value)
+
+
 OBJECTIVES = {
     "return": lambda m: m["total_return_pct"],
-    "sharpe": lambda m: m["sharpe"],
+    "sharpe": _sharpe_of,
     "calmar": lambda m: safe_div(m["total_return_pct"], max(m["max_drawdown_pct"], 0.01)),
     "risk_adjusted": lambda m: safe_div(m["total_return_pct"], max(m["max_drawdown_pct"], 0.01))
-    + 0.5 * m["sharpe"],
+    + 0.5 * _sharpe_of(m),
 }
 
 

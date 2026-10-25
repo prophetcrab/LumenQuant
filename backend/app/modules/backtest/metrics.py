@@ -63,6 +63,32 @@ def periods_per_year(timeframe: str, market: str = "crypto") -> float:
     return float(CRYPTO_BARS_PER_YEAR.get(timeframe, 365 * 24))
 
 
+# How much history an annualised figure needs before it says anything useful.
+# Below one year, compounding is extrapolation: the same +187% that is real over
+# 15 days becomes a 5e13% "annual return", and every ratio built on it (Sharpe,
+# Sortino, Calmar, alpha) is scaled by the same factor. Half a year is the point
+# where a run covers at least one full seasonal cycle in practice; anything
+# shorter reports the unannualised total return and leaves the annualised fields
+# empty.
+MIN_YEARS_FOR_ANNUALISED = 0.5
+
+# Below this per-bar standard deviation, a Sharpe/Sortino is dividing by rounding
+# noise rather than measuring risk. 1e-9 per bar is far under any real market's
+# variation (a 15m BTC bar rarely moves less than 1e-4) and far above float error.
+MIN_VOLATILITY_FOR_RATIO = 1e-9
+
+
+def _annualised(value: float, meaningful: bool) -> float | None:
+    """Serialize an annualised metric, or None when the sample is too short.
+
+    `None` rather than NaN: the metric travels through JSON, where NaN is not
+    valid, and the UI renders a missing value as "—" instead of a number.
+    """
+    if not meaningful or math.isnan(value) or math.isinf(value):
+        return None
+    return round(value, 4)
+
+
 def _std(values: list[float]) -> float:
     if len(values) < 2:
         return 0.0
@@ -90,10 +116,22 @@ def compute_metrics(
     ppy = periods_per_year(timeframe, market)
     mean_return = sum(returns) / len(returns) if returns else 0.0
     volatility = _std(returns)
-    sharpe = safe_div(mean_return, volatility) * math.sqrt(ppy) if volatility else 0.0
+    # A volatility floor, not just a zero check. A curve with almost no
+    # bar-to-bar variation (a straight-line synthetic series, or a strategy that
+    # sat in cash) yields a denominator of ~1e-17 and a Sharpe in the 1e14 range.
+    # That is division by rounding noise, not a risk-adjusted result.
+    sharpe = (
+        safe_div(mean_return, volatility) * math.sqrt(ppy)
+        if volatility > MIN_VOLATILITY_FOR_RATIO
+        else 0.0
+    )
     downside = [r for r in returns if r < 0]
     downside_std = _std(downside) if len(downside) > 1 else 0.0
-    sortino = safe_div(mean_return, downside_std) * math.sqrt(ppy) if downside_std else 0.0
+    sortino = (
+        safe_div(mean_return, downside_std) * math.sqrt(ppy)
+        if downside_std > MIN_VOLATILITY_FOR_RATIO
+        else 0.0
+    )
 
     peak = equity[0] if equity else initial
     max_drawdown = 0.0
@@ -112,7 +150,16 @@ def compute_metrics(
     growth = safe_div(final, initial) if initial else 0.0
     years = safe_div(len(equity), ppy)
     cagr = growth ** (1 / years) - 1 if growth > 0 and years > 0 else 0.0
-    calmar = safe_div(cagr, max_drawdown) if max_drawdown else 0.0
+    # Compounding a few days of returns up to a year is arithmetic, not a
+    # forecast. 1500 15m bars is 15.6 days; +187% over that span extrapolates to
+    # ~5e13 % a year, and every annualised figure (CAGR, volatility, Sharpe,
+    # Sortino, Calmar, alpha) inherits the same distortion. Below the threshold
+    # the annualised values are withheld rather than shown as if they meant
+    # something — the unannualised total return is still exact.
+    annualised_is_meaningful = years >= MIN_YEARS_FOR_ANNUALISED
+    if not annualised_is_meaningful:
+        cagr = float("nan")
+    calmar = safe_div(cagr, max_drawdown) if max_drawdown and annualised_is_meaningful else float("nan")
 
     wins = [t for t in trades if t.pnl > 0]
     losses = [t for t in trades if t.pnl <= 0]
@@ -129,13 +176,13 @@ def compute_metrics(
         "initial_capital": round(initial, 2),
         "final_equity": round(final, 2),
         "total_return_pct": round(total_return * 100, 4),
-        "cagr_pct": round(cagr * 100, 4),
+        "cagr_pct": _annualised(cagr * 100, annualised_is_meaningful),
         "max_drawdown_pct": round(max_drawdown * 100, 4),
         "max_drawdown_duration_bars": max_drawdown_duration,
-        "volatility_pct": round(volatility * math.sqrt(ppy) * 100, 4),
-        "sharpe": round(sharpe, 4),
-        "sortino": round(sortino, 4),
-        "calmar": round(calmar, 4),
+        "volatility_pct": _annualised(volatility * math.sqrt(ppy) * 100, annualised_is_meaningful),
+        "sharpe": _annualised(sharpe, annualised_is_meaningful),
+        "sortino": _annualised(sortino, annualised_is_meaningful),
+        "calmar": _annualised(calmar, annualised_is_meaningful),
         "trade_count": len(trades),
         "win_rate_pct": round(safe_div(len(wins), len(trades)) * 100, 4),
         "profit_factor": profit_factor_display,
@@ -156,6 +203,14 @@ def compute_metrics(
         "bars": len(equity),
         "market": market,
         "periods_per_year": round(ppy, 2),
+        # How long the sample actually spans, so the reader can judge whether an
+        # annualised figure is credible without recomputing it from `bars`.
+        # Calendar days for crypto; trading days for A-shares (where 242 days
+        # make a "year", so the two are not directly comparable).
+        "sample_days": round(
+            years * (CN_TRADING_DAYS if market == "cn_stock" else 365), 2
+        ),
+        "annualised_available": annualised_is_meaningful,
     }
 
 

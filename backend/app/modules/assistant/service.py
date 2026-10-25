@@ -118,11 +118,15 @@ class AssistantService:
             )
             calls.append({"tool": "run_backtest", "arguments": {"strategy": key}, "result": result})
             verdict = "跑赢" if result["total_return_pct"] > result["buy_hold_pct"] else "跑输"
+            # Sharpe is null when the sample is too short to annualise; format a
+            # placeholder rather than crashing on `None:.2f`.
+            sharpe = result.get("sharpe")
+            sharpe_text = "—" if sharpe is None else f"{sharpe:.2f}"
             return AssistantReply(
                 answer=(
                     f"{result['strategy']} 在 {result['symbol']} {result['timeframe']} 上回测 {result['total_return_pct']:.2f}%，"
                     f"同期买入持有 {result['buy_hold_pct']:.2f}%（{verdict}基准）。"
-                    f"最大回撤 {result['max_drawdown_pct']:.2f}%，Sharpe {result['sharpe']:.2f}，"
+                    f"最大回撤 {result['max_drawdown_pct']:.2f}%，Sharpe {sharpe_text}，"
                     f"{result['trade_count']} 笔交易，胜率 {result['win_rate_pct']:.1f}%。"
                 ),
                 mode="local",

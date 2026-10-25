@@ -113,6 +113,9 @@ class BacktestService:
             prices=[bar.close for bar in candles],
             periods_per_year=float(result.metrics.get("periods_per_year", 252) or 252),
             benchmark_name="买入持有",
+            # A short sample cannot support an annualised alpha either; the raw
+            # return comparison stays exact either way.
+            annualise=bool(result.metrics.get("annualised_available", True)),
         )
         comparison_points = equity_option_points(
             [point["equity"] for point in result.equity_curve],

@@ -16,7 +16,7 @@ comparison when no index series is available.
 from __future__ import annotations
 
 import math
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 
 from app.core.money import safe_div
 
@@ -28,16 +28,17 @@ class BenchmarkComparison:
     strategy_return_pct: float = 0.0
     benchmark_return_pct: float = 0.0
     excess_return_pct: float = 0.0
-    alpha_pct: float = 0.0
+    # Annualised figures are None when the sample is too short to annualise.
+    alpha_pct: float | None = 0.0
     beta: float = 0.0
     correlation: float = 0.0
-    tracking_error_pct: float = 0.0
-    information_ratio: float = 0.0
+    tracking_error_pct: float | None = 0.0
+    information_ratio: float | None = 0.0
     up_capture_pct: float = 0.0
     down_capture_pct: float = 0.0
     excess_win_rate_pct: float = 0.0
-    strategy_vol_pct: float = 0.0
-    benchmark_vol_pct: float = 0.0
+    strategy_vol_pct: float | None = 0.0
+    benchmark_vol_pct: float | None = 0.0
     verdict: str = ""
 
     def as_dict(self) -> dict:
@@ -47,16 +48,26 @@ class BenchmarkComparison:
             "strategy_return_pct": round(self.strategy_return_pct, 4),
             "benchmark_return_pct": round(self.benchmark_return_pct, 4),
             "excess_return_pct": round(self.excess_return_pct, 4),
-            "alpha_pct": round(self.alpha_pct, 4),
+            "alpha_pct": None
+            if self.alpha_pct is None
+            else round(self.alpha_pct, 4),
             "beta": round(self.beta, 4),
             "correlation": round(self.correlation, 4),
-            "tracking_error_pct": round(self.tracking_error_pct, 4),
-            "information_ratio": round(self.information_ratio, 4),
+            "tracking_error_pct": None
+            if self.tracking_error_pct is None
+            else round(self.tracking_error_pct, 4),
+            "information_ratio": None
+            if self.information_ratio is None
+            else round(self.information_ratio, 4),
             "up_capture_pct": round(self.up_capture_pct, 4),
             "down_capture_pct": round(self.down_capture_pct, 4),
             "excess_win_rate_pct": round(self.excess_win_rate_pct, 4),
-            "strategy_vol_pct": round(self.strategy_vol_pct, 4),
-            "benchmark_vol_pct": round(self.benchmark_vol_pct, 4),
+            "strategy_vol_pct": None
+            if self.strategy_vol_pct is None
+            else round(self.strategy_vol_pct, 4),
+            "benchmark_vol_pct": None
+            if self.benchmark_vol_pct is None
+            else round(self.benchmark_vol_pct, 4),
             "verdict": self.verdict,
         }
 
@@ -96,11 +107,17 @@ def compare(
     prices: list[float],
     periods_per_year: float,
     benchmark_name: str = "买入持有",
+    annualise: bool = True,
 ) -> BenchmarkComparison:
     """Compare an equity curve against buy-and-hold on the same prices.
 
     Both series must be aligned bar-by-bar. The equity curve includes cash, so
     its returns are already the strategy's realised exposure — no adjustment needed.
+
+    `annualise=False` withholds the annualised fields (alpha, information ratio,
+    tracking error, volatility) while still reporting the raw returns. Two weeks
+    of 15m bars scaled to a year produce alpha in the thousands of percent, which
+    reads as a result rather than as the artefact it is.
     """
     if len(strategy_equity) < 3 or len(prices) < 3:
         return BenchmarkComparison(benchmark=benchmark_name, verdict="样本不足")
@@ -158,22 +175,30 @@ def compare(
     excess_wins = sum(1 for d in diffs if d > 0)
     excess_win_rate = safe_div(excess_wins, len(diffs)) * 100
 
+    def annual(value: float) -> float | None:
+        """Withhold the figure when the sample cannot support annualising.
+
+        `None` rather than 0: zero is a real reading (no excess return, no
+        volatility), and showing it would be a different kind of lie.
+        """
+        return value if annualise else None
+
     return BenchmarkComparison(
         benchmark=benchmark_name,
         periods=len(diffs),
         strategy_return_pct=strategy_total * 100,
         benchmark_return_pct=benchmark_total * 100,
         excess_return_pct=excess * 100,
-        alpha_pct=alpha * 100,
+        alpha_pct=annual(alpha * 100),
         beta=beta,
         correlation=correlation,
-        tracking_error_pct=tracking_error * math.sqrt(periods_per_year) * 100,
-        information_ratio=information_ratio,
+        tracking_error_pct=annual(tracking_error * math.sqrt(periods_per_year) * 100),
+        information_ratio=annual(information_ratio),
         up_capture_pct=up_capture,
         down_capture_pct=down_capture,
         excess_win_rate_pct=excess_win_rate,
-        strategy_vol_pct=strat_vol * math.sqrt(periods_per_year) * 100,
-        benchmark_vol_pct=bench_vol * math.sqrt(periods_per_year) * 100,
+        strategy_vol_pct=annual(strat_vol * math.sqrt(periods_per_year) * 100),
+        benchmark_vol_pct=annual(bench_vol * math.sqrt(periods_per_year) * 100),
         # Both arguments are fractions at this point; the verdict thresholds are
         # expressed in percent, so scale before classifying.
         verdict=_verdict(excess * 100, alpha * 100, beta, information_ratio),

@@ -583,6 +583,7 @@ class MultiSymbolBacktester:
             prices=benchmark_curve,
             periods_per_year=float(metrics["periods_per_year"]),
             benchmark_name="等权买入持有",
+            annualise=bool(metrics.get("annualised_available", True)),
         )
         buy_hold_pct = (
             round((benchmark_curve[-1] / benchmark_curve[0] - 1.0) * 100, 4)
