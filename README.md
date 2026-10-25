@@ -9,6 +9,7 @@
 - **市场** 加密货币（24/7）与 A 股（T+1、涨跌停、手数、时段门控）双模式
 - **数据** 默认离线合成；可切换 Binance / 腾讯公开实时行情（轮询，免 API Key）
 - **安全** 模拟交易开箱即用；实盘默认关闭，需开关 + 网关 + 确认头三重条件
+- **实盘** 币安现货（加密）与同花顺授权网关（A股），成交回报后台轮询回写
 
 ## 启动
 
@@ -32,7 +33,7 @@ powershell -ExecutionPolicy Bypass -File .\scripts\start-all.ps1
 | A股 | 板块涨跌停、交易日历、T+1 可用/冻结、真实行情同步、同花顺通道状态 |
 | 交易 | 市价/限价下单、持仓与一键平仓、挂单撤销、订单与成交明细 |
 | 自动运行 | 策略实例启停、参数调整、即时评估、运行日志 |
-| 策略库 | 9 个经典策略、动态参数表单、信号预览与买卖点 |
+| 策略库 | 10 个策略（含 XGBoost 机器学习）、动态参数表单、信号预览与买卖点 |
 | 回测 | 事件驱动、18 项绩效指标、权益曲线、逐笔交易、历史对比 |
 | 组合 | 权益与回撤、样本级风险指标、风控状态、实盘通道、盈亏归因 |
 | 账户 | 出入金、账本流水、归档、多账户切换、市场选择（加密/A股） |
@@ -46,13 +47,14 @@ powershell -ExecutionPolicy Bypass -File .\scripts\start-all.ps1
 powershell -ExecutionPolicy Bypass -File .\scripts\run-tests.ps1
 ```
 
-当前：**247 项后端测试全绿**，前端 `tsc` 零错误、生产构建通过。
+当前：**597 项后端测试全绿**，前端 `tsc` 零错误、生产构建通过。
 
 ## 文档
 
 - 思路：[docs/thinking/architecture.md](docs/thinking/architecture.md)、[docs/thinking/roadmap.md](docs/thinking/roadmap.md)
 - 交付：[快速开始](docs/delivery/quickstart.md)、[架构](docs/delivery/architecture.md)、[API](docs/delivery/api.md)、[代码报告](docs/delivery/code-report.md)、[验收清单](docs/delivery/acceptance.md)
 - A股：[A股交易模式](docs/delivery/cn-market.md)、[真实行情接入](docs/delivery/cn-data-source.md)、[同花顺接入与实盘](docs/delivery/ths-live.md)
+- 实盘：[加密实盘与对账](docs/rounds/C99-crypto-live-trading.md)
 - 迭代：[docs/rounds/](docs/rounds/)（R01–R20）
 - 视觉验收截图：[docs/reviews/R17/](docs/reviews/R17/)
 
@@ -65,6 +67,8 @@ powershell -ExecutionPolicy Bypass -File .\scripts\run-tests.ps1
 | `LQ_DATABASE_URL` | `sqlite:///data/lumenquant.db` | 可换 PostgreSQL |
 | `LQ_MARKET_TICK_SECONDS` | `5` | 合成行情推进节奏 |
 | `LQ_CRYPTO_DATA_SOURCE` | `synthetic` | 改 `binance` 用真实加密行情 |
+| `LQ_CRYPTO_SYNC_HOURLY_LIMIT` | `70000` | 1h 历史深度（约 8 年，回溯至 2017） |
+| `LQ_CN_SYNC_DAILY_LIMIT` | `2000` | A股日线深度（约 8 年） |
 | `LQ_CN_DATA_SOURCE` | `synthetic` | 改 `tencent` 用真实 A 股行情 |
 | `LQ_RISK_MAX_DAILY_LOSS_PCT` | `0.05` | 日损失熔断，0 关闭 |
 | `LQ_AUTH_ENABLED` / `LQ_AUTH_TOKEN` | `false` / 空 | 对外部署时开启 |

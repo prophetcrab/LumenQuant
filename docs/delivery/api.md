@@ -88,6 +88,10 @@ Base URL：`http://127.0.0.1:8000/api`　完整交互式文档：`/docs`
 ## 实盘通道
 - `GET /api/brokers/status`
 - `GET /api/brokers/binance/verify`
+- `GET /api/brokers/binance/positions`
+- `GET /api/brokers/binance/reconcile?account_id=`
+- `POST /api/brokers/binance/align-cash?account_id=&confirm=`
+- `GET /api/brokers/ths/health`、`/ths/positions`、`/ths/reconcile?account_id=`
 
 ## 数据
 - `GET /api/data/coverage`
@@ -130,12 +134,18 @@ Base URL：`http://127.0.0.1:8000/api`　完整交互式文档：`/docs`
 - `POST /api/market/data/sync` — 强制重导 Binance 历史（替换原有序列）
 
 ## 实盘通道
-- `GET /api/brokers/status` — 各通道（binance / ths）就绪状态
+- `GET /api/brokers/status` — 各通道（binance / ths）就绪状态，以及 `reconciler_running`（成交回报轮询是否在跑）
+- `GET /api/brokers/binance/verify` — 币安密钥校验，返回 `can_trade` 与可用余额
+- `GET /api/brokers/binance/positions` — 交易所侧资产总额（含被挂单锁定的部分）
+- `GET /api/brokers/binance/reconcile?account_id=` — 本地资产/现金 vs 交易所；返回 `assets_match`、`cash_match`、`assets`、`cash`
+- `POST /api/brokers/binance/align-cash?account_id=&confirm=` — 把本地现金账本对齐到交易所余额；`confirm=false`（默认）只返回预览
 - `GET /api/brokers/ths/health` — 同花顺网关健康与余额
 - `GET /api/brokers/ths/positions` — 网关侧持仓
 - `GET /api/brokers/ths/reconcile?account_id=` — 本地持仓与资金 vs 网关；返回 `positions_match`、`cash_match`（`null` 表示网关未报告）、`cash` 明细
 
 > 实盘下单：`POST /api/trading/orders` 且必须携带 `X-Live-Confirm: true`。
+> 实盘委托提交后由后台 `LiveReconciler` 轮询成交（加密与 A股同一循环，按账户市场分派）。
+> 加密实盘账户首次使用前需调 `align-cash`，否则本地账面资金与真实可交易资金不一致。
 
 ## AI 助手
 - `GET /api/assistant/status`
