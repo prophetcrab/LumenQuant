@@ -41,6 +41,10 @@ DAILY_MS = 86_400_000
 # unseen: the bar then holds only the samples before and after a gap, and storing
 # it would record a fabricated high/low and volume 0.
 MAX_TRUSTED_GAP_BUCKETS = 1
+# How many hourly bars a catch-up fetch asks for when the stored series is already
+# long. A restart after a day offline needs ~24; 300 leaves room for a long
+# holiday without turning a restart into a full re-download.
+CATCHUP_HOURLY_BARS = 300
 
 
 class CryptoQuoteEngine:
@@ -246,6 +250,16 @@ class CryptoQuoteEngine:
         for code in codes:
             if not force and self._history_is_fresh(code, max_age_ms):
                 continue
+            # A stale newest bar means "catch up", not "re-download everything".
+            # Re-importing 70,000 hourly bars per symbol on every restart took
+            # minutes and blocked startup; only the tail is actually missing, so
+            # a short incremental fetch covers it. A full backfill happens when
+            # the stored span is too thin to have that tail at all.
+            incrementally = (
+                not force
+                and hourly_start_ms is None
+                and self._has_enough_history(code, hourly_limit * 0.9)
+            )
             try:
                 daily = self.source.klines(code, interval="1d", limit=daily_limit)
                 intraday = self.source.klines(code, interval="15m", limit=intraday_limit)
@@ -255,7 +269,14 @@ class CryptoQuoteEngine:
                 # extra information. Binance history goes back to 2017, so this
                 # is what makes multi-year crypto research possible at all.
                 hourly = self.source.klines(
-                    code, interval="1h", limit=hourly_limit, start_ms=hourly_start_ms
+                    code,
+                    interval="1h",
+                    limit=(
+                        min(hourly_limit, CATCHUP_HOURLY_BARS)
+                        if incrementally
+                        else hourly_limit
+                    ),
+                    start_ms=None if incrementally else hourly_start_ms,
                 )
             except CryptoSourceUnavailable as exc:
                 logger.warning("crypto history import failed for %s: %s", code, exc)
@@ -263,6 +284,41 @@ class CryptoQuoteEngine:
             if not daily and not intraday and not hourly:
                 continue
             with self.db.session() as session:
+                if incrementally:
+                    # Append rather than replace: the stored series is the full
+                    # history, and deleting it would throw away years of bars just
+                    # to add the newest few.
+                    existing = {
+                        int(stamp)
+                        for stamp in session.scalars(
+                            select(Candle.open_time).where(
+                                Candle.symbol == code, Candle.timeframe == "1h"
+                            )
+                        ).all()
+                    }
+                    fresh = [bar for bar in hourly if bar.time not in existing]
+                    session.bulk_insert_mappings(
+                        Candle,
+                        [
+                            {
+                                "symbol": code,
+                                "timeframe": "1h",
+                                "open_time": bar.time,
+                                "open": bar.open,
+                                "high": bar.high,
+                                "low": bar.low,
+                                "close": bar.close,
+                                "volume": bar.volume,
+                            }
+                            for bar in fresh
+                        ],
+                    )
+                    imported += len(fresh)
+                    session.commit()
+                    logger.info(
+                        "crypto catch-up: %s new hourly bars for %s", len(fresh), code
+                    )
+                    continue
                 session.execute(delete(Candle).where(Candle.symbol == code))
                 rows = [
                     {
@@ -298,6 +354,21 @@ class CryptoQuoteEngine:
         with self._lock:
             self._live.clear()
         return imported
+
+    def _has_enough_history(self, code: str, minimum: float) -> bool:
+        """True when the stored 1h series is already long enough to top up.
+
+        The point is to distinguish "the newest bar is a few hours stale" from
+        "this symbol has almost no history". The first needs a short fetch; the
+        second needs the full backfill.
+        """
+        with self.db.session() as session:
+            count = session.scalar(
+                select(func.count(Candle.id)).where(
+                    Candle.symbol == code, Candle.timeframe == "1h"
+                )
+            )
+        return int(count or 0) >= minimum
 
     def _history_is_fresh(self, code: str, max_age_ms: int) -> bool:
         """True when the stored 15m series already reaches the current bucket."""

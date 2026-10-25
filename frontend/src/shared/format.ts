@@ -107,6 +107,7 @@ export function categoryLabel(category: string): string {
     breakout: "突破",
     benchmark: "基准",
     ml: "机器学习",
+    hybrid: "混合",
   };
   return map[category] ?? category;
 }

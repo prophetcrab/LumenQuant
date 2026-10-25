@@ -94,6 +94,11 @@ class Settings(BaseSettings):
     # CSV. Daily is the series to rely on for long A-share research.
     cn_sync_daily_limit: int = 2000
     cn_sync_intraday_limit: int = 800
+    # How many registered symbols the *startup* import refreshes. A full pass over
+    # 500 names takes ~23 minutes and the API serves nothing until it finishes;
+    # stored series are already valid, so a handful is enough for a fresh
+    # deployment and the rest come from POST /api/cn/data/sync. 0 disables it.
+    cn_sync_startup_symbols: int = 20
     # Realtime A-share quote polling. Requires cn_data_source=tencent. In that
     # mode the synthetic CN engine is reduced to symbol registration: letting it
     # keep ticking would write synthetic bars over real ones at a different price

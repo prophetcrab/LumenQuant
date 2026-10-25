@@ -20,24 +20,55 @@ from app.core.security import AuthMiddleware, RateLimitMiddleware
 
 
 def _startup_sync(db: Database, settings: Settings) -> None:
-    """Best-effort real-data import; never blocks startup on network failure."""
+    """Best-effort real-data import; never blocks startup on network failure.
+
+    Bounded on purpose. With 500 registered A-shares this ran every symbol through
+    a full daily + intraday + quote sync, which took ~23 minutes during which the
+    API was not serving at all. A startup import is a convenience, not a
+    correctness requirement: each symbol's stored series is already valid, and
+    `POST /api/cn/data/sync` refreshes on demand.
+
+    So only the first `cn_sync_startup_symbols` names are refreshed here — the
+    ones a fresh deployment actually plots — and the rest are left to the explicit
+    sync. The limit is reported in the log so a short import is never mistaken for
+    a complete one.
+    """
     from app.modules.cn.sources.tencent import TencentSource
     from app.modules.cn.sync import CnDataSyncService
 
+    limit = max(0, int(getattr(settings, "cn_sync_startup_symbols", 20)))
+    logger = logging.getLogger(__name__)
+    if limit == 0:
+        logger.info("startup data sync skipped (LQ_CN_SYNC_STARTUP_SYMBOLS=0)")
+        return
     try:
         with db.session() as session:
             source = TencentSource(timeout=settings.request_timeout_seconds)
+            from sqlalchemy import select
+
+            from app.modules.market.models import Symbol
+
+            codes = list(
+                session.scalars(
+                    select(Symbol.code)
+                    .where(Symbol.market == "cn_stock", Symbol.enabled.is_(True))
+                    .order_by(Symbol.code)
+                    .limit(limit)
+                ).all()
+            )
             report = CnDataSyncService(session, source).sync_symbols(
+                codes,
                 daily_limit=settings.cn_sync_daily_limit,
                 intraday_limit=settings.cn_sync_intraday_limit,
             )
-            logging.getLogger(__name__).info(
-                "startup data sync: %s symbols, ok=%s",
+            logger.info(
+                "startup data sync: %s of %s symbols (capped by LQ_CN_SYNC_STARTUP_SYMBOLS), ok=%s",
                 len(report.symbols),
+                limit,
                 report.ok,
             )
     except Exception:
-        logging.getLogger(__name__).exception("startup data sync failed; keeping local data")
+        logger.exception("startup data sync failed; keeping local data")
 
 
 def _register_live_symbols(db: Database, provider) -> None:
