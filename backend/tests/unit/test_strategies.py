@@ -36,7 +36,11 @@ def trending_candles(count: int = 400) -> list[CandlePoint]:
 def run_strategy(key: str, params: dict | None = None):
     strategy = get(key)
     parsed = strategy.validate_params(params)
-    candles = trending_candles()
+    # Give every strategy a series long enough to clear its own warmup. A model
+    # that must be fitted before its first signal (the ML strategy) otherwise
+    # looks like it "produces no signals" purely because the fixture was short.
+    warmup = strategy.warmup(parsed)
+    candles = trending_candles(max(400, warmup + 150))
     state = strategy.prepare(candles, parsed)
     signals = []
     for index in range(strategy.warmup(parsed), len(candles)):
@@ -56,13 +60,14 @@ EXPECTED_KEYS = {
     "atr_channel",
     "stochastic_reversal",
     "buy_and_hold",
+    "xgb_hybrid",
 }
 
 
 def test_catalog_contains_all_builtins():
     keys = {meta["key"] for meta in catalog()}
     assert keys == EXPECTED_KEYS
-    assert len(list(all_strategies())) == 9
+    assert len(list(all_strategies())) == 10
 
 
 def test_catalog_exposes_param_schema():

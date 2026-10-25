@@ -71,6 +71,12 @@ def test_strategy_can_eventually_signal(strategy):
     """
     params = strategy.validate_params({})
     candidates = [synthetic_candles(), synthetic_candles(600)]
+    # Strategies that fit a model before their first signal (the ML ones) need a
+    # fixture at least as long as their warmup; otherwise "never signals" only
+    # proves the fixture was too short to evaluate.
+    warmup = strategy.warmup(params)
+    if warmup + 50 > 600:
+        candidates.append(synthetic_candles(warmup + 120))
     actions: list[str] = []
     for candles in candidates:
         state = strategy.prepare(candles, params)

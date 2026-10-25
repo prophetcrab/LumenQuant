@@ -1,0 +1,13 @@
+# Optional machine-learning dependencies.
+#
+# Only the `xgb_hybrid` strategy needs these. `ml.py` imports xgboost lazily, so
+# the rest of the platform runs without them — the strategy simply refuses to
+# prepare when the import fails.
+#
+#   pip install -r requirements-ml.txt
+#
+# Versions are pinned to the range this was validated against; xgboost 3.x changed
+# the sklearn-API surface enough that 2.x behaviour is not guaranteed identical.
+xgboost>=3.0,<4.0
+scikit-learn>=1.5,<2.0
+numpy>=2.0,<3.0
