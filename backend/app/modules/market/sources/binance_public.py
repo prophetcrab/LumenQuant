@@ -126,35 +126,86 @@ class BinancePublicSource:
             )
         return out
 
-    def klines(self, symbol: str, *, interval: str = "15m", limit: int = 500) -> list[CandlePoint]:
-        response = self._get(
-            KLINES_PATH,
-            {"symbol": symbol.upper(), "interval": interval, "limit": max(1, min(limit, 1000))},
-        )
-        try:
-            rows = response.json()
-        except ValueError as exc:
-            raise CryptoSourceUnavailable("Binance kline 返回非 JSON") from exc
-        if not isinstance(rows, list):
-            raise CryptoSourceUnavailable("Binance kline 返回结构异常")
+    def klines(
+        self,
+        symbol: str,
+        *,
+        interval: str = "15m",
+        limit: int = 500,
+        start_ms: int | None = None,
+    ) -> list[CandlePoint]:
+        """Fetch up to `limit` bars, paging past the endpoint's 1000-bar cap.
 
-        bars: list[CandlePoint] = []
-        for row in rows:
-            if len(row) < 6:
-                continue
-            # [openTime, open, high, low, close, volume, closeTime, ...]
-            bars.append(
-                CandlePoint(
-                    time=int(row[0]),
-                    open=float(row[1]),
-                    high=float(row[2]),
-                    low=float(row[3]),
-                    close=float(row[4]),
-                    volume=float(row[5]),
+        Binance returns at most 1000 rows per call, and the old implementation
+        simply clamped the request to 1000 — so asking for a long history
+        silently produced only the most recent 1000 bars (a month of 15m data
+        instead of the two years a backtest might want).
+
+        Two paging directions, because they answer different questions:
+
+        * `start_ms is None` — "the newest N bars". Walk *backwards* with
+          `endTime`, which is what a chart or a live strategy needs.
+        * `start_ms` given — "N bars from this point forward", used by importers
+          that want a bounded historical window.
+        """
+        wanted = max(1, int(limit))
+        out: list[CandlePoint] = []
+        # Forward paging (`start_ms` given) advances `startTime`; backward paging
+        # walks `endTime` down. Mixing the two re-fetches the same newest page and
+        # yields duplicate timestamps, so each direction keeps its own cursor.
+        cursor = start_ms
+        end_ms: int | None = None
+        while len(out) < wanted:
+            batch_limit = min(1000, wanted - len(out))
+            params: dict = {
+                "symbol": symbol.upper(),
+                "interval": interval,
+                "limit": batch_limit,
+            }
+            if start_ms is not None:
+                params["startTime"] = int(cursor)  # type: ignore[arg-type]
+            elif end_ms is not None:
+                params["endTime"] = int(end_ms)
+            response = self._get(KLINES_PATH, params)
+            try:
+                rows = response.json()
+            except ValueError as exc:
+                raise CryptoSourceUnavailable("Binance kline 返回非 JSON") from exc
+            if not isinstance(rows, list):
+                raise CryptoSourceUnavailable("Binance kline 返回结构异常")
+            if not rows:
+                break
+
+            page: list[CandlePoint] = []
+            for row in rows:
+                if len(row) < 6:
+                    continue
+                # [openTime, open, high, low, close, volume, closeTime, ...]
+                page.append(
+                    CandlePoint(
+                        time=int(row[0]),
+                        open=float(row[1]),
+                        high=float(row[2]),
+                        low=float(row[3]),
+                        close=float(row[4]),
+                        volume=float(row[5]),
+                    )
                 )
-            )
-        bars.sort(key=lambda bar: bar.time)
-        return bars
+            if not page:
+                break
+
+            if start_ms is None:
+                # Backwards: prepend this older page and continue before it.
+                out = page + out
+                end_ms = page[0].time - 1
+            else:
+                out.extend(page)
+                cursor = page[-1].time + 1
+            if len(rows) < batch_limit:
+                break  # reached the listing date (or the end of history)
+
+        out.sort(key=lambda bar: bar.time)
+        return out[:wanted] if start_ms is not None else out[-wanted:]
 
     def health(self) -> tuple[bool, str, float]:
         started = time.perf_counter()

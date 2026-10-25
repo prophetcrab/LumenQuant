@@ -38,6 +38,11 @@ class Settings(BaseSettings):
     market_seed_bars: int = 11_520
     market_tick_seconds: float = 5.0
     market_timeframe: str = "15m"
+    # Speed of the synthetic clock. The engines read this via getattr, so leaving
+    # it undefined here meant LQ_MARKET_CLOCK_SPEED was silently ignored and the
+    # clock was always 60x — with charts running days ahead of wall time. Set to
+    # 1 for real-time behaviour. Irrelevant when a real data source is active.
+    market_clock_speed: float = 60.0
 
     # Crypto real market data. `synthetic` keeps the deterministic generator;
     # `binance` replaces it with public tickers + klines (no API key, no orders).
@@ -45,6 +50,19 @@ class Settings(BaseSettings):
     crypto_data_base_url: str = "https://data-api.binance.vision"
     crypto_realtime_enabled: bool = True
     crypto_quote_poll_seconds: float = 5.0
+    # Real-history depth per symbol on import. Binance caps one call at 1,000
+    # bars, so the source pages with startTime/endTime to reach these totals.
+    # 8,000 15m bars ~= 83 days; 2,000 daily ~= 5.5 years. Raising these raises
+    # first-start import time roughly linearly (~8 extra requests per symbol per
+    # 8,000 intraday bars).
+    crypto_sync_intraday_limit: int = 8000
+    crypto_sync_daily_limit: int = 2000
+    # Hourly is imported from its own endpoint so multi-year analysis does not
+    # need 4x the rows at 15m. ~70,000 bars covers BTCUSDT from 2019.
+    crypto_sync_hourly_limit: int = 70_000
+    # Optional lower bound for the hourly import (epoch ms). Empty means "as far
+    # back as the exchange goes", which for BTC on Binance is 2017.
+    crypto_sync_start_ms: int | None = None
 
     # Background runtime (strategy runners, matching loop, equity snapshots).
     runtime_enabled: bool = True
@@ -67,8 +85,15 @@ class Settings(BaseSettings):
     # synthetic | tencent — real data is opt-in because it needs network access.
     cn_data_source: str = "synthetic"
     cn_sync_on_start: bool = False
-    cn_sync_daily_limit: int = 800
-    cn_sync_intraday_limit: int = 320
+    # How much history a real-data import asks for. These are the practical
+    # ceilings of the free upstream, measured 2026-10:
+    #   Tencent 15m -> 800 bars (~50 trading days); above that it returns 320
+    #   Tencent 1d  -> 2,000 bars (~8 years); above that the payload breaks
+    # A-share minute history is not available further back from a free source, so
+    # a backtest that needs more intraday data must aggregate from 1d or import a
+    # CSV. Daily is the series to rely on for long A-share research.
+    cn_sync_daily_limit: int = 2000
+    cn_sync_intraday_limit: int = 800
     # Realtime A-share quote polling. Requires cn_data_source=tencent. In that
     # mode the synthetic CN engine is reduced to symbol registration: letting it
     # keep ticking would write synthetic bars over real ones at a different price

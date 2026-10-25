@@ -113,7 +113,9 @@ def candles(
     request: Request,
     symbol: str = Query(default="BTCUSDT"),
     timeframe: str = Query(default="15m"),
-    limit: int = Query(default=300, ge=1, le=5000),
+    # Matches `MarketService.MAX_CANDLE_LIMIT`; a smaller cap here rejected
+    # long-history requests before the service ever saw them.
+    limit: int = Query(default=300, ge=1, le=20_000),
     session: Session = Depends(get_session),
 ):
     if timeframe not in SUPPORTED_TIMEFRAMES:
@@ -141,7 +143,7 @@ def indicators(
     request: Request,
     symbol: str = Query(default="BTCUSDT"),
     timeframe: str = Query(default="15m"),
-    limit: int = Query(default=300, ge=20, le=5000),
+    limit: int = Query(default=300, ge=20, le=20_000),
     specs: str = Query(default="sma:20,ema:50,rsi:14"),
     session: Session = Depends(get_session),
 ):

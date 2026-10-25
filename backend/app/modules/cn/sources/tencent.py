@@ -48,6 +48,12 @@ INTRADAY_URL = (
     "https://ifzq.gtimg.cn/appstock/app/kline/mkline?param={ticker},m15,,{limit}"
 )
 
+# Measured limits of the public endpoints (2026-10):
+#   intraday 15m : 800 bars (~50 trading days); above that it returns 320
+#   daily        : 2000 bars; above that the payload changes shape and fails
+MAX_INTRADAY_BARS = 800
+MAX_DAILY_BARS = 2000
+
 
 class TencentSource:
     name = "tencent"
@@ -200,7 +206,7 @@ class TencentSource:
     # ------------------------------------------------------------------ bars
     def daily_bars(self, code: str, *, limit: int = 800) -> BarBatch:
         ticker = self._ticker(code)
-        url = DAILY_URL.format(ticker=ticker, limit=max(1, min(limit, 2000)))
+        url = DAILY_URL.format(ticker=ticker, limit=max(1, min(limit, MAX_DAILY_BARS)))
         response = self._get(url)
         try:
             payload = response.json()
@@ -239,7 +245,12 @@ class TencentSource:
 
     def intraday_bars(self, code: str, *, limit: int = 320) -> BarBatch:
         ticker = self._ticker(code)
-        url = INTRADAY_URL.format(ticker=ticker, limit=max(1, min(limit, 1000)))
+        # Hard upstream cap. Above ~800 the endpoint silently returns 320 rows
+        # instead — measured 2026-10: 800 -> 800 bars, 900 -> 320. Clamping here
+        # keeps the caller's intent ("as much as possible") explicit rather than
+        # letting a larger request collapse to a smaller result.
+        requested = max(1, min(limit, MAX_INTRADAY_BARS))
+        url = INTRADAY_URL.format(ticker=ticker, limit=requested)
         response = self._get(url)
         try:
             payload = response.json()

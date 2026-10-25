@@ -102,7 +102,14 @@ class CryptoQuoteEngine:
     async def start(self) -> None:
         self.ensure_symbols()
         try:
-            await asyncio.to_thread(self.sync_history)
+            await asyncio.to_thread(
+                lambda: self.sync_history(
+                    intraday_limit=getattr(self.settings, "crypto_sync_intraday_limit", 8000),
+                    daily_limit=getattr(self.settings, "crypto_sync_daily_limit", 2000),
+                    hourly_limit=getattr(self.settings, "crypto_sync_hourly_limit", 70_000),
+                    hourly_start_ms=getattr(self.settings, "crypto_sync_start_ms", None),
+                )
+            )
         except Exception:
             logger.warning("crypto history import failed; keeping local bars", exc_info=True)
         try:
@@ -212,7 +219,14 @@ class CryptoQuoteEngine:
 
     # -------------------------------------------------------------- history
     def sync_history(
-        self, *, intraday_limit: int = 1000, daily_limit: int = 1000, force: bool = False, max_age_ms: int = 1_800_000
+        self,
+        *,
+        intraday_limit: int = 8000,
+        daily_limit: int = 2000,
+        hourly_limit: int = 70_000,
+        hourly_start_ms: int | None = None,
+        force: bool = False,
+        max_age_ms: int = 1_800_000,
     ) -> int:
         """Replace each symbol's synthetic series with real Binance history.
 
@@ -235,17 +249,25 @@ class CryptoQuoteEngine:
             try:
                 daily = self.source.klines(code, interval="1d", limit=daily_limit)
                 intraday = self.source.klines(code, interval="15m", limit=intraday_limit)
+                # Hourly is imported natively rather than aggregated from 15m.
+                # It is the practical backtest/analysis timeframe, and reaching
+                # the same span through 15m bars would mean ~4x the rows for no
+                # extra information. Binance history goes back to 2017, so this
+                # is what makes multi-year crypto research possible at all.
+                hourly = self.source.klines(
+                    code, interval="1h", limit=hourly_limit, start_ms=hourly_start_ms
+                )
             except CryptoSourceUnavailable as exc:
                 logger.warning("crypto history import failed for %s: %s", code, exc)
                 continue
-            if not daily and not intraday:
+            if not daily and not intraday and not hourly:
                 continue
             with self.db.session() as session:
                 session.execute(delete(Candle).where(Candle.symbol == code))
                 rows = [
                     {
                         "symbol": code,
-                        "timeframe": "15m",
+                        "timeframe": timeframe,
                         "open_time": bar.time,
                         "open": bar.open,
                         "high": bar.high,
@@ -253,28 +275,22 @@ class CryptoQuoteEngine:
                         "close": bar.close,
                         "volume": bar.volume,
                     }
-                    for bar in intraday
-                ] + [
-                    {
-                        "symbol": code,
-                        "timeframe": "1d",
-                        "open_time": bar.time,
-                        "open": bar.open,
-                        "high": bar.high,
-                        "low": bar.low,
-                        "close": bar.close,
-                        "volume": bar.volume,
-                    }
-                    for bar in daily
+                    for timeframe, series in (
+                        ("15m", intraday),
+                        ("1h", hourly),
+                        ("1d", daily),
+                    )
+                    for bar in series
                 ]
                 for start in range(0, len(rows), 2000):
                     session.execute(insert(Candle), rows[start : start + 2000])
                 imported += len(rows)
             logger.info(
-                "imported %s real bars for %s (%s daily, %s intraday)",
-                len(daily) + len(intraday),
+                "imported %s real bars for %s (%s daily, %s hourly, %s intraday)",
+                len(daily) + len(hourly) + len(intraday),
                 code,
                 len(daily),
+                len(hourly),
                 len(intraday),
             )
         # The purge replaced every bar the accumulator was built against; keeping

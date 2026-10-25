@@ -81,8 +81,8 @@ class CnDataSyncService:
         self,
         codes: list[str] | None = None,
         *,
-        daily_limit: int = 800,
-        intraday_limit: int = 320,
+        daily_limit: int = 2000,
+        intraday_limit: int = 800,
     ) -> SyncReport:
         import time
 
