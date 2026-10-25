@@ -6,7 +6,6 @@ disabled or swapped without touching trading semantics.
 
 from __future__ import annotations
 
-from dataclasses import asdict
 
 from fastapi import APIRouter, Depends, Query, Request
 from sqlalchemy.orm import Session
@@ -18,6 +17,9 @@ from app.core.errors import ConflictError
 from app.modules.cn.sources.base import SourceUnavailable
 from app.modules.cn.sources.tencent import TencentSource
 from app.modules.cn.sync import CnDataSyncService
+from app.modules.cn.watchlist import build_watchlist
+from app.modules.screener.service import ScreenerService
+from app.modules.screener.sources.sina import SinaMarketSource
 
 
 router = APIRouter(prefix="/cn/data", tags=["cn_stock"])
@@ -139,6 +141,39 @@ def sync(
     if engine is not None:
         engine.reset_live()
     return report.as_dict()
+
+
+@router.get("/watchlist")
+def watchlist(
+    request: Request,
+    codes: str | None = Query(default=None, description="逗号分隔的代码；省略则全部已登记标的"),
+    limit: int = Query(default=200, ge=1, le=500),
+    session: Session = Depends(get_session),
+):
+    """One row per symbol with every field this screen can actually obtain.
+
+    Merges three upstreams (realtime quote, whole-market snapshot, local candles)
+    and reports which field groups are unavailable *with a reason*, so a missing
+    column is never mistaken for a zero.
+    """
+    settings = settings_of(request)
+    market = build_market(request, session)
+    screener = ScreenerService(
+        SinaMarketSource(timeout=settings.request_timeout_seconds),
+        market=market,
+        cache=getattr(request.app.state, "screener_cache", None),
+    )
+    engine = getattr(request.app.state, "cn_quote_engine", None)
+    quote_rows = engine.snapshot_rows() if engine is not None else None
+    code_list = [item for item in (codes or "").split(",") if item.strip()] or None
+    return build_watchlist(
+        session=session,
+        market=market,
+        screener=screener,
+        quote_rows=quote_rows,
+        codes=code_list,
+        limit=limit,
+    )
 
 
 @router.get("/staleness")

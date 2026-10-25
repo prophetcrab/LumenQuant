@@ -2,7 +2,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useToast } from "../../shared/toast";
 import { ButtonField } from "../../components/form";
 import { api } from "../../shared/api";
-import { pct, price, timeLabel } from "../../shared/format";
+import { num, pct, price, timeLabel } from "../../shared/format";
 import { Badge, Card, Loader, Stat } from "../../components/ui";
 
 export function CnMarketPage() {
@@ -10,6 +10,14 @@ export function CnMarketPage() {
   const session = useQuery({ queryKey: ["cn-session"], queryFn: api.cnSession, refetchInterval: 10_000 });
   const calendar = useQuery({ queryKey: ["cn-calendar"], queryFn: () => api.cnCalendar(10), staleTime: 3600_000 });
   const symbols = useQuery({ queryKey: ["cn-symbols"], queryFn: api.cnSymbols, refetchInterval: 8_000 });
+  // Merged watchlist: price + valuation + history-derived indicators in one row.
+  // The whole-market snapshot behind it is cached server-side for a minute, so
+  // polling here is cheap; it only re-merges the local values.
+  const watchlist = useQuery({
+    queryKey: ["cn-watchlist"],
+    queryFn: () => api.cnWatchlist(undefined, 200),
+    refetchInterval: 10_000,
+  });
   const channels = useQuery({ queryKey: ["broker-channels"], queryFn: api.brokerChannels, staleTime: 60_000 });
   const toast = useToast();
   const queryClient = useQueryClient();
@@ -48,7 +56,6 @@ export function CnMarketPage() {
     onError: (error: Error) => toast.push(error.message, "error"),
   });
   const staleCount = (staleness.data ?? []).filter((row) => row.stale_days > 3).length;
-  const quoteMap = new Map((quotes.data?.quotes ?? []).map((item) => [item.code, item]));
   const quoteHealth = quotes.data?.health;
 
   const ths = channels.data?.channels.ths;
@@ -141,63 +148,138 @@ export function CnMarketPage() {
         <div className="error-text">实时报价最近一次拉取失败：{quoteHealth.last_error}</div>
       ) : null}
 
-      <div className="grid" style={{ gridTemplateColumns: "minmax(0, 1.6fr) minmax(320px, 1fr)" }}>
-        <Card title="A股标的" subtitle="实时价、涨跌停与板块" padded={false}>
-          {symbols.isLoading ? (
+      <div className="grid" style={{ gridTemplateColumns: "minmax(0, 1fr) minmax(320px, 0.42fr)" }}>
+        <Card
+          title="盯盘"
+          subtitle="实时价 · 量价 · 估值 · 历史技术面"
+          actions={
+            <span className="helper">
+              {watchlist.data
+                ? `${watchlist.data.count} 个标的 · 快照 ${watchlist.data.snapshot_latency_ms?.toFixed(0) ?? "—"}ms`
+                : null}
+            </span>
+          }
+          padded={false}
+        >
+          {watchlist.isLoading ? (
             <Loader />
           ) : (
-            <div className="table-wrap" style={{ maxHeight: 430 }}>
-              <table className="table">
-                <thead>
-                  <tr>
-                    <th>代码</th>
-                    <th>名称</th>
-                    <th>板块</th>
-                    <th className="numeric">现价</th>
-                    <th className="numeric">涨跌</th>
-                    <th className="numeric">涨停</th>
-                    <th className="numeric">跌停</th>
-                    <th>状态</th>
-                    {realtime ? <th className="numeric">行情延迟</th> : null}
-                  </tr>
-                </thead>
-                <tbody>
-                  {(symbols.data ?? []).map((item) => (
-                    <tr key={item.code}>
-                      <td className="mono" style={{ fontWeight: 600 }}>{item.code}</td>
-                      <td>{item.name}</td>
-                      <td>
-                        <Badge tone="indigo">{boardLabel(item.board)}</Badge>
-                      </td>
-                      <td className="numeric">{price(item.price)}</td>
-                      <td className={`numeric ${item.change_pct >= 0 ? "up" : "down"}`}>{pct(item.change_pct)}</td>
-                      <td className="numeric up">{price(item.limit_up)}</td>
-                      <td className="numeric down">{price(item.limit_down)}</td>
-                      <td>
-                        {item.suspended ? (
-                          <Badge tone="red">停牌</Badge>
-                        ) : item.price >= item.limit_up - 0.005 ? (
-                          <Badge tone="red">涨停</Badge>
-                        ) : item.price <= item.limit_down + 0.005 ? (
-                          <Badge tone="amber">跌停</Badge>
-                        ) : (
-                          <Badge tone="green">正常</Badge>
-                        )}
-                      </td>
-                      {realtime ? (
-                        <td className="numeric">
-                          <QuoteAge quote={quoteMap.get(item.code)} />
-                        </td>
-                      ) : null}
+            <>
+              {(watchlist.data?.warnings ?? []).map((warn) => (
+                <div
+                  key={warn}
+                  className="helper"
+                  style={{ padding: "8px 18px", borderBottom: "1px solid var(--border)" }}
+                >
+                  {warn}
+                </div>
+              ))}
+              <div className="table-wrap" style={{ maxHeight: 520 }}>
+                <table className="table">
+                  <thead>
+                    <tr>
+                      <th>代码</th>
+                      <th>名称</th>
+                      <th className="numeric">现价</th>
+                      <th className="numeric">涨跌</th>
+                      <th className="numeric">振幅</th>
+                      <th className="numeric">换手</th>
+                      <th className="numeric">量比</th>
+                      <th className="numeric">成交额</th>
+                      <th className="numeric">PE</th>
+                      <th className="numeric">PB</th>
+                      <th className="numeric">市值</th>
+                      <th className="numeric">MA20</th>
+                      <th className="numeric">5日</th>
+                      <th className="numeric">RSI</th>
+                      <th className="numeric">ATR%</th>
+                      <th>状态</th>
+                      {realtime ? <th className="numeric">延迟</th> : null}
                     </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
+                  </thead>
+                  <tbody>
+                    {(watchlist.data?.rows ?? []).map((row) => {
+                      const tech = row.technicals;
+                      return (
+                        <tr key={row.code}>
+                          <td className="mono" style={{ fontWeight: 600 }}>{row.code}</td>
+                          <td>{row.name}</td>
+                          <td className="numeric">{price(row.price)}</td>
+                          <td className={`numeric ${row.change_pct >= 0 ? "up" : "down"}`}>
+                            {pct(row.change_pct)}
+                          </td>
+                          <td className="numeric">{pct(row.amplitude_pct, 1)}</td>
+                          <td className="numeric">{num(row.turnover_pct)}%</td>
+                          <td className="numeric">{num(tech?.volume_ratio_5_20)}</td>
+                          <td className="numeric">{row.amount_yi === null ? "—" : `${row.amount_yi.toFixed(1)}亿`}</td>
+                          <td className="numeric">{num(row.pe)}</td>
+                          <td className="numeric">{num(row.pb)}</td>
+                          <td className="numeric">
+                            {row.market_cap_yi === null ? "—" : `${row.market_cap_yi.toFixed(0)}亿`}
+                          </td>
+                          <td
+                            className={`numeric ${
+                              (tech?.price_vs_ma20_pct ?? 0) >= 0 ? "up" : "down"
+                            }`}
+                          >
+                            {pct(tech?.price_vs_ma20_pct, 1)}
+                          </td>
+                          <td className={`numeric ${(tech?.return_5d_pct ?? 0) >= 0 ? "up" : "down"}`}>
+                            {pct(tech?.return_5d_pct, 1)}
+                          </td>
+                          <td className="numeric">{num(tech?.rsi14, 0)}</td>
+                          <td className="numeric">{num(tech?.atr_pct)}</td>
+                          <td>
+                            {row.suspended ? (
+                              <Badge tone="red">停牌</Badge>
+                            ) : row.limit_up !== null && row.price >= row.limit_up - 0.005 ? (
+                              <Badge tone="red">涨停</Badge>
+                            ) : row.limit_down !== null && row.price <= row.limit_down + 0.005 ? (
+                              <Badge tone="amber">跌停</Badge>
+                            ) : (
+                              <Badge tone="green">正常</Badge>
+                            )}
+                            {row.is_st ? <Badge tone="amber">ST</Badge> : null}
+                          </td>
+                          {realtime ? (
+                            <td className="numeric">
+                              <QuoteAge quote={row.quote_age_ms === null ? undefined : {
+                                age_ms: row.quote_age_ms,
+                                fresh: row.quote_fresh ?? false,
+                              }} />
+                            </td>
+                          ) : null}
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              </div>
+            </>
           )}
         </Card>
 
         <div className="stack" style={{ gap: 16 }}>
+          <Card title="信息覆盖" subtitle="本页每个字段的实际来源">
+            {watchlist.data ? (
+              <div className="stack" style={{ gap: 8 }}>
+                {Object.entries(watchlist.data.coverage).map(([key, item]) => (
+                  <div key={key} style={{ fontSize: 12.5, lineHeight: 1.6 }}>
+                    <div className="row" style={{ justifyContent: "space-between" }}>
+                      <span style={{ fontWeight: 550 }}>{coverageLabel(key)}</span>
+                      <Badge tone={item.available ? "green" : ""}>
+                        {item.available ? "已接入" : "未接入"}
+                      </Badge>
+                    </div>
+                    <div className="helper">{item.detail}</div>
+                  </div>
+                ))}
+              </div>
+            ) : (
+              <Loader />
+            )}
+          </Card>
+
           <Card title="交易规则" subtitle="由服务端强制执行">
             {rules.data ? (
               <div className="stack" style={{ gap: 8 }}>
@@ -278,4 +360,16 @@ function boardLabel(board: string): string {
     bse: "北交所",
   };
   return map[board] ?? board;
+}
+
+function coverageLabel(key: string): string {
+  const map: Record<string, string> = {
+    price: "价格与涨跌",
+    valuation: "估值（PE/PB/市值）",
+    technicals: "历史技术面",
+    industry: "行业分类",
+    fund_flow: "资金流",
+    financials: "财报数据",
+  };
+  return map[key] ?? key;
 }

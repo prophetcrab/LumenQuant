@@ -419,6 +419,57 @@ export type CnRules = {
   symbols: number;
 };
 
+export type CnTechnicals = {
+  ma5: number;
+  ma20: number;
+  ma60: number | null;
+  price_vs_ma20_pct: number | null;
+  rsi14: number | null;
+  return_5d_pct: number | null;
+  return_20d_pct: number | null;
+  volume_ratio_5_20: number | null;
+  distance_from_20d_high_pct: number | null;
+  atr_pct: number | null;
+  bars: number;
+};
+
+export type CnWatchRow = {
+  code: string;
+  name: string;
+  board: string;
+  is_st: boolean;
+  suspended: boolean;
+  price: number;
+  prev_close: number;
+  change_pct: number;
+  open: number | null;
+  high: number | null;
+  low: number | null;
+  amplitude_pct: number | null;
+  limit_up: number | null;
+  limit_down: number | null;
+  volume: number | null;
+  amount_yi: number | null;
+  turnover_pct: number | null;
+  pe: number | null;
+  pb: number | null;
+  market_cap_yi: number | null;
+  float_cap_yi: number | null;
+  technicals: CnTechnicals | null;
+  price_source: "realtime" | "snapshot" | "candle";
+  quote_age_ms: number | null;
+  quote_fresh: boolean | null;
+};
+
+export type CnWatchlist = {
+  rows: CnWatchRow[];
+  count: number;
+  snapshot_latency_ms: number | null;
+  /** Which field groups the backend can actually supply, with a reason when not. */
+  coverage: Record<string, { available: boolean; source: string | null; detail: string }>;
+  warnings: string[];
+};
+
 export type CnSession = {
   simulated_now: number;
   speed: number;
@@ -1270,6 +1321,8 @@ export const api = {
     request<{ code: string; name: string; latest_daily: number; stale_days: number }[]>(
       "/cn/data/staleness",
     ),
+  cnWatchlist: (codes?: string[], limit = 200) =>
+    request<CnWatchlist>(`/cn/data/watchlist${qs({ codes: codes?.join(","), limit })}`),
   screenPresets: () => request<ScreenPreset[]>("/screener/presets"),
   screen: (filter: ScreenFilter, force = false) =>
     request<ScreenResult>(`/screener/screen${qs({ force })}`, {

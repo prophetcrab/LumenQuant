@@ -30,7 +30,7 @@ powershell -ExecutionPolicy Bypass -File .\scripts\start-all.ps1
 |---|---|
 | 总览 | 权益/现金/持仓/浮盈、权益曲线、配置环图、最近订单、市场快照 |
 | 行情 | 多周期 K 线、成交量、均线与布林叠加、24h 统计 |
-| A股 | 板块涨跌停、交易日历、T+1 可用/冻结、真实行情同步、同花顺通道状态 |
+| A股 | 盯盘（价格/估值/技术面 17 列）、板块涨跌停、交易日历、T+1、真实行情同步 |
 | 交易 | 市价/限价下单、持仓与一键平仓、挂单撤销、订单与成交明细 |
 | 自动运行 | 策略实例启停、参数调整、即时评估、运行日志 |
 | 策略库 | 10 个策略（含 XGBoost 机器学习）、动态参数表单、信号预览与买卖点 |
@@ -47,7 +47,7 @@ powershell -ExecutionPolicy Bypass -File .\scripts\start-all.ps1
 powershell -ExecutionPolicy Bypass -File .\scripts\run-tests.ps1
 ```
 
-当前：**597 项后端测试全绿**，前端 `tsc` 零错误、生产构建通过。
+当前：**602 项后端测试全绿**，前端 `tsc` 零错误、生产构建通过。
 
 ## 文档
 
