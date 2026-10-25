@@ -4,7 +4,7 @@ import { Chart } from "../../shared/echarts";
 import { api } from "../../shared/api";
 import type { BacktestRun, PortfolioReport } from "../../shared/api";
 import { backtestEquityOption } from "../../shared/charts";
-import { cash, pct } from "../../shared/format";
+import { cash, num, pct } from "../../shared/format";
 import { useToast } from "../../shared/toast";
 import { Badge, Card, EmptyState, Field, Stat } from "../../components/ui";
 import { ButtonField } from "../../components/form";
@@ -21,7 +21,9 @@ const currencyOf = (report: { currency?: string; market: "crypto" | "cn_stock" }
   report.currency ?? (report.market === "cn_stock" ? "CNY" : "USDT");
 
 /** Volatility and drawdown are magnitudes, not signed changes: no leading "+". */
-const mag = (value: number) => `${value.toFixed(2)}%`;
+// Nullable: annualised metrics are withheld on samples too short to annualise.
+const mag = (value: number | null | undefined) =>
+  value === null || value === undefined || Number.isNaN(value) ? "—" : `${value.toFixed(2)}%`;
 
 export function PortfolioPanel({ history }: Props) {
   const toast = useToast();
@@ -335,7 +337,7 @@ function PortfolioResult({
         />
         <Stat
           label="组合 Sharpe"
-          value={report.metrics.sharpe.toFixed(2)}
+          value={num(report.metrics.sharpe)}
           meta={<span className="muted">年化波动 {mag(report.metrics.volatility_pct)}</span>}
         />
         <Stat

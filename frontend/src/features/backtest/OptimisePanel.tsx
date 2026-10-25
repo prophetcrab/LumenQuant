@@ -3,7 +3,7 @@ import { useMutation } from "@tanstack/react-query";
 import { api } from "../../shared/api";
 import type { OptimisationReport } from "../../shared/api";
 import { useToast } from "../../shared/toast";
-import { pct } from "../../shared/format";
+import { num, pct } from "../../shared/format";
 import { Badge, Card, Field, Loader } from "../../components/ui";
 import { ButtonField } from "../../components/form";
 
@@ -305,7 +305,7 @@ export function OptimisePanel({
                         {pct(item.total_return_pct)}
                       </td>
                       <td className="numeric">{item.max_drawdown_pct.toFixed(2)}%</td>
-                      <td className="numeric">{item.sharpe.toFixed(2)}</td>
+                      <td className="numeric">{num(item.sharpe)}</td>
                       <td className="numeric">{item.trade_count}</td>
                       <td className="numeric">{item.win_rate_pct.toFixed(0)}%</td>
                       <td className="numeric muted">{pct(item.in_sample_return_pct)}</td>

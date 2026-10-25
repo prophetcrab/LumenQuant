@@ -95,16 +95,41 @@ export function RiskPanel() {
         {broker.data ? (
           <div className="stack" style={{ gap: 10 }}>
             <Row label="实盘开关" value={broker.data.live_trading_enabled ? "已开启" : "关闭"} />
-            <Row label="交易所" value={broker.data.broker} />
-            <Row label="密钥配置" value={broker.data.credentials_configured ? "已配置" : "未配置"} />
-            <div className="row" style={{ justifyContent: "space-between" }}>
-              <span className="muted" style={{ fontSize: 12.5 }}>
-                就绪
-              </span>
-              <Badge tone={broker.data.ready ? "green" : "amber"}>{broker.data.ready ? "可用" : "未就绪"}</Badge>
-            </div>
+            <Row
+              label="自动下单"
+              value={broker.data.live_auto_trading_enabled ? "已开启" : "关闭"}
+            />
+            {(
+              [
+                ["binance", "币安（加密）"],
+                ["ths", "同花顺（A股）"],
+              ] as const
+            ).map(([key, label]) => {
+              const channel = broker.data.channels[key];
+              return (
+                <div
+                  key={key}
+                  className="row"
+                  style={{ justifyContent: "space-between", fontSize: 12.5 }}
+                >
+                  <span className="muted">{label}</span>
+                  <Badge tone={channel?.ready ? "green" : "amber"}>
+                    {channel?.ready ? "就绪" : "未就绪"}
+                  </Badge>
+                </div>
+              );
+            })}
+            <Row
+              label="成交回报轮询"
+              value={
+                broker.data.reconciler_running
+                  ? `运行中 · 每 ${broker.data.reconcile_seconds}s`
+                  : "未运行"
+              }
+            />
             <div className="helper">
               实盘需同时满足：服务端开关开启 + 环境变量提供密钥。密钥不落库、不经前端传输。
+              成交回报轮询未运行时，实盘委托会一直停在「已提交」，不会变成「已成交」。
             </div>
           </div>
         ) : (

@@ -11,7 +11,12 @@ import {
   TooltipComponent,
 } from "echarts/components";
 import { CanvasRenderer } from "echarts/renderers";
-import ReactEChartsCore from "echarts-for-react/lib/core";
+// Import the ESM build explicitly. The package's `main` is CommonJS, and Vite's
+// pre-bundling turned `import X from "echarts-for-react/lib/core"` into
+// `export default require_core()`, which hands back the module namespace object
+// rather than the component. React then rejected it with "Element type is
+// invalid ... got: object" and the whole app failed to mount (blank page).
+import ReactEChartsCore from "echarts-for-react/esm/core";
 import type { EChartsOption } from "echarts";
 
 echarts.use([

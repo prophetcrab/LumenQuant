@@ -43,6 +43,19 @@ export function pct(value: number | null | undefined, digits = 2): string {
   return `${value >= 0 ? "+" : ""}${value.toFixed(digits)}%`;
 }
 
+/**
+ * Plain number with fixed decimals, or "—" when the backend withheld it.
+ *
+ * Annualised metrics (Sharpe, Calmar, volatility, alpha…) come back as null
+ * when the sample is too short for annualising to mean anything. Calling
+ * `toFixed` on that would throw and take the whole page down, so every such
+ * metric goes through here.
+ */
+export function num(value: number | null | undefined, digits = 2): string {
+  if (value === null || value === undefined || Number.isNaN(value)) return "—";
+  return value.toFixed(digits);
+}
+
 export function signed(value: number | null | undefined, digits = 2): string {
   if (value === null || value === undefined || Number.isNaN(value)) return "—";
   return `${value >= 0 ? "+" : ""}${money(value, digits)}`;
@@ -93,6 +106,7 @@ export function categoryLabel(category: string): string {
     momentum: "动量",
     breakout: "突破",
     benchmark: "基准",
+    ml: "机器学习",
   };
   return map[category] ?? category;
 }

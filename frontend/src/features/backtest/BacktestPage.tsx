@@ -5,7 +5,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { api } from "../../shared/api";
 import type { BacktestRun } from "../../shared/api";
 import { backtestEquityOption } from "../../shared/charts";
-import { cash, pct, price, timeLabel } from "../../shared/format";
+import { cash, num, pct, price, timeLabel } from "../../shared/format";
 import { Badge, Card, EmptyState, Field, Loader, Stat } from "../../components/ui";
 import { ButtonField } from "../../components/form";
 import { OptimisePanel } from "./OptimisePanel";
@@ -356,8 +356,8 @@ export function BacktestPage() {
             />
             <Stat
               label="Sharpe"
-              value={metrics.sharpe.toFixed(2)}
-              meta={<span className="muted">Sortino {metrics.sortino.toFixed(2)}</span>}
+              value={num(metrics.sharpe)}
+              meta={<span className="muted">Sortino {num(metrics.sortino)}</span>}
             />
             <Stat
               label="胜率"
@@ -391,11 +391,11 @@ export function BacktestPage() {
                 <MetricInline label="Beta" value={metrics.benchmark.beta.toFixed(2)} />
                 <MetricInline
                   label="信息比率"
-                  value={metrics.benchmark.information_ratio.toFixed(2)}
+                  value={num(metrics.benchmark.information_ratio)}
                 />
                 <MetricInline
                   label="跟踪误差"
-                  value={`${metrics.benchmark.tracking_error_pct.toFixed(1)}%`}
+                  value={num(metrics.benchmark.tracking_error_pct, 1)}
                 />
                 <MetricInline
                   label="上涨捕获"
@@ -428,8 +428,8 @@ export function BacktestPage() {
               <div style={{ padding: "10px 18px 16px" }}>
                 <MetricRow label="期末权益" value={cash(metrics.final_equity, runCurrency)} />
                 <MetricRow label="年化收益" value={pct(metrics.cagr_pct)} />
-                <MetricRow label="年化波动" value={`${metrics.volatility_pct.toFixed(2)}%`} />
-                <MetricRow label="Calmar" value={metrics.calmar.toFixed(2)} />
+                <MetricRow label="年化波动" value={num(metrics.volatility_pct)} />
+                <MetricRow label="Calmar" value={num(metrics.calmar)} />
                 <MetricRow label="平均每笔" value={pct(metrics.avg_trade_pct, 3)} />
                 <MetricRow label="最佳一笔" value={pct(metrics.best_trade_pct, 2)} />
                 <MetricRow label="最差一笔" value={pct(metrics.worst_trade_pct, 2)} />
@@ -544,7 +544,7 @@ export function BacktestPage() {
                       {pct(item.metrics.total_return_pct)}
                     </td>
                     <td className="numeric">{item.metrics.max_drawdown_pct.toFixed(2)}%</td>
-                    <td className="numeric">{item.metrics.sharpe.toFixed(2)}</td>
+                    <td className="numeric">{num(item.metrics.sharpe)}</td>
                     <td className="numeric muted">{item.duration_ms.toFixed(0)}ms</td>
                     <td>
                       <button
